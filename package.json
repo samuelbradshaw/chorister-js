@@ -1,6 +1,6 @@
 {
   "name": "@samuelbradshaw/chorister-js",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Digital-first interactive sheet music.",
   "type": "module",
   "main": "chorister.mjs",
