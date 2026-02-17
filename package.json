@@ -1,0 +1,32 @@
+{
+  "name": "@samuelbradshaw/chorister-js",
+  "version": "0.0.2",
+  "description": "Digital-first interactive sheet music.",
+  "type": "module",
+  "main": "chorister.mjs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samuelbradshaw/chorister-js.git"
+  },
+  "keywords": [
+    "music",
+    "sheet-music",
+    "digital-sheet-music",
+    "digital-scores",
+    "sheet-music-viewer",
+    "interactive",
+    "verovio",
+    "svg",
+    "midi",
+    "mxl",
+    "musicxml",
+    "mei",
+    "abc-notation"
+  ],
+  "author": "Samuel Bradshaw <samuel.h.bradshaw@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/samuelbradshaw/chorister-js/issues"
+  },
+  "homepage": "https://github.com/samuelbradshaw/chorister-js#readme"
+}

@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Chorister.js Demo</title>
+    <meta name="viewport" content="width=device-width, user-scalable=yes, initial-scale=1.0">
+    <style>
+      /* General styles */
+      body {
+        margin: 0; padding: 0;
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        height: 100vh;
+      }
+      main {
+        min-width: 0;
+        margin: 0; padding: 1.5em;
+        overflow: scroll;
+      }
+      h1 { margin: 0; padding: 0; }
+      a { color: #005fc5; }
+      hr {
+        border: none;
+        height: 1px;
+        background-color: #ddd;
+        margin: 0.5em 0; padding: 0;
+      }
+      #credits {
+        border-top: 1px solid #ddd;
+        padding: 1em 0;
+      }
+      #print-btn {
+        float: right;
+      }
+      
+      /* SVG styles */
+      svg .ch-shapes-foreground > *:hover {
+        opacity: 0.15;
+        cursor: pointer;
+      }
+      svg .ch-shapes-foreground .ch-chord-position-line { stroke-width: 300px; }
+      
+      /* Custom score form styles */
+      body:not([data-score-id="custom-score"]) #custom-score-form { display: none; }
+      #custom-score-form > div { margin: 1em 0; }
+      #custom-score-form textarea {
+        height: 10em;
+        width: 100%;
+        margin-top: 0.5em;
+      }
+      #custom-score-form input,
+      #custom-score-form select {
+        width: 10em;
+        margin-top: 0.5em;
+      }
+      #custom-score-form h3 { margin: 0.25em 0; padding: 0; }
+      
+      /* Sidebar styles */
+      aside {
+        min-width: 0;
+        margin: 1.5em 1.5em 1.5em 0; padding: 1.5em;
+        border: 1px solid #ddd;
+        background-color: white;
+        overflow: scroll;
+        position: relative;
+      }
+      aside::after {
+        content: "";
+        display: block;
+        position: sticky;
+        bottom: -1.5em;
+        height: 4em;
+        background: linear-gradient(to top, white, transparent);
+      }
+      aside h3:first-child { margin-top: 0; }
+      aside label {
+        display: flex;
+        align-items: center;
+        gap: 0.5em;
+      }
+      
+      /* Small screen and print styles */
+      @media (max-width: 600px) {
+        body { grid-template-columns: none; }
+        body { height: auto; }
+        aside { margin: 0 1.5em 1.5em 1.5em; }
+        aside::after { display: none; }
+      }
+      @media print {
+        #print-area {
+          position: absolute;
+          inset: 0;
+        }
+        #title, #credits {
+          width: 172mm;
+          margin-inline: auto;
+        }
+        main > :not(#print-area), aside {
+          display: none;
+        }
+      }
+      
+    </style>
+    <style id="dynamic-stylesheet"></style>
+  </head>
+  <body>
+    <!-- Main content -->
+    <main>
+      <h1>Chorister.js Demo</h1>
+      <p>
+        <button id="print-btn" onclick="window.print();">Print</button>
+        ← <a href="https://github.com/samuelbradshaw/chorister-js">Back to GitHub</a>
+      </p>
+      <hr>
+      
+      <!-- Print area -->
+      <div id="print-area">
+        <h2 id="title"></h2>
+        <div id="score-container">Loading…</div>
+        <p id="credits"></p>
+      </div>
+      
+      <!-- Custom score form -->
+      <form id="custom-score-form">
+        <p>See <a href="https://github.com/samuelbradshaw/chorister-js?tab=readme-ov-file#input-data">Input data</a> for examples of how input data should be formatted.</p>
+        <div>
+          <label>
+            <h3>Score type</h3>
+            <select name="scoreType">
+              <option value="musicxml">MusicXML</option>
+              <option value="mei">MEI</option>
+              <option value="abc">ABC</option>
+            </select>
+          </label>
+        </div>
+        <div>
+          <label>
+            <h3>Score content</h3>
+            <textarea name="scoreContent"></textarea>
+          </label>
+        </div>
+        <div>
+          <label>
+            <h3>Lyrics (optional)</h3>
+            <textarea name="lyricsText"></textarea>
+          </label>
+        </div>
+        <div>
+          <label>
+            <h3>Parts template (optional)</h3>
+            <input type="text" name="partsTemplate">
+          </label>
+        </div>
+        <div>
+          <button type="button" id="load-score-btn">Load Score</button>
+        </div>
+      </form>
+      
+      <hr>
+      
+      <!-- Demo scores -->
+      <h2>Demo Scores</h2>
+      <ul>
+        <li><a href="?scoreId=how-great-the-wisdom-and-the-love">How Great the Wisdom and the Love</a> (SATB hymn with intro brackets)</li>
+        <li><a href="?scoreId=this-little-light-of-mine">This Little Light of Mine</a> (traditional, includes repeats and second ending)</li>
+        <li><a href="?scoreId=custom-score">Custom Score</a> (upload your own)</li>
+      </ul>
+      <p>Rendered by <a target="_blank" href="https://www.verovio.org/">Verovio</a> with <a target="_blank" href="https://github.com/samuelbradshaw/chorister-js">Chorister.js</a>.</p>
+      
+      
+    </main>
+    
+    <!-- Sidebar -->
+    <aside>
+      <form id="controls">
+        <h3>Options</h3>
+        <p><label>Zoom: <input type="range" name="zoomPercent" value="40" min="25" max="100" step="5"></label></p>
+        <p><label>Transpose:
+          <select name="keySignatureId">
+            <option value="">None</option>
+          </select>
+        </label></p>
+        <p><label>Expand:
+          <select name="expandScore">
+            <option value="">None</option>
+            <option value="intro">Introduction</option>
+            <option value="full-score">Full Score</option>
+          </select>
+        </label></p>
+        <p><label>Chord set:
+          <select name="showChordSet">
+            <option value="">None</option>
+          </select>
+        </label></p>
+        <p><label><input type="checkbox" name="showChordSetImages" switch> Chord set images</label></p>
+        <p><label><input type="checkbox" name="showFingeringMarks" switch> Fingering marks</label></p>
+        <p><label><input type="checkbox" name="showMeasureNumbers" switch> Measure numbers</label></p>
+        <p><label><input type="checkbox" name="showMelodyOnly" switch> Melody only</label></p>
+        
+        <h3>Sections</h3>
+        <div class="section-toggles">N/A</div>
+        
+        <h3>Shapes and labels</h3>
+        <p><label>Hover/tap:
+          <select name="drawForegroundShapes">
+            <option value="">None</option>
+            <option value="ch-system-rect">System rectangles</option>
+            <option value="ch-measure-rect">Measure rectangles</option>
+            <option value="ch-staff-rect">Staff rectangles</option>
+            <option value="ch-chord-position-line">Chord position lines</option>
+            <option value="ch-chord-position-rect" selected> Chord position rectangles</option>
+            <option value="ch-note-circle">Note circles</option>
+            <option value="ch-lyric-rect">Lyric rectangles</option>
+          </select>
+        </label></p>
+        <p><label><input type="checkbox" name="drawForegroundShapes" value="ch-staff-label" switch> Staff labels</label></p>
+        <p><label><input type="checkbox" name="drawForegroundShapes" value="ch-chord-position-label" switch> Chord position labels</label></p>
+        <p><label><input type="checkbox" name="drawForegroundShapes" value="ch-lyric-line-label" switch> Lyric line labels</label></p>
+      </form>
+      
+      <h3>Tapped element details</h3>
+      <pre id="tap-details">N/A</pre>
+    </aside>
+    
+    <!-- Load chorister.js -->
+    <script src="chorister.js"></script>
+    
+    <!-- Custom JavaScript -->
+    <script>      
+      let chScore, scoreData;
+      let scoreId = (new URLSearchParams(window.location.search).get('scoreId')) ?? 'how-great-the-wisdom-and-the-love';
+      const demoScores = getDemoScores();
+      const scoreContainer = document.getElementById('score-container');
+      const titleArea = document.getElementById('title');
+      const creditsArea = document.getElementById('credits');
+      const tapDetailsArea = document.getElementById('tap-details');
+      
+      // Get scoreId from URL and load score or custom score form
+      if (demoScores[scoreId]?.scoreUrl || demoScores[scoreId]?.scoreContent) {
+        loadScore(scoreId);
+      } else {
+        scoreId = 'custom-score';
+        loadCustomScoreForm();
+      }
+      document.body.dataset.scoreId = scoreId;
+      titleArea.textContent = demoScores[scoreId].title;
+      creditsArea.innerHTML = demoScores[scoreId].credits;
+      
+      
+      async function loadScore(scoreId) {
+        // Initialize and load score
+        const scoreType = demoScores[scoreId].scoreType;
+        const inputData = demoScores[scoreId];
+        const options = {
+          drawBackgroundShapes: ['ch-system-rect', 'ch-measure-rect', 'ch-staff-rect', 'ch-chord-position-rect', 'ch-note-circle', 'ch-lyric-rect'],
+          drawForegroundShapes: ['ch-chord-position-rect'],
+          customEvents: ['ch:tap'],
+        }
+        chScore = new ChScore('#score-container');
+        scoreData = await chScore.load(scoreType, inputData, options);
+        
+        // Load controls
+        loadControls(chScore, scoreData)
+        
+        // Listen for Chorister.js tap events
+        scoreContainer.addEventListener('ch:tap', (event) => {
+          tapDetailsArea.textContent = JSON.stringify(event.detail, null, 2);
+        });
+        
+        // Log score data for debugging
+        console.log(scoreData);
+      }
+      
+      function loadCustomScoreForm() {
+        const customScoreForm = document.getElementById('custom-score-form');
+        const scoreTypeInput = customScoreForm.querySelector('[name="scoreType"]');
+        const scoreContentInput = customScoreForm.querySelector('[name="scoreContent"]');
+        const lyricsTextInput = customScoreForm.querySelector('[name="lyricsText"]');
+        const partsTemplateInput = customScoreForm.querySelector('[name="partsTemplate"]');
+        
+        scoreContainer.style.display = 'none';
+        creditsArea.style.display = 'none';
+        
+        const loadScoreButton = document.getElementById('load-score-btn');
+        loadScoreButton.addEventListener('click', (event) => {
+          demoScores['custom-score'].scoreType = scoreTypeInput.value;
+          demoScores['custom-score'].scoreContent = scoreContentInput.value;
+          demoScores['custom-score'].lyricsText = lyricsTextInput.value;
+          demoScores['custom-score'].partsTemplate = partsTemplateInput.value;
+          if (scoreContentInput.value) {
+            scoreContainer.style.display = 'block';
+            loadScore('custom-score');
+          } else {
+            alert('Score content is required.');
+          }
+        });
+      }
+      
+      function loadControls(chScore, scoreData) {
+        const dynamicStylesheet = document.getElementById('dynamic-stylesheet');
+        const controlsArea = document.getElementById('controls');
+        const zoomSlider = controlsArea.querySelector('[name="zoomPercent"]');
+        const transposePicker = controlsArea.querySelector('[name="keySignatureId"]');
+        const expandScorePicker = controlsArea.querySelector('[name="expandScore"]');
+        const chordSetPicker = controlsArea.querySelector('[name="showChordSet"]');
+        const chordSetImagesToggle = controlsArea.querySelector('[name="showChordSetImages"]');
+        const fingeringMarksToggle = controlsArea.querySelector('[name="showFingeringMarks"]');
+        const measureNumbersToggle = controlsArea.querySelector('[name="showMeasureNumbers"]');
+        const melodyOnlyToggle = controlsArea.querySelector('[name="showMelodyOnly"]');
+        const sectionTogglesDiv = controlsArea.querySelector('.section-toggles');
+        const shapesAndLabelsControls = controlsArea.querySelectorAll('[name="drawForegroundShapes"]');
+        
+        // Zoom slider
+        zoomSlider.addEventListener('change', event => {
+          chScore.setOptions({ zoomPercent: event.target.value });
+        });
+        
+        // Transpose picker
+        transposePicker.innerHTML = '';
+        for (const keySignatureId of scoreData.keySignature.nearbyKeySignatureIds.toReversed()) {
+          const keyName = chScore.getKeySignatures()[scoreData.keySignature.tonality][keySignatureId].name;
+          if (keySignatureId === scoreData.keySignature.keySignatureId) {
+            transposePicker.insertAdjacentHTML('beforeend', `
+              <option value="${keySignatureId}" selected>${keyName} (Default)</option>
+            `);
+          } else {
+            transposePicker.insertAdjacentHTML('beforeend', `
+              <option value="${keySignatureId}">${keyName}</option>
+            `);
+          }
+        }
+        transposePicker.addEventListener('change', event => {
+          chScore.setOptions({ keySignatureId: event.target.value });
+        });
+        
+        // Expand score picker
+        expandScorePicker.addEventListener('change', (event) => {
+          chScore.setOptions({ expandScore: event.target.value });
+        });
+        
+        // Chord set picker
+        chordSetPicker.innerHTML = '<option value="">None</option>';
+        for (const chordSetInfo of scoreData.chordSets) {
+          chordSetPicker.insertAdjacentHTML('beforeend', `
+            <option value="${chordSetInfo.chordSetId}">${chordSetInfo.name}</option>
+          `);
+        }
+        chordSetPicker.addEventListener('change', event => {
+          chordSetImagesToggle.disabled = !scoreData.chordSetsById[event.target.value]?.svgSymbolsUrl;
+          chScore.setOptions({ showChordSet: event.target.value || false });
+        });
+        
+        // Chord set images toggle
+        chordSetImagesToggle.disabled = true;
+        chordSetImagesToggle.addEventListener('change', (event) => {
+          chScore.setOptions({ showChordSetImages: event.target.checked });
+        });
+        
+        // Fingering marks toggle
+        if (scoreData.hasFingeringMarks) {
+          fingeringMarksToggle.addEventListener('change', (event) => {
+            chScore.setOptions({ showFingeringMarks: event.target.checked });
+          });
+        } else {
+          fingeringMarksToggle.disabled = true;
+        }
+        
+        // Measure numbers toggle
+        measureNumbersToggle.addEventListener('change', (event) => {
+          chScore.setOptions({ showMeasureNumbers: event.target.checked });
+        });
+        
+        // Melody only toggle
+        if (scoreData.hasMelodyInfo) {
+          melodyOnlyToggle.addEventListener('change', (event) => {
+            chScore.setOptions({ showMelodyOnly: event.target.checked });
+          });
+        } else {
+          melodyOnlyToggle.disabled = true;
+        }
+        
+        // Sections
+        sectionTogglesDiv.innerHTML = '';
+        let sectionStyles = '';
+        for (const sectionInfo of scoreData.sections) {
+          sectionStyles += `
+            body[data-section-id="${sectionInfo.sectionId}"] [data-ch-section-id~="${sectionInfo.sectionId}"] { font-weight: bold; }
+            body[data-section-id="${sectionInfo.sectionId}"] :is(p, .label, .verse)[data-ch-section-id]:not([data-ch-section-id~="${sectionInfo.sectionId}"]) { opacity: 0.4; }
+          `;
+          sectionTogglesDiv.insertAdjacentHTML('beforeend', `
+            <p><label><input type="checkbox" name="sections" value="${sectionInfo.sectionId}" switch checked> ${sectionInfo.name}</label></p>
+          `);
+          const sectionToggle = sectionTogglesDiv.querySelector(`[value="${sectionInfo.sectionId}"]`);
+          sectionToggle.addEventListener('change', (event) => {
+            const hiddenSectionIds = Array.from(sectionTogglesDiv.querySelectorAll('input:not(:checked)')).map(toggle => toggle.value);
+            chScore.setOptions({ hiddenSectionIds: hiddenSectionIds });
+          });
+          sectionToggle.parentElement.addEventListener('mouseenter', (event) => {
+            document.body.dataset.sectionId = sectionInfo.sectionId;
+          });
+        }
+        sectionTogglesDiv.addEventListener('mouseleave', (event) => { document.body.dataset.sectionId = ''; })
+        dynamicStylesheet.textContent = sectionStyles;
+        
+        // Shapes and labels
+        for (const control of shapesAndLabelsControls) {
+          control.addEventListener('change', (event) => {
+            const foregroundShapes = [];
+            for (const cont of shapesAndLabelsControls) {
+              if (cont.tagName.toLowerCase() === 'select' || (cont.type === 'checkbox' && cont.value && cont.checked)) {
+                foregroundShapes.push(cont.value);
+              }
+            }
+            chScore.setOptions({ drawForegroundShapes: foregroundShapes });
+          });
+        }
+      }
+      
+      function getDemoScores() {
+        const demoChordSet = {
+          chordSetId: 'guitar',
+          name: 'Guitar (Demo)',
+          chordPositionRefs: {
+            1: { text: 'C#', svgSymbolId: 'generic-chord-diagram', },
+            6: { text: 'Bb', svgSymbolId: 'generic-chord-diagram', },
+            11: { text: 'C#', svgSymbolId: 'generic-chord-diagram', },
+            16: { text: 'Bb', svgSymbolId: 'generic-chord-diagram', },
+            21: { text: 'C#', svgSymbolId: 'generic-chord-diagram', },
+            26: { text: 'Bb', svgSymbolId: 'generic-chord-diagram', },
+            31: { text: 'C#', svgSymbolId: 'generic-chord-diagram', },
+            36: { text: 'Bb', svgSymbolId: 'generic-chord-diagram', },
+            41: { text: 'C#', svgSymbolId: 'generic-chord-diagram', },
+            46: { text: 'Bb', svgSymbolId: 'generic-chord-diagram', },
+            51: { text: 'C#', svgSymbolId: 'generic-chord-diagram', },
+            56: { text: 'Bb', svgSymbolId: 'generic-chord-diagram', },
+            61: { text: 'C#', svgSymbolId: 'generic-chord-diagram', },
+            66: { text: 'Bb', svgSymbolId: 'generic-chord-diagram', },
+          },
+          svgSymbolsUrl: 'https://samuelbradshaw.github.io/chorister-js/resources/symbols.svg',
+        }
+        
+        const demoScores = {
+          'how-great-the-wisdom-and-the-love': {
+            title: 'How Great the Wisdom and the Love',
+            credits: '<i>Text:</i> Eliza R. Snow (1804–1887).<br><i>Music:</i> Thomas McIntyre (1832–1914).<br>Adapted from <i>Latter-day Saint Hymns</i> (1927).',
+            scoreType: 'musicxml',
+            scoreId: 'how-great-the-wisdom-and-the-love',
+            scoreUrl: 'https://samuelbradshaw.github.io/chorister-js/resources/how-great-the-wisdom-and-the-love.musicxml',
+            lyricsUrl: 'https://samuelbradshaw.github.io/chorister-js/resources/how-great-the-wisdom-and-the-love.txt',
+            partsTemplate: 'SATB',
+            chordSets: [demoChordSet],
+            fermatas: [
+              { chordPosition: 28, durationFactor: 2.5 },
+            ],
+          },
+          'this-little-light-of-mine': {
+            title: 'This Little Light of Mine',
+            credits: 'African American spiritual.',
+            scoreType: 'musicxml',
+            scoreId: 'this-little-light-of-mine',
+            scoreUrl: 'https://samuelbradshaw.github.io/chorister-js/resources/this-little-light-of-mine.musicxml',
+            lyricsUrl: 'https://samuelbradshaw.github.io/chorister-js/resources/this-little-light-of-mine.txt',
+            partsTemplate: 'MC',
+            chordSets: [demoChordSet],
+            fermatas: [
+              { chordPosition: 14, durationFactor: 2 },
+              { chordPosition: 20, durationFactor: 2 },
+              { chordPosition: 26, durationFactor: 2 },
+              { chordPosition: 32, durationFactor: 2 },
+              { chordPosition: 38, durationFactor: 2 },
+              { chordPosition: 44, durationFactor: 2 },
+            ],
+          },
+          'custom-score': {
+            title: 'Custom Score',
+            credits: 'Credits here.',
+            scoreType: null,
+            scoreId: 'custom-score',
+            scoreContent: null,
+            lyricsText: null,
+            partsTemplate: null,
+          },
+        };
+        
+        return demoScores;
+      }
+      
+    </script>
+  </body>
+</html>

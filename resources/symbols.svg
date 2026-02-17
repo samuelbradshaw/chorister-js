@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+
+  <!-- Created with AI (Claude) -->
+  <symbol id="pc-asterisk" viewBox="0 0 100 100">
+    <title>Asterisk</title>
+    <rect x="5" y="5" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M 50 25 L 55 42 L 73 42 L 59 52 L 64 69 L 50 59 L 36 69 L 41 52 L 27 42 L 45 42 Z" fill="currentColor"/>
+  </symbol>
+
+  <!-- Created with AI (Claude) -->
+  <symbol id="pc-up" viewBox="0 0 100 100">
+    <title>Up</title>
+    <rect x="5" y="5" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M 35 65 L 65 35 M 65 35 L 50 35 M 65 35 L 65 50" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </symbol>
+
+  <!-- Created with AI (Claude) -->
+  <symbol id="pc-down" viewBox="0 0 100 100">
+    <title>Down</title>
+    <rect x="5" y="5" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M 35 35 L 65 65 M 65 65 L 65 50 M 65 65 L 50 65" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </symbol>
+
+  <!-- Created with AI (Claude) -->
+  <symbol id="pc-repeat" viewBox="0 0 100 100">
+    <title>Repeat</title>
+    <rect x="5" y="5" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
+    <line x1="30" y1="50" x2="70" y2="50" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+  </symbol>
+  
+  <!-- Loosely based on https://github.com/omnibrain/svguitar -->
+  <symbol id="generic-chord-diagram" viewBox="0 0 330 450">
+    <title>Chord Diagram</title>
+    <circle r="14.4" cx="80" cy="24" fill="none" stroke-width="3" stroke="currentColor" class="open-string open-string-0"></circle>
+    <circle r="14.4" cx="320" cy="24" fill="none" stroke-width="3" stroke="currentColor" class="open-string open-string-5"></circle>
+    
+    <line x1="79" y1="53" x2="321" y2="53" stroke-width="10" stroke="currentColor"></line>
+    <line x1="80" y1="122" x2="320" y2="122" stroke-width="3" stroke="currentColor"></line>
+    <line x1="80" y1="186" x2="320" y2="186" stroke-width="3" stroke="currentColor"></line>
+    <line x1="80" y1="250" x2="320" y2="250" stroke-width="3" stroke="currentColor"></line>
+    <line x1="80" y1="314" x2="320" y2="314" stroke-width="3" stroke="currentColor"></line>
+    <line x1="80" y1="378" x2="320" y2="378" stroke-width="3" stroke="currentColor"></line>
+    
+    <line x1="80" y1="58" x2="80" y2="379" stroke-width="3" stroke="currentColor"></line>
+    <line x1="128" y1="58" x2="128" y2="379" stroke-width="3" stroke="currentColor"></line>
+    <line x1="176" y1="58" x2="176" y2="379" stroke-width="3" stroke="currentColor"></line>
+    <line x1="224" y1="58" x2="224" y2="379" stroke-width="3" stroke="currentColor"></line>
+    <line x1="272" y1="58" x2="272" y2="379" stroke-width="3" stroke="currentColor"></line>
+    <line x1="320" y1="58" x2="320" y2="379" stroke-width="3" stroke="currentColor"></line>
+    
+    <circle r="18" cx="128" cy="91" fill="currentColor" stroke-width="0" stroke="currentColor" class="finger finger-string-1 finger-fret-0 finger-string-1-fret-0 finger-circle"></circle>
+    <circle r="18" cx="176" cy="91" fill="currentColor" stroke-width="0" stroke="currentColor" class="finger finger-string-2 finger-fret-0 finger-string-2-fret-0 finger-circle"></circle>
+    <circle r="18" cx="272" cy="91" fill="currentColor" stroke-width="0" stroke="currentColor" class="finger finger-string-4 finger-fret-0 finger-string-4-fret-0 finger-circle"></circle>
+    <circle r="18" cx="128" cy="346" fill="currentColor" stroke-width="0" stroke="currentColor" class="finger finger-string-1 finger-fret-4 finger-string-1-fret-4 finger-circle"></circle>
+    <circle r="18" cx="224" cy="346" fill="currentColor" stroke-width="0" stroke="currentColor" class="finger finger-string-3 finger-fret-4 finger-string-3-fret-4 finger-circle"></circle>
+    <circle r="18" cx="272" cy="346" fill="currentColor" stroke-width="0" stroke="currentColor" class="finger finger-string-4 finger-fret-4 finger-string-4-fret-4 finger-circle"></circle>
+    <circle r="0" cx="0" cy="0" fill="none" stroke-width="0" stroke="transparent" class="top-left"></circle>
+    <circle r="0" cx="400" cy="0" fill="none" stroke-width="0" stroke="transparent" class="top-right"></circle>
+  </symbol>
+
+</svg>
