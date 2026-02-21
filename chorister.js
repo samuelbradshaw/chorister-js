@@ -117,7 +117,6 @@ function ChScore(containerSelector) {
   
   this._chScores.push(this);
   this._container.score = this;
-  this._container.dataset.status = 'ready';
 }
 
 // Load score
@@ -213,7 +212,7 @@ ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl =
   this.drawScore();
   this._loadMidi();
   
-  this._container.dataset.status = 'loaded';
+  console.info('Chorister.js: Score loaded');
   return this._scoreData;
 }
 
@@ -695,21 +694,7 @@ ChScore.prototype._loadMidi = function () {
   // Save changes to MIDI note sequence
   this._scoreData.midiNoteSequence = midiNoteSequence;
   
-  // TODO: Download MIDI
-//     function createMidiDownloadLink(noteSequence) {
-//       noteSequence.notes = noteSequence.notes.filter(note => note.startTime >= 0);
-//       const midiByteArray = core.sequenceProtoToMidi(noteSequence);
-//       const midiBlob = new Blob([midiByteArray], { type: 'audio/midi' });
-//       const midiUrl = URL.createObjectURL(midiBlob);
-//       const downloadLink = document.createElement('a');
-//       downloadLink.innerHTML = 'Download MIDI';
-//       downloadLink.download = 'file.midi';
-//       downloadLink.href = midiUrl;
-//       document.body.append(downloadLink);
-//     }
-//     createMidiDownloadLink(this._scoreData.midiNoteSequence);
-  
-  console.info('MIDI ready');
+  console.info('Chorister.js: MIDI ready');
 }
 
 ChScore.prototype._parseAndAnnotateMei = function () {
@@ -3889,7 +3874,6 @@ ChScore.prototype._chLoadDependencies = async function () {
     import('https://cdn.jsdelivr.net/npm/verovio@6.0.1/dist/verovio-toolkit-wasm.min.js'),
     verovioInitialized(),
   ]);
-  console.info('Chorister.js loaded');
   return true;
 }
 ChScore.prototype._chDependenciesLoaded = ChScore.prototype._chLoadDependencies()
@@ -4015,5 +3999,19 @@ ChScore.prototype.getKeySignatureInfo = function () {
   return this._scoreData.keySignatureInfo;
 }
 
-// Make Highlighter available to ES module (highlight-helper.mjs)
+ChScore.prototype.getMidi = function (format = 'note-sequence') {
+  const noteSequence = this._scoreData.midiNoteSequence;
+  if (format === 'note-sequence') {
+    return noteSequence;
+  } else {
+    const byteArray = core.sequenceProtoToMidi(noteSequence);
+    if (format === 'blob') {
+      return new Blob([byteArray], { type: 'audio/midi' });
+    } else if (format === 'array-buffer') {
+      return byteArray.toArray();
+    }
+  }
+}
+
+// Make Chorister.js available to JavaScript module (chorister.mjs)
 window.ChScore = ChScore;

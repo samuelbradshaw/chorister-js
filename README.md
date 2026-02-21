@@ -36,7 +36,7 @@ Chorister.js powers the interactive sheet music at [SingPraises.net](https://sin
 
 ### MIDI and lyric alignment
 
-Chorister.js doesn’t directly handle audio playback, but it processes MIDI and provides a Magenta.js note sequence that can be loaded into other libraries that support MIDI playback and timed events, such as [ProxyPlayer.js](https://github.com/samuelbradshaw/proxy-player-js).
+Chorister.js doesn’t directly handle audio playback, but it processes and exports MIDI that can be loaded into other libraries that support MIDI playback, such as [ProxyPlayer.js](https://github.com/samuelbradshaw/proxy-player-js).
 
 - Provided or Verovio-generated MIDI is expanded and aligned with the sheet music.
 - MIDI is split into channels based on sheet music parts (when part information is provided).
@@ -131,6 +131,8 @@ You can also install it using [npm](https://www.npmjs.com/package/@samuelbradsha
 - **getScoreData()** – Get information about the loaded score. Some of the provided data can be helpful for loading controls (for users to adjust options).
 - **getScoreContainer()** – Get a reference to the element that holds the rendered score.
 - **getKeySignatureInfo()** – Get key signature information for the loaded score.
+- **getMidi(format)** – Get processed MIDI content.
+- * **format** – Preferred format. Optional. Valid values: `note-sequence` (Magenta note sequence), `blob` ([Blob](https://developer.mozilla.org/en-US/docs/Web/API/Blob) object), `array-buffer` ([ArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer) object). Default: `note-sequence`.
 - **drawScore()** – Draw or redraw the score. In most cases, Chorister.js will handle drawing automatically, so you shouldn’t usually need to call this.
 - **removeScore()** – Remove the current score from the page and clear stored data.
 
@@ -159,7 +161,7 @@ Input data is provided to Chorister.js when loading the score (see “Methods”
 - **midiUrl** – URL where a MIDI file can be fetched. Optional.
 - **lyricsUrl** – URL where lyrics can be fetched as plain text. Optional.
 - **scoreContent** – Score content as a string. Either `scoreUrl` or `scoreContent` is required.
-- **midiNoteSequence** – MIDI content as a Magenta.js note sequence. Optional.
+- **midiNoteSequence** – MIDI content as a Magenta note sequence. Optional.
 - **lyricsText** – Lyrics as a string. Optional.
 - **parts** – Parts object (more details below). Optional.
 - **partsTemplate** – Parts template string (more details below). Optional.

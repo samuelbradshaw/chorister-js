@@ -29,8 +29,10 @@
         border-top: 1px solid #ddd;
         padding: 1em 0;
       }
-      #print-btn {
-        float: right;
+      #action-bar {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
       }
       
       /* SVG styles */
@@ -107,10 +109,15 @@
     <!-- Main content -->
     <main>
       <h1>Chorister.js Demo</h1>
-      <p>
-        <button id="print-btn" onclick="window.print();">Print</button>
-        ← <a href="https://github.com/samuelbradshaw/chorister-js">Back to GitHub</a>
-      </p>
+      <div id="action-bar">
+        <p id="github-link">
+          ← <a href="https://github.com/samuelbradshaw/chorister-js">Back to GitHub</a>
+        </p>
+        <p id="action-buttons">
+          <button onclick="downloadMidi();">Download MIDI</button>
+          <button onclick="window.print();">Print</button>
+        </p>
+      </div>
       <hr>
       
       <!-- Print area -->
@@ -245,7 +252,6 @@
       document.body.dataset.scoreId = scoreId;
       titleArea.textContent = demoScores[scoreId].title;
       creditsArea.innerHTML = demoScores[scoreId].credits;
-      
       
       async function loadScore(scoreId) {
         // Initialize and load score
@@ -436,7 +442,7 @@
             61: { text: 'C#', svgSymbolId: 'generic-chord-diagram', },
             66: { text: 'Bb', svgSymbolId: 'generic-chord-diagram', },
           },
-          svgSymbolsUrl: 'https://samuelbradshaw.github.io/chorister-js/resources/symbols.svg',
+          svgSymbolsUrl: 'resources/symbols.svg',
         }
         
         const demoScores = {
@@ -445,8 +451,8 @@
             credits: '<i>Text:</i> Eliza R. Snow (1804–1887).<br><i>Music:</i> Thomas McIntyre (1832–1914).<br>Adapted from <i>Latter-day Saint Hymns</i> (1927).',
             scoreType: 'musicxml',
             scoreId: 'how-great-the-wisdom-and-the-love',
-            scoreUrl: 'https://samuelbradshaw.github.io/chorister-js/resources/how-great-the-wisdom-and-the-love.musicxml',
-            lyricsUrl: 'https://samuelbradshaw.github.io/chorister-js/resources/how-great-the-wisdom-and-the-love.txt',
+            scoreUrl: 'resources/how-great-the-wisdom-and-the-love.musicxml',
+            lyricsUrl: 'resources/how-great-the-wisdom-and-the-love.txt',
             partsTemplate: 'SATB',
             chordSets: [demoChordSet],
             fermatas: [
@@ -458,8 +464,8 @@
             credits: 'African American spiritual.',
             scoreType: 'musicxml',
             scoreId: 'this-little-light-of-mine',
-            scoreUrl: 'https://samuelbradshaw.github.io/chorister-js/resources/this-little-light-of-mine.musicxml',
-            lyricsUrl: 'https://samuelbradshaw.github.io/chorister-js/resources/this-little-light-of-mine.txt',
+            scoreUrl: 'resources/this-little-light-of-mine.musicxml',
+            lyricsUrl: 'resources/this-little-light-of-mine.txt',
             partsTemplate: 'MC',
             chordSets: [demoChordSet],
             fermatas: [
@@ -483,6 +489,16 @@
         };
         
         return demoScores;
+      }
+      
+      function downloadMidi() {
+        const midiBlob = chScore.getMidi('blob');
+        const midiUrl = URL.createObjectURL(midiBlob);
+        const link = document.createElement('a');
+        link.href = midiUrl;
+        link.download = `${document.body.dataset.scoreId}.midi`;
+        link.click();
+        URL.revokeObjectURL(midiUrl);
       }
       
     </script>
