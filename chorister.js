@@ -35,18 +35,12 @@ ChScore.prototype._loadStyles = function () {
   this._stylesheets = {};
   const generalStylesheet = this._addStylesheet('general');
   generalStylesheet.replaceSync(`
-    .ch-staff-label,
-    .ch-chord-position-label,
-    .ch-lyric-line-label {
+    .ch-staff-label, .ch-chord-position-label, .ch-lyric-line-label {
       opacity: 1;
     }
-    .ch-system-rect,
-    .ch-measure-rect,
-    .ch-staff-rect,
-    .ch-chord-position-line,
-    .ch-chord-position-rect,
-    .ch-note-circle,
-    .ch-lyric-rect {
+    .ch-system-rect, .ch-measure-rect, .ch-staff-rect,
+    .ch-chord-position-line, .ch-chord-position-rect,
+    .ch-note-circle, .ch-lyric-rect {
       opacity: 0;
     }
     @media print {
@@ -66,7 +60,7 @@ ChScore.prototype._loadStyles = function () {
         fill: black !important;
         stroke: black !important;
       }
-      g.ch-shapes {
+      g.ch-shapes > *:not(.ch-staff-label, .ch-chord-position-label, .ch-lyric-line-label) {
         display: none;
       }
     }
