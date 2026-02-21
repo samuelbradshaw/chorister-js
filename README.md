@@ -527,7 +527,7 @@ Properties:
 Options can be passed in to Chorister.js when calling the `load()` method to load the score. After the score is loaded, options can be changed with the `setOptions()` method (see “Methods”). An `options` object has the following optional properties:
 
 - **zoomPercent** – Size of the sheet music. Integer. Default: `40`.
-- **keySignatureId** – Key signature to transpose the sheet music to. Possible values: `'c-major'`, `'d-sharp-minor'`, etc. (full list at the bottom of chorister.js) or `null`. Default: `null`.
+- **keySignatureId** – Key signature to transpose the sheet music to. Transposition is relative to the tonality (major or minor) at the beginning of the score. Possible values: (major) `'g-flat-major'`, `'g-major'`, `'a-flat-major'`, `'a-major'`, `'b-flat-major'`, `'b-major'`, `'c-flat-major'`, `'c-major'`, `'c-sharp-major'`, `'d-flat-major'`, `'d-major'`, `'e-flat-major'`, `'e-major'`, `'f-major'`, `'f-sharp-major'`, (minor) `'g-minor'`, `'g-sharp-minor'`, `'g-flat-minor'`, `'a-minor'`, `'a-sharp-minor'`, `'b-flat-minor'`, `'b-minor'`, `'c-minor'`, `'c-sharp-minor'`, `'d-minor'`, `'d-sharp-minor'`, `'e-flat-minor'`, `'e-minor'`, `'f-minor'`, `'f-sharp-minor'`, or `null`. Default: `null`.
 - **expandScore** – Whether the score should be expanded/unrolled. Possible values: `'intro'` (expand introduction only, based on intro brackets), `'full-score'` (expand full score), or `false` (don’t expand). Default: `false`.
 - **showChordSet** – Whether chord set should be visible. Possible values: ID of a provided chord set, or `false`. Default: `false`.
 - **showChordSetImages** – Whether chord set images should show. Only applies if `showChordSet` is `true` and the currently-visible chord set has images. Boolean. Default: `false`.
