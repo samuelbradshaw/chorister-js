@@ -11,7 +11,7 @@ Chorister.js powers the interactive sheet music at [SingPraises.net](https://sin
 - [Getting started](#getting-started)
     - [Installation options](#installation-options)
     - [Basic usage](#basic-usage)
-    - [Methods](#methods)
+    - [Public methods](#public-methods)
 - [Advanced usage](#advanced-usage)
     - [Terminology](#terminology)
     - [Input data](#input-data)
@@ -53,17 +53,33 @@ Chorister.js doesn’t directly handle audio playback, but it processes MIDI and
 
 ### <a name="installation-options"></a>Installation options
 
-You can download chorister.js from GitHub and reference it from your HTML file:
+Chorister.js is available as classic JavaScript (chorister.js) or as a [JavaScript module](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules) (chorister.mjs).
+
+#### Classic JavaScript
+
+Download chorister.js from GitHub and reference it locally in your HTML file:
 ```html
 <script src="scripts/chorister.js"></script>
 ```
 
-Or you can load it from [jsDelivr](https://www.jsdelivr.com/package/gh/samuelbradshaw/chorister-js):
+Or load it from [jsDelivr](https://www.jsdelivr.com/package/gh/samuelbradshaw/chorister-js) CDN:
 ```html
 <script src="https://cdn.jsdelivr.net/gh/samuelbradshaw/chorister-js@main/chorister.min.js"></script>
 ```
 
-Or you can install it using [npm](https://www.npmjs.com/package/@samuelbradshaw/chorister-js):
+#### JavaScript Module
+
+Download chorister.js and chorister.mjs from GitHub and import as a JavaScript module:
+```javascript
+import { ChScore } from './chorister.mjs';
+```
+
+Or load it from [jsDelivr](https://www.jsdelivr.com/package/gh/samuelbradshaw/chorister-js) CDN:
+```javascript
+import { ChScore } from 'https://cdn.jsdelivr.net/gh/samuelbradshaw/chorister-js@main/chorister.min.mjs';
+```
+
+You can also install it using [npm](https://www.npmjs.com/package/@samuelbradshaw/chorister-js):
 ```bash
 % cd /your/project/folder
 % npm i @samuelbradshaw/chorister-js
@@ -75,7 +91,7 @@ Or you can install it using [npm](https://www.npmjs.com/package/@samuelbradshaw/
 <!-- Score container (empty element where the score will be inserted) -->
 <div id="score-container"></div>
 
-<!-- Link to Chorister.js -->
+<!-- Import Chorister.js (classic JavaScript) -->
 <script src="https://cdn.jsdelivr.net/gh/samuelbradshaw/chorister-js@main/chorister.min.js"></script>
 
 <script>
@@ -103,7 +119,7 @@ Or you can install it using [npm](https://www.npmjs.com/package/@samuelbradshaw/
 </script>
 ```
 
-### <a name="methods"></a>Methods
+### <a name="public-methods"></a>Public methods
 
 - **load(scoreType, inputData, options)** – Load a score. Parameters:
 - * **scoreType** – `mxl` (compressed MusicXML), `musicxml`, `mei`, `abc`, `humdrum`, `plaine-and-easie`, or `cmme`. Required. See [Verovio input formats](https://book.verovio.org/toolkit-reference/input-formats.html).
