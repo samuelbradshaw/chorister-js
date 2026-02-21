@@ -5,21 +5,33 @@
 
 'use strict';
 
+/********************** ChScore Initialization **********************/
+
 function ChScore(containerSelector) {
+  this._containerSelector = containerSelector;
   this._scoreData = null;
   this._currentOptions = null;
   this._vrvToolkit = null;
   
-  this._container = document.querySelector(containerSelector);
+  this._container = document.querySelector(this._containerSelector);
   if (!this._container) {
-    console.error(`Couldn't find a valid score container that matches "${containerSelector}".`);
+    console.error(`Couldn't find a valid score container that matches "${this._containerSelector}".`);
     return false;
   }
   
   // Remove the previous score if the container already has one
   if (this._container.score) this.removeScore();
   
-  // Set up stylesheets
+  // Load CSS styles and event listeners
+  this._loadStyles();
+  this._loadEventListeners();
+  
+  // Register ChScore instance
+  this._chScores.push(this);
+  this._container.score = this;
+}
+
+ChScore.prototype._loadStyles = function () {
   this._stylesheets = {};
   const generalStylesheet = this._addStylesheet('general');
   generalStylesheet.replaceSync(`
@@ -38,11 +50,11 @@ function ChScore(containerSelector) {
       opacity: 0;
     }
     @media print {
-      ${containerSelector} > * {
+      ${this._containerSelector} > * {
         display: block;
         margin-inline: auto;
       }
-      ${containerSelector} > svg {
+      ${this._containerSelector} > svg {
         margin-top: 4mm;
       }
       #lyrics-below {
@@ -59,9 +71,9 @@ function ChScore(containerSelector) {
       }
     }
   `);
-  
-  // -------- EVENT LISTENERS --------
-  
+}
+
+ChScore.prototype._loadEventListeners = function () {
   // Abort controller can be used to cancel event listeners if the score is removed
   this._controller = new AbortController;
   
@@ -111,15 +123,11 @@ function ChScore(containerSelector) {
     }
   }, 200));
   this._resizeObserver.observe(this._container);
-  
-  
-  // -------- FINISH INITIALIZATION --------
-  
-  this._chScores.push(this);
-  this._container.score = this;
 }
 
-// Load score
+
+/********************** Public methods **********************/
+
 ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl = null, midiUrl = null, lyricsUrl = null, scoreContent = null, midiNoteSequence = null, lyricsText = null, parts = null, partsTemplate = null, sections = null, chordSets = null, fermatas = null }, options = this._defaultOptions) {
   if (!scoreType || !(scoreUrl || scoreContent)) {
     console.error(`Score data is incomplete: scoreType and scoreUrl (or scoreContent) are required. Loading default score.`);
@@ -216,7 +224,6 @@ ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl =
   return this._scoreData;
 }
 
-// Update one or more of the initialized options
 ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaType = 'screen') {
   this._currentOptions = this._currentOptions ?? {};
   for (const key of Object.keys(this._defaultOptions)) {
@@ -304,31 +311,34 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
   if (redraw) this.drawScore();
 }
 
-// Remove this ChScore instance
-ChScore.prototype.removeScore = function () {
-  this._removeStylesheets();
-  this._resizeObserver?.disconnect()
-  this._controller?.abort();
-  this._container.innerHTML = '';
-  this._container.removeAttribute('data-status');
-  this._container.removeAttribute('data-width');
-  this._container.score = undefined;
-  this._chScores = this._chScores.filter(chScore => chScore.scoreContainer !== this._container);
-}
-
-
-// Get all of the initialized options
 ChScore.prototype.getOptions = function () {
-  return this._currentOptions;
+  return structuredClone(this._currentOptions);
 }
 
-// Get score data
 ChScore.prototype.getScoreData = function () {
   return this._scoreData;
 }
 
 ChScore.prototype.getScoreContainer = function () {
   return this._container;
+}
+
+ChScore.prototype.getKeySignatureInfo = function () {
+  return this._scoreData.keySignatureInfo;
+}
+
+ChScore.prototype.getMidi = function (format = 'note-sequence') {
+  const noteSequence = this._scoreData.midiNoteSequence;
+  if (format === 'note-sequence') {
+    return noteSequence;
+  } else {
+    const byteArray = core.sequenceProtoToMidi(noteSequence);
+    if (format === 'blob') {
+      return new Blob([byteArray], { type: 'audio/midi' });
+    } else if (format === 'array-buffer') {
+      return byteArray.toArray();
+    }
+  }
 }
 
 ChScore.prototype.drawScore = function () {
@@ -363,6 +373,20 @@ ChScore.prototype.drawScore = function () {
   }
   this._container.append(lyricsBelowContainer);
 }
+
+ChScore.prototype.removeScore = function () {
+  this._removeStylesheets();
+  this._resizeObserver?.disconnect()
+  this._controller?.abort();
+  this._container.innerHTML = '';
+  this._container.removeAttribute('data-status');
+  this._container.removeAttribute('data-width');
+  this._container.score = undefined;
+  this._chScores = this._chScores.filter(chScore => chScore.scoreContainer !== this._container);
+}
+
+
+/********************** Private methods: loading **********************/
 
 ChScore.prototype._loadMidi = function () {
   if (!this._scoreData.midiNoteSequence) {
@@ -2181,223 +2205,6 @@ ChScore.prototype._updateSvg = function (svg) {
   return (new XMLSerializer()).serializeToString(svgParsed);
 }
 
-// Convert qstamp (0-based position in quarter notes, relative to song) to tstamp (1-based position in time signature denominator notes, relative to measure)
-ChScore.prototype._qstampToTstamp = function (startQ, measureStartQ, timeSignatureDenominator) {
-  const quartersPerBeat = 4 / timeSignatureDenominator;
-  const tstamp = ((startQ - measureStartQ) / quartersPerBeat) + 1;
-  return tstamp;
-}
-
-// Find the last item in an array that is less than or equal to the target value
-// An optional key can be provided to find matches in a list of arrays
-ChScore.prototype._binaryFind = function (arr, targetValue, { key = null, returnIndex = false, sort = false, findType = 'last-lte' }) {
-  // Sort the array (if needed)
-  if (sort) {
-    if (key === null) {
-      arr.sort((a, b) => a[key] - b[key]);
-    } else {
-      arr.sort((a, b) => a - b);
-    }
-  }
-  
-  // Do a binary search on the array to find the last value <= the target value
-  let leftIndex = 0;
-  let rightIndex = arr.length - 1;
-  let targetIndex = -1;
-  while (leftIndex <= rightIndex) {
-    const midpointIndex = Math.floor((leftIndex + rightIndex) / 2);
-    const midpointValue = key === null ? arr[midpointIndex] : arr[midpointIndex][key];
-    
-    // Last less than or equal
-    if (findType === 'last-lte') {
-      if (midpointValue <= targetValue) {
-        targetIndex = midpointIndex;
-        leftIndex = midpointIndex + 1;
-      } else {
-        rightIndex = midpointIndex - 1;
-      }
-    // First greater than or equal
-    } else if (findType === 'first-gte') {
-      if (midpointValue >= targetValue) {
-        targetIndex = midpointIndex;
-        rightIndex = midpointIndex - 1;
-      } else {
-        leftIndex = midpointIndex + 1;
-      }
-    }
-    
-  }
-  
-  // Return the matching index or value
-  if (returnIndex) {
-    return targetIndex;
-  } else {
-    return arr[targetIndex];
-  }
-}
-
-// Based on Python bisect.bisect_left
-ChScore.prototype._bisectLeft = function (arr, target) {
-  let left = 0;
-  let right = arr.length;
-  while (left < right) {
-    const mid = Math.floor((left + right) / 2);
-    if (arr[mid] < target) {
-      left = mid + 1;
-    } else {
-      right = mid;
-    }
-  }
-  return left;
-}    
-
-ChScore.prototype._getQpmAtTime = function (seconds, midiTempos) {
-  const tempo = this._binaryFind(midiTempos, seconds, { key: 'time', findType: 'last-lte' });
-  return tempo?.qpm ?? parseInt(this._scoreData.meiParsed.querySelector('tempo').getAttribute('midi.bpm'));
-}
-
-ChScore.prototype._getMidiDuration = function (durationQ, quartersPerMinute) {
-  const quartersPerSecond = quartersPerMinute / 60;
-  return durationQ / quartersPerSecond;
-}
-
-
-// Wrapper function to prevent the given function from being called too frequently
-// Adapted from https://levelup.gitconnected.com/debounce-in-javascript-improve-your-applications-performance-5b01855e086
-ChScore.prototype._debounce = function (func, wait) {
-  let timeout;
-  return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
-    clearTimeout(timeout);
-    timeout = setTimeout(later, wait);
-  };
-}
-
-// Throttle
-ChScore.prototype._throttleStatus = {}
-ChScore.prototype._isThrottled = function (key, ms) {
-  let keyIsThrottled;
-  if (Object.hasOwn(this._throttleStatus, key) && this._throttleStatus[key] === true) {
-    keyIsThrottled = true;
-  } else {
-    keyIsThrottled = false;
-    this._throttleStatus[key] = true;
-    setTimeout(() => {
-      this._throttleStatus[key] = false;
-    }, ms);
-  }
-  return keyIsThrottled;
-}
-
-// Add a CSS stylesheet to the document
-ChScore.prototype._addStylesheet = function (stylesheets, stylesheetKey) {
-  let stylesheet = this._stylesheets[stylesheetKey];
-  if (!stylesheet) {
-    if (this._supportsCssStylesheetApi) {
-      stylesheet = new CSSStyleSheet();
-      document.adoptedStyleSheets.push(stylesheet);
-    } else {
-      // For browsers that don't fully support the CSSStyleSheet API, such as Safari < 16.4.
-      // See https://developer.mozilla.org/en-US/docs/Web/API/CSSStyleSheet#browser_compatibility
-      stylesheet = document.createElement('style');
-      stylesheet.appendChild(document.createTextNode(''));
-      stylesheet.replaceSync = (newContent) => {
-        stylesheet.textContent = newContent;
-      }
-      stylesheet.insertRule = (newContent) => {
-        stylesheet.textContent += newContent;
-      }
-      document.head.appendChild(stylesheet);
-    }
-    this._stylesheets[stylesheetKey] = stylesheet;
-  }
-  return stylesheet;
-}
-
-// Remove CSS stylesheets (only those from the current ChScore instance)
-ChScore.prototype._removeStylesheets = function () {
-  for (const stylesheet of Object.values(this._stylesheets)) {
-    if (this._supportsCssStylesheetApi) {
-      const adoptedStylesheetIndex = document.adoptedStyleSheets.indexOf(stylesheet);
-      document.adoptedStyleSheets.splice(adoptedStylesheetIndex, 1);
-    } else {
-      stylesheet.remove();
-    }
-  }
-}
-  
-// Get score elements at point
-ChScore.prototype._getPointData = function (x, y) {
-  const pointData = {
-    systemId: null,
-    measureId: null,
-    noteIds: [],
-    partIds: [],
-    lyricId: null,
-    chordPosition: null,
-    expandedChordPositions: [],
-    staffNumber: null,
-    sectionIds: [],
-    lyricLineId: null,
-  }
-  let elements = [];
-  try { // Avoid an error if the window loses focuses
-    elements = document.elementsFromPoint(event.clientX, event.clientY) ?? [];
-  } finally {}
-  for (const element of elements) {
-    if (element === this._container) break;
-    
-    if (element.dataset.chChordPosition) {
-      pointData.chordPosition = parseInt(element.dataset.chChordPosition);
-    }
-    if (element.dataset.chExpandedChordPosition) {
-      pointData.expandedChordPositions = element.dataset.chExpandedChordPosition.split(' ').map(ecp => parseInt(ecp));
-    }
-    if (element.dataset.chSectionId) {
-      pointData.sectionIds = element.dataset.chSectionId.split(' ');
-    }
-    if (element.dataset.chLyricLineId) {
-      pointData.lyricLineId = element.dataset.chLyricLineId;
-    }
-    if (element.dataset.chStaffNumber) {
-      pointData.staffNumber = parseInt(element.dataset.chStaffNumber);
-    }
-    if (element.dataset.related || element.parentElement?.dataset?.related) {
-      for (const relatedElementId of (element.dataset.related || element.parentElement.dataset.related).split(' ')) {
-        const relatedElement = document.getElementById(relatedElementId);
-        if (relatedElement.classList.contains('system')) {
-          pointData.systemId = relatedElementId;
-        } else if (relatedElement.classList.contains('measure')) {
-          pointData.measureId = relatedElementId;
-        } else if (relatedElement.classList.contains('staff')) {
-          pointData.staffNumber = parseInt(relatedElement.dataset.n);
-        } else if (relatedElement.classList.contains('note')) {
-          pointData.noteIds.push(relatedElementId);
-          if (relatedElement.dataset.chPartId) {
-            pointData.partIds = relatedElement.dataset.chPartId.split(' ');
-          }
-        } else if (relatedElement.classList.contains('verse')) {
-          pointData.lyricId = relatedElementId;
-        }
-      }
-    }
-  }
-  
-  // Get sectionIds if not specified
-  if (pointData.sectionIds.length === 0) {
-    if (pointData.expandedChordPositions.length > 0 && this._scoreData.expandedChordPositions) {
-      pointData.sectionIds = pointData.expandedChordPositions.map(ecp => this._scoreData.expandedChordPositions[ecp].sectionId);
-    } else if (pointData.chordPosition && this._scoreData.chordPositions) {
-      pointData.sectionIds = Object.keys(this._scoreData.chordPositions[pointData.chordPosition].expandedChordPositions ?? {});
-    }
-  }
-  
-  return pointData;
-}    
-
 // This function created with help from AI (Claude)
 ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
   const MUSICAL_ELEMENTS = ['note', 'rest', 'chord', 'space'];
@@ -2871,13 +2678,150 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
   return meiParsed;
 }
 
-// Build parts if needed
-// Parts template examples:
-// [chordPosition]:[partsTemplate]#[melodyPart]
-// 0:SA+TB#S; 24:SA+TB#T; 36:SA+TB#S (The Morning Breaks, 1985 Hymns)
-// 0:Unison; 39:SA+TB (I Know That My Redeemer Lives, 1985 Hymns)
-// TTBB#T2 (Brightly Beams Our Father's Mercy, Men's Choir, 1985 Hymns)
-// Descant+Unison (I Am a Child of God, 1989 Children's Songbook)
+
+// Load dependencies
+ChScore.prototype._chLoadDependencies = async function () {
+  async function verovioInitialized() {
+    try {
+      let tk = new verovio.toolkit();
+      tk = null;
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return verovioInitialized();
+    }
+  }
+  await Promise.all([
+    // TODO: Switch back to official Magenta.js build when a new version is available that fixes clicks in Church Organ soundfont
+    // https://github.com/magenta/magenta-js/issues/684
+    // import('https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1/es6/core.min.js'),
+    import('https://cdn.jsdelivr.net/gh/samuelbradshaw/magenta-js@master/music/es6/core.js'),
+    import('https://cdn.jsdelivr.net/npm/verovio@6.0.1/dist/verovio-toolkit-wasm.min.js'),
+    verovioInitialized(),
+  ]);
+  return true;
+}
+ChScore.prototype._chDependenciesLoaded = ChScore.prototype._chLoadDependencies()
+
+// Keep track of all ChScore instances
+ChScore.prototype._chScores = [];
+
+// Check browser type
+ChScore.prototype._supportsCssStylesheetApi = CSSStyleSheet?.prototype?.replaceSync;
+
+// Default score data
+ChScore.prototype._defaultInputData = {
+  scoreType: 'abc',
+  scoreContent: `X:1
+    T:Westminster Chimes
+    L:1/4
+    M:3/4
+    K:C
+    e c d | G3 | G d e | c3 |]`,
+}
+
+// Default Verovio options
+// See https://book.verovio.org/toolkit-reference/toolkit-options.html
+ChScore.prototype._defaultVerovioOptions = {
+  expandNever: true,
+  lyricHeightFactor: 1.4,
+  header: 'none', footer: 'none',
+  lyricSize: 4.5,
+  lyricWordSpace: 2.0,
+  lyricVerseCollapse: true,
+  lyricNoStartHyphen: true,
+  lyricTopMinMargin: 8.0,
+  mmOutput: false,
+  transpose: '',
+  pageMarginTop: 0, pageMarginBottom: 0,
+  pageMarginLeft: 4, pageMarginRight: 4, // Slight margin to prevent elements at the edge of the score from getting clipped
+  adjustPageHeight: true,
+  pageHeight: 10000,
+  scaleToPageSize: false,
+  breaks: 'smart',
+  breaksSmartSb: 0.8,
+  minLastJustification: 0.4,
+  breaksNoWidow: true,
+  spacingStaff: 12,
+  spacingSystem: 4,
+  spacingLinear: 0.25,
+  spacingNonLinear: 0.6,
+  condense: 'auto',
+  svgAdditionalAttribute: [
+    // Standard MEI attributes
+    'staff@n', 'tie@startid', 'slur@startid',
+    // Chorister.js basic attributes
+    'chord@ch-chord-position', 'note@ch-chord-position', 'rest@ch-chord-position',
+    'dir@ch-chord-position', 'harm@ch-chord-position', 'fermata@ch-chord-position',
+    'verse@ch-lyric-line-id',
+    'dir@ch-intro-bracket', 'rend@ch-superscript', 'syl@end-underscore',
+    // Chorister.js optional attributes
+    'chord@ch-expanded-chord-position', 'note@ch-expanded-chord-position', 'rest@ch-expanded-chord-position',
+    'dir@ch-expanded-chord-position', 'harm@ch-expanded-chord-position', 'fermata@ch-expanded-chord-position',
+    'note@ch-part-id', 'note@ch-melody',
+    'rest@ch-part-id', 'rest@ch-melody',
+    'verse@ch-section-id', 'verse@ch-secondary', 'verse@ch-chorus',
+  ],
+};
+
+// Default options
+ChScore.prototype._defaultOptions = {
+  zoomPercent: 40,
+  keySignatureId: null, // null, 
+  expandScore: false, // false, 'intro', 'full-score'
+  showChordSet: false, // true, false, or chordSetId
+  showChordSetImages: false,
+  showFingeringMarks: false,
+  showMeasureNumbers: false,
+  showMelodyOnly: false,
+  hiddenSectionIds: [],
+  drawBackgroundShapes: [],
+  drawForegroundShapes: [],
+  customEvents: [],
+}
+
+ChScore.prototype._getKeySignatures = function (tonality = 'major') {
+  const keySignatures = {
+    major: {
+      'g-flat-major':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'gf', midiPitch: 54, tonality: 'major', name: 'G♭ major' },
+      'g-major':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'major', name: 'G major'  },
+      'a-flat-major':  { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'af', midiPitch: 56, tonality: 'major', name: 'A♭ major' },
+      'a-major':       { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'a',  midiPitch: 57, tonality: 'major', name: 'A major'  },
+      'b-flat-major':  { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'major', name: 'B♭ major' },
+      'b-major':       { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'major', name: 'B major'  },
+      'c-flat-major':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'cf', midiPitch: 59, tonality: 'major', name: 'C♭ major' },
+      'c-major':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'c',  midiPitch: 60, tonality: 'major', name: 'C major'  },
+      'c-sharp-major': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'major', name: 'C# major' },
+      'd-flat-major':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'df', midiPitch: 61, tonality: 'major', name: 'D♭ major' },
+      'd-major':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'major', name: 'D major'  },
+      'e-flat-major':  { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'major', name: 'E♭ major' },
+      'e-major':       { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'major', name: 'E major'  },
+      'f-major':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'major', name: 'F major'  },
+      'f-sharp-major': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'major', name: 'F# major' },
+    },
+    minor: {
+      'g-minor':       { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'minor', name: 'G minor'  },
+      'g-sharp-minor': { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'gs', midiPitch: 56, tonality: 'minor', name: 'G# minor' },
+      'g-flat-minor':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'gf', midiPitch: 56, tonality: 'minor', name: 'A♭ minor' },
+      'a-minor':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'a',  midiPitch: 57, tonality: 'minor', name: 'A minor'  },
+      'a-sharp-minor': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'as', midiPitch: 58, tonality: 'minor', name: 'A# minor' },
+      'b-flat-minor':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'minor', name: 'B♭ minor' },
+      'b-minor':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'minor', name: 'B minor'  },
+      'c-minor':       { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'c',  midiPitch: 60, tonality: 'minor', name: 'C minor'  },
+      'c-sharp-minor': { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'minor', name: 'C# minor' },
+      'd-minor':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'minor', name: 'D minor'  },
+      'd-sharp-minor': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'ds', midiPitch: 63, tonality: 'minor', name: 'D# minor' },
+      'e-flat-minor':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'minor', name: 'E♭ minor' },
+      'e-minor':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'minor', name: 'E minor'  },
+      'f-minor':       { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'minor', name: 'F minor'  },
+      'f-sharp-minor': { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'minor', name: 'F# minor' },
+    },
+  };
+  return keySignatures[tonality];
+}
+
+
+/********************** Private methods: normalize input data **********************/
+
 ChScore.prototype._normalizeParts = function () {
   if (this._scoreData.parts.length > 0) {
     this._scoreData.parts = this._scoreData.parts;
@@ -3075,135 +3019,6 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
   return parts;
 }
 
-ChScore.prototype._normalizeChordSets = function () {
-  // Add default chord set
-  const harmElements = this._scoreData.meiParsed.querySelectorAll('harm');
-  if (harmElements.length > 0) {
-    const defaultChordSet = {
-      chordSetId: 'default',
-      name: 'Default',
-      chordPositionRefs: {},
-      svgSymbolsUrl: null,
-      chordInfoList: [],
-    }
-    for (const harmElement of harmElements) {
-      const chordInfo = {
-        prefix: null,
-        text: harmElement.textContent.trim().replace('♭', 'b').replace('♯', '#'),
-        svgSymbolId: null,
-        measureId: harmElement.closest('measure').getAttribute('xml:id'),
-        tstamp: harmElement.getAttribute('tstamp'),
-      }
-      defaultChordSet.chordInfoList.push(chordInfo);
-      if (harmElement.getAttribute('ch-chord-position')) {
-        const chordPosition = parseInt(harmElement.getAttribute('ch-chord-position'));
-        defaultChordSet.chordPositionRefs[chordPosition] = chordInfo;
-      }
-    }
-    this._scoreData.chordSets.unshift(defaultChordSet);
-  }
-  this._scoreData.chordSetsById = {};
-  for (const chordSet of this._scoreData.chordSets) {
-    this._scoreData.chordSetsById[chordSet.chordSetId] = chordSet;
-  }
-}
-
-// Get verse numbers based on <label> elements
-// TODO: Account for verses below
-ChScore.prototype._getVerseNumbers = function (meiParsed) {
-  const verseNumbers = [];
-  let hasVerseNumberMismatch = false;
-  let counter = 1;
-  const verseLabels = meiParsed.querySelectorAll('verse label');
-  for (const verseLabel of verseLabels) {
-    const verseNumber = parseInt(verseLabel.textContent.trim().replace(/[().]/g, ''));
-    const lineNumber = parseInt(verseLabel.closest('verse').getAttribute('n'));
-    if (verseNumber === lineNumber && verseNumber === counter) {
-      verseNumbers.push(verseNumber);
-      counter++;
-    } else {
-      hasVerseNumberMismatch = true;
-      break;
-    }
-  }
-  // Handle single-verse songs where the verse doesn't have a label
-  if (verseNumbers.length === 0) verseNumbers.push(1);
-  return hasVerseNumberMismatch ? [] : verseNumbers;
-}
-
-ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRanges, maxAllowedGap = 3) {
-  const lyricLinesByStaffAndCp = {};
-  const lyrics = Array.from(this._scoreData.meiParsed.querySelectorAll(':is(note[ch-melody], chord:has([ch-melody])) verse:has(syl:not(:empty))'));
-  for (const lyric of lyrics) {
-    const chordPosition = parseInt(lyric.closest('[ch-chord-position]').getAttribute('ch-chord-position'));
-    const lyricLineId = lyric.getAttribute('ch-lyric-line-id');
-    const [staffNumber, lineNumber] = lyricLineId.split('.').map(i => parseInt(i));
-    if (!Object.hasOwn(lyricLinesByStaffAndCp, staffNumber)) lyricLinesByStaffAndCp[staffNumber] = {};
-    if (!Object.hasOwn(lyricLinesByStaffAndCp[staffNumber], chordPosition)) lyricLinesByStaffAndCp[staffNumber][chordPosition] = new Set();
-    lyricLinesByStaffAndCp[staffNumber][chordPosition].add(lineNumber);
-  }
-  
-  let ecpCounter = 0;
-  const ecpToCp = {};
-  for (const lyricChordPositionRange of lyricChordPositionRanges) {
-    for (let cp = lyricChordPositionRange[0]; cp < lyricChordPositionRange[1]; cp++) {
-      ecpToCp[ecpCounter] = cp;
-      ecpCounter += 1;
-    }
-  }
-  
-  const singleLineCpRangesByStaff = {}
-  for (const staffNumber of Object.keys(lyricLinesByStaffAndCp)) {
-    let firstLyricEcp;
-    const noLyricEcps = [];
-    const oneLyricEcpRanges = [];
-    const expandedChordPositions = Object.keys(ecpToCp).map(ecp => parseInt(ecp));
-    for (const ecp of expandedChordPositions) {
-      const cp = ecpToCp[ecp];
-      if (Object.hasOwn(lyricLinesByStaffAndCp[staffNumber], cp)) {
-        if (firstLyricEcp == null) firstLyricEcp = ecp;
-        if (lyricLinesByStaffAndCp[staffNumber][cp].size > 1 || oneLyricEcpRanges.length === 0) {
-          oneLyricEcpRanges.push({
-            start: null,
-            end: null,
-            lineNumbers: new Set(),
-          })
-        }
-        if (lyricLinesByStaffAndCp[staffNumber][cp].size === 1) {
-          if (oneLyricEcpRanges.at(-1).start == null) oneLyricEcpRanges.at(-1).start = ecp;
-          oneLyricEcpRanges.at(-1).end = ecp + 1;
-          oneLyricEcpRanges.at(-1).lineNumbers.add(lyricLinesByStaffAndCp[staffNumber][cp][0])
-        }
-      } else {
-        noLyricEcps.push(ecp);
-      }
-    }
-    
-    // Filter out invalid ranges, expand ranges to include adjacent expanded chord positions with no lyrics
-    const filteredEcpRanges = [];
-    for (const oneLyricEcpRange of oneLyricEcpRanges) {
-      if (!oneLyricEcpRange.start || oneLyricEcpRange.end - oneLyricEcpRange.start <= maxAllowedGap) {
-        continue;
-      }
-      let rangeStart = oneLyricEcpRange.start;
-      let rangeEnd = oneLyricEcpRange.end;
-      if (rangeStart === firstLyricEcp) while (noLyricEcps.includes(rangeStart - 1)) rangeStart -= 1;
-      while (noLyricEcps.includes(rangeEnd)) rangeEnd += 1;
-      filteredEcpRanges.push({
-        start: rangeStart,
-        end: rangeEnd,
-        lineNumbers: oneLyricEcpRange.lineNumbers,
-      });
-      for (let ecp = rangeStart; ecp < rangeEnd; ecp++) {
-        this._scoreData.chordPositions[ecpToCp[ecp]].isSingleLine = true;
-      }
-    }
-    singleLineCpRangesByStaff[staffNumber] = filteredEcpRanges;
-  }
-  
-  return singleLineCpRangesByStaff;
-}
-
 ChScore.prototype._normalizeSections = function () {
   
   // Generate sections based on lyric stanzas
@@ -3254,7 +3069,7 @@ ChScore.prototype._normalizeSections = function () {
   this._scoreData.hasRepeatOrJump = !!this._scoreData.meiParsed.querySelector('repeatMark, coda, segno, ending, measure:is([left="rptstart"], [left="rptboth"], [right="rptend"], [right="rptboth"]), dir:is([type="coda"], [type="tocoda"], [type="segno"], [type="dalsegno"], [type="dacapo"], [type="fine"])')
   
   let hasPrebuiltSections = this._scoreData.sections.length > 0;
-  const verseNumbers = this._getVerseNumbers(this._scoreData.meiParsed)
+  const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed)
   const introBracketElements = this._scoreData.meiParsed.querySelectorAll('[ch-intro-bracket]');
   const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionMap(this._scoreData.meiParsed, verseNumbers.length, introBracketElements.length > 0, this._scoreData.hasRepeatOrJump);
   
@@ -3349,6 +3164,28 @@ ChScore.prototype._normalizeSections = function () {
     this._scoreData.sectionsById[section.sectionId] = section;
   }
   
+}
+
+ChScore.prototype._getInlineVerseNumbers = function (meiParsed) {
+  const verseNumbers = [];
+  let hasVerseNumberMismatch = false;
+  let counter = 1;
+  // Get verse numbers based on <label> elements
+  const verseLabels = meiParsed.querySelectorAll('verse label');
+  for (const verseLabel of verseLabels) {
+    const verseNumber = parseInt(verseLabel.textContent.trim().replace(/[().]/g, ''));
+    const lineNumber = parseInt(verseLabel.closest('verse').getAttribute('n'));
+    if (verseNumber === lineNumber && verseNumber === counter) {
+      verseNumbers.push(verseNumber);
+      counter++;
+    } else {
+      hasVerseNumberMismatch = true;
+      break;
+    }
+  }
+  // Handle single-verse songs where the verse doesn't have a label
+  if (verseNumbers.length === 0) verseNumbers.push(1);
+  return hasVerseNumberMismatch ? [] : verseNumbers;
 }
 
 ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecpStart) {
@@ -3854,164 +3691,333 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
   return sections;
 }
 
-
-// Load dependencies
-ChScore.prototype._chLoadDependencies = async function () {
-  async function verovioInitialized() {
-    try {
-      let tk = new verovio.toolkit();
-      tk = null;
-    } catch {
-      await new Promise(resolve => setTimeout(resolve, 5));
-      return verovioInitialized();
+ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRanges, maxAllowedGap = 3) {
+  const lyricLinesByStaffAndCp = {};
+  const lyrics = Array.from(this._scoreData.meiParsed.querySelectorAll(':is(note[ch-melody], chord:has([ch-melody])) verse:has(syl:not(:empty))'));
+  for (const lyric of lyrics) {
+    const chordPosition = parseInt(lyric.closest('[ch-chord-position]').getAttribute('ch-chord-position'));
+    const lyricLineId = lyric.getAttribute('ch-lyric-line-id');
+    const [staffNumber, lineNumber] = lyricLineId.split('.').map(i => parseInt(i));
+    if (!Object.hasOwn(lyricLinesByStaffAndCp, staffNumber)) lyricLinesByStaffAndCp[staffNumber] = {};
+    if (!Object.hasOwn(lyricLinesByStaffAndCp[staffNumber], chordPosition)) lyricLinesByStaffAndCp[staffNumber][chordPosition] = new Set();
+    lyricLinesByStaffAndCp[staffNumber][chordPosition].add(lineNumber);
+  }
+  
+  let ecpCounter = 0;
+  const ecpToCp = {};
+  for (const lyricChordPositionRange of lyricChordPositionRanges) {
+    for (let cp = lyricChordPositionRange[0]; cp < lyricChordPositionRange[1]; cp++) {
+      ecpToCp[ecpCounter] = cp;
+      ecpCounter += 1;
     }
   }
-  await Promise.all([
-    // TODO: Switch back to official Magenta.js build when a new version is available that fixes clicks in Church Organ soundfont
-    // https://github.com/magenta/magenta-js/issues/684
-    // import('https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1/es6/core.min.js'),
-    import('https://cdn.jsdelivr.net/gh/samuelbradshaw/magenta-js@master/music/es6/core.js'),
-    import('https://cdn.jsdelivr.net/npm/verovio@6.0.1/dist/verovio-toolkit-wasm.min.js'),
-    verovioInitialized(),
-  ]);
-  return true;
-}
-ChScore.prototype._chDependenciesLoaded = ChScore.prototype._chLoadDependencies()
-
-// Keep track of all ChScore instances
-ChScore.prototype._chScores = [];
-
-// Check browser type
-ChScore.prototype._supportsCssStylesheetApi = CSSStyleSheet?.prototype?.replaceSync;
-
-// Default score data
-ChScore.prototype._defaultInputData = {
-  scoreType: 'abc',
-  scoreContent: `X:1
-    T:Westminster Chimes
-    L:1/4
-    M:3/4
-    K:C
-    e c d | G3 | G d e | c3 |]`,
-}
-
-// Default Verovio options
-// See https://book.verovio.org/toolkit-reference/toolkit-options.html
-ChScore.prototype._defaultVerovioOptions = {
-  expandNever: true,
-  lyricHeightFactor: 1.4,
-  header: 'none', footer: 'none',
-  lyricSize: 4.5,
-  lyricWordSpace: 2.0,
-  lyricVerseCollapse: true,
-  lyricNoStartHyphen: true,
-  lyricTopMinMargin: 8.0,
-  mmOutput: false,
-  transpose: '',
-  pageMarginTop: 0, pageMarginBottom: 0,
-  pageMarginLeft: 4, pageMarginRight: 4, // Slight margin to prevent elements at the edge of the score from getting clipped
-  adjustPageHeight: true,
-  pageHeight: 10000,
-  scaleToPageSize: false,
-  breaks: 'smart',
-  breaksSmartSb: 0.8,
-  minLastJustification: 0.4,
-  breaksNoWidow: true,
-  spacingStaff: 12,
-  spacingSystem: 4,
-  spacingLinear: 0.25,
-  spacingNonLinear: 0.6,
-  condense: 'auto',
-  svgAdditionalAttribute: [
-    // Standard MEI attributes
-    'staff@n', 'tie@startid', 'slur@startid',
-    // Chorister.js basic attributes
-    'chord@ch-chord-position', 'note@ch-chord-position', 'rest@ch-chord-position',
-    'dir@ch-chord-position', 'harm@ch-chord-position', 'fermata@ch-chord-position',
-    'verse@ch-lyric-line-id',
-    'dir@ch-intro-bracket', 'rend@ch-superscript', 'syl@end-underscore',
-    // Chorister.js optional attributes
-    'chord@ch-expanded-chord-position', 'note@ch-expanded-chord-position', 'rest@ch-expanded-chord-position',
-    'dir@ch-expanded-chord-position', 'harm@ch-expanded-chord-position', 'fermata@ch-expanded-chord-position',
-    'note@ch-part-id', 'note@ch-melody',
-    'rest@ch-part-id', 'rest@ch-melody',
-    'verse@ch-section-id', 'verse@ch-secondary', 'verse@ch-chorus',
-  ],
-};
-
-// Default options
-ChScore.prototype._defaultOptions = {
-  zoomPercent: 40,
-  keySignatureId: null, // null, 
-  expandScore: false, // false, 'intro', 'full-score'
-  showChordSet: false, // true, false, or chordSetId
-  showChordSetImages: false,
-  showFingeringMarks: false,
-  showMeasureNumbers: false,
-  showMelodyOnly: false,
-  hiddenSectionIds: [],
-  drawBackgroundShapes: [],
-  drawForegroundShapes: [],
-  customEvents: [],
+  
+  const singleLineCpRangesByStaff = {}
+  for (const staffNumber of Object.keys(lyricLinesByStaffAndCp)) {
+    let firstLyricEcp;
+    const noLyricEcps = [];
+    const oneLyricEcpRanges = [];
+    const expandedChordPositions = Object.keys(ecpToCp).map(ecp => parseInt(ecp));
+    for (const ecp of expandedChordPositions) {
+      const cp = ecpToCp[ecp];
+      if (Object.hasOwn(lyricLinesByStaffAndCp[staffNumber], cp)) {
+        if (firstLyricEcp == null) firstLyricEcp = ecp;
+        if (lyricLinesByStaffAndCp[staffNumber][cp].size > 1 || oneLyricEcpRanges.length === 0) {
+          oneLyricEcpRanges.push({
+            start: null,
+            end: null,
+            lineNumbers: new Set(),
+          })
+        }
+        if (lyricLinesByStaffAndCp[staffNumber][cp].size === 1) {
+          if (oneLyricEcpRanges.at(-1).start == null) oneLyricEcpRanges.at(-1).start = ecp;
+          oneLyricEcpRanges.at(-1).end = ecp + 1;
+          oneLyricEcpRanges.at(-1).lineNumbers.add(lyricLinesByStaffAndCp[staffNumber][cp][0])
+        }
+      } else {
+        noLyricEcps.push(ecp);
+      }
+    }
+    
+    // Filter out invalid ranges, expand ranges to include adjacent expanded chord positions with no lyrics
+    const filteredEcpRanges = [];
+    for (const oneLyricEcpRange of oneLyricEcpRanges) {
+      if (!oneLyricEcpRange.start || oneLyricEcpRange.end - oneLyricEcpRange.start <= maxAllowedGap) {
+        continue;
+      }
+      let rangeStart = oneLyricEcpRange.start;
+      let rangeEnd = oneLyricEcpRange.end;
+      if (rangeStart === firstLyricEcp) while (noLyricEcps.includes(rangeStart - 1)) rangeStart -= 1;
+      while (noLyricEcps.includes(rangeEnd)) rangeEnd += 1;
+      filteredEcpRanges.push({
+        start: rangeStart,
+        end: rangeEnd,
+        lineNumbers: oneLyricEcpRange.lineNumbers,
+      });
+      for (let ecp = rangeStart; ecp < rangeEnd; ecp++) {
+        this._scoreData.chordPositions[ecpToCp[ecp]].isSingleLine = true;
+      }
+    }
+    singleLineCpRangesByStaff[staffNumber] = filteredEcpRanges;
+  }
+  
+  return singleLineCpRangesByStaff;
 }
 
-ChScore.prototype._getKeySignatures = function (tonality = 'major') {
-  const keySignatures = {
-    major: {
-      'g-flat-major':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'gf', midiPitch: 54, tonality: 'major', name: 'G♭ major' },
-      'g-major':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'major', name: 'G major'  },
-      'a-flat-major':  { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'af', midiPitch: 56, tonality: 'major', name: 'A♭ major' },
-      'a-major':       { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'a',  midiPitch: 57, tonality: 'major', name: 'A major'  },
-      'b-flat-major':  { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'major', name: 'B♭ major' },
-      'b-major':       { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'major', name: 'B major'  },
-      'c-flat-major':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'cf', midiPitch: 59, tonality: 'major', name: 'C♭ major' },
-      'c-major':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'c',  midiPitch: 60, tonality: 'major', name: 'C major'  },
-      'c-sharp-major': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'major', name: 'C# major' },
-      'd-flat-major':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'df', midiPitch: 61, tonality: 'major', name: 'D♭ major' },
-      'd-major':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'major', name: 'D major'  },
-      'e-flat-major':  { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'major', name: 'E♭ major' },
-      'e-major':       { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'major', name: 'E major'  },
-      'f-major':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'major', name: 'F major'  },
-      'f-sharp-major': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'major', name: 'F# major' },
-    },
-    minor: {
-      'g-minor':       { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'minor', name: 'G minor'  },
-      'g-sharp-minor': { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'gs', midiPitch: 56, tonality: 'minor', name: 'G# minor' },
-      'g-flat-minor':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'gf', midiPitch: 56, tonality: 'minor', name: 'A♭ minor' },
-      'a-minor':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'a',  midiPitch: 57, tonality: 'minor', name: 'A minor'  },
-      'a-sharp-minor': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'as', midiPitch: 58, tonality: 'minor', name: 'A# minor' },
-      'b-flat-minor':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'minor', name: 'B♭ minor' },
-      'b-minor':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'minor', name: 'B minor'  },
-      'c-minor':       { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'c',  midiPitch: 60, tonality: 'minor', name: 'C minor'  },
-      'c-sharp-minor': { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'minor', name: 'C# minor' },
-      'd-minor':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'minor', name: 'D minor'  },
-      'd-sharp-minor': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'ds', midiPitch: 63, tonality: 'minor', name: 'D# minor' },
-      'e-flat-minor':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'minor', name: 'E♭ minor' },
-      'e-minor':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'minor', name: 'E minor'  },
-      'f-minor':       { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'minor', name: 'F minor'  },
-      'f-sharp-minor': { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'minor', name: 'F# minor' },
-    },
-  };
-  return keySignatures[tonality];
+ChScore.prototype._normalizeChordSets = function () {
+  // Add default chord set
+  const harmElements = this._scoreData.meiParsed.querySelectorAll('harm');
+  if (harmElements.length > 0) {
+    const defaultChordSet = {
+      chordSetId: 'default',
+      name: 'Default',
+      chordPositionRefs: {},
+      svgSymbolsUrl: null,
+      chordInfoList: [],
+    }
+    for (const harmElement of harmElements) {
+      const chordInfo = {
+        prefix: null,
+        text: harmElement.textContent.trim().replace('♭', 'b').replace('♯', '#'),
+        svgSymbolId: null,
+        measureId: harmElement.closest('measure').getAttribute('xml:id'),
+        tstamp: harmElement.getAttribute('tstamp'),
+      }
+      defaultChordSet.chordInfoList.push(chordInfo);
+      if (harmElement.getAttribute('ch-chord-position')) {
+        const chordPosition = parseInt(harmElement.getAttribute('ch-chord-position'));
+        defaultChordSet.chordPositionRefs[chordPosition] = chordInfo;
+      }
+    }
+    this._scoreData.chordSets.unshift(defaultChordSet);
+  }
+  this._scoreData.chordSetsById = {};
+  for (const chordSet of this._scoreData.chordSets) {
+    this._scoreData.chordSetsById[chordSet.chordSetId] = chordSet;
+  }
 }
 
-ChScore.prototype.getKeySignatureInfo = function () {
-  return this._scoreData.keySignatureInfo;
+
+/********************** Private methods: utilities **********************/
+
+// Convert qstamp (0-based position in quarter notes, relative to song) to tstamp (1-based position in time signature denominator notes, relative to measure)
+ChScore.prototype._qstampToTstamp = function (startQ, measureStartQ, timeSignatureDenominator) {
+  const quartersPerBeat = 4 / timeSignatureDenominator;
+  const tstamp = ((startQ - measureStartQ) / quartersPerBeat) + 1;
+  return tstamp;
 }
 
-ChScore.prototype.getMidi = function (format = 'note-sequence') {
-  const noteSequence = this._scoreData.midiNoteSequence;
-  if (format === 'note-sequence') {
-    return noteSequence;
+// Find the last item in an array that is less than or equal to the target value
+// An optional key can be provided to find matches in a list of arrays
+ChScore.prototype._binaryFind = function (arr, targetValue, { key = null, returnIndex = false, sort = false, findType = 'last-lte' }) {
+  // Sort the array (if needed)
+  if (sort) {
+    if (key === null) {
+      arr.sort((a, b) => a[key] - b[key]);
+    } else {
+      arr.sort((a, b) => a - b);
+    }
+  }
+  
+  // Do a binary search on the array to find the last value <= the target value
+  let leftIndex = 0;
+  let rightIndex = arr.length - 1;
+  let targetIndex = -1;
+  while (leftIndex <= rightIndex) {
+    const midpointIndex = Math.floor((leftIndex + rightIndex) / 2);
+    const midpointValue = key === null ? arr[midpointIndex] : arr[midpointIndex][key];
+    
+    // Last less than or equal
+    if (findType === 'last-lte') {
+      if (midpointValue <= targetValue) {
+        targetIndex = midpointIndex;
+        leftIndex = midpointIndex + 1;
+      } else {
+        rightIndex = midpointIndex - 1;
+      }
+    // First greater than or equal
+    } else if (findType === 'first-gte') {
+      if (midpointValue >= targetValue) {
+        targetIndex = midpointIndex;
+        rightIndex = midpointIndex - 1;
+      } else {
+        leftIndex = midpointIndex + 1;
+      }
+    }
+    
+  }
+  
+  // Return the matching index or value
+  if (returnIndex) {
+    return targetIndex;
   } else {
-    const byteArray = core.sequenceProtoToMidi(noteSequence);
-    if (format === 'blob') {
-      return new Blob([byteArray], { type: 'audio/midi' });
-    } else if (format === 'array-buffer') {
-      return byteArray.toArray();
+    return arr[targetIndex];
+  }
+}
+
+// Based on Python bisect.bisect_left
+ChScore.prototype._bisectLeft = function (arr, target) {
+  let left = 0;
+  let right = arr.length;
+  while (left < right) {
+    const mid = Math.floor((left + right) / 2);
+    if (arr[mid] < target) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+  return left;
+}    
+
+ChScore.prototype._getQpmAtTime = function (seconds, midiTempos) {
+  const tempo = this._binaryFind(midiTempos, seconds, { key: 'time', findType: 'last-lte' });
+  return tempo?.qpm ?? parseInt(this._scoreData.meiParsed.querySelector('tempo').getAttribute('midi.bpm'));
+}
+
+ChScore.prototype._getMidiDuration = function (durationQ, quartersPerMinute) {
+  const quartersPerSecond = quartersPerMinute / 60;
+  return durationQ / quartersPerSecond;
+}
+
+// Wrapper function to prevent the given function from being called too frequently
+// Adapted from https://levelup.gitconnected.com/debounce-in-javascript-improve-your-applications-performance-5b01855e086
+ChScore.prototype._debounce = function (func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
+// Throttle
+ChScore.prototype._throttleStatus = {}
+ChScore.prototype._isThrottled = function (key, ms) {
+  let keyIsThrottled;
+  if (Object.hasOwn(this._throttleStatus, key) && this._throttleStatus[key] === true) {
+    keyIsThrottled = true;
+  } else {
+    keyIsThrottled = false;
+    this._throttleStatus[key] = true;
+    setTimeout(() => {
+      this._throttleStatus[key] = false;
+    }, ms);
+  }
+  return keyIsThrottled;
+}
+
+// Add a CSS stylesheet to the document
+ChScore.prototype._addStylesheet = function (stylesheets, stylesheetKey) {
+  let stylesheet = this._stylesheets[stylesheetKey];
+  if (!stylesheet) {
+    if (this._supportsCssStylesheetApi) {
+      stylesheet = new CSSStyleSheet();
+      document.adoptedStyleSheets.push(stylesheet);
+    } else {
+      // For browsers that don't fully support the CSSStyleSheet API, such as Safari < 16.4.
+      // See https://developer.mozilla.org/en-US/docs/Web/API/CSSStyleSheet#browser_compatibility
+      stylesheet = document.createElement('style');
+      stylesheet.appendChild(document.createTextNode(''));
+      stylesheet.replaceSync = (newContent) => {
+        stylesheet.textContent = newContent;
+      }
+      stylesheet.insertRule = (newContent) => {
+        stylesheet.textContent += newContent;
+      }
+      document.head.appendChild(stylesheet);
+    }
+    this._stylesheets[stylesheetKey] = stylesheet;
+  }
+  return stylesheet;
+}
+
+// Remove CSS stylesheets (only those from the current ChScore instance)
+ChScore.prototype._removeStylesheets = function () {
+  for (const stylesheet of Object.values(this._stylesheets)) {
+    if (this._supportsCssStylesheetApi) {
+      const adoptedStylesheetIndex = document.adoptedStyleSheets.indexOf(stylesheet);
+      document.adoptedStyleSheets.splice(adoptedStylesheetIndex, 1);
+    } else {
+      stylesheet.remove();
     }
   }
 }
+  
+// Get score elements at point
+ChScore.prototype._getPointData = function (x, y) {
+  const pointData = {
+    systemId: null,
+    measureId: null,
+    noteIds: [],
+    partIds: [],
+    lyricId: null,
+    chordPosition: null,
+    expandedChordPositions: [],
+    staffNumber: null,
+    sectionIds: [],
+    lyricLineId: null,
+  }
+  let elements = [];
+  try { // Avoid an error if the window loses focuses
+    elements = document.elementsFromPoint(event.clientX, event.clientY) ?? [];
+  } finally {}
+  for (const element of elements) {
+    if (element === this._container) break;
+    
+    if (element.dataset.chChordPosition) {
+      pointData.chordPosition = parseInt(element.dataset.chChordPosition);
+    }
+    if (element.dataset.chExpandedChordPosition) {
+      pointData.expandedChordPositions = element.dataset.chExpandedChordPosition.split(' ').map(ecp => parseInt(ecp));
+    }
+    if (element.dataset.chSectionId) {
+      pointData.sectionIds = element.dataset.chSectionId.split(' ');
+    }
+    if (element.dataset.chLyricLineId) {
+      pointData.lyricLineId = element.dataset.chLyricLineId;
+    }
+    if (element.dataset.chStaffNumber) {
+      pointData.staffNumber = parseInt(element.dataset.chStaffNumber);
+    }
+    if (element.dataset.related || element.parentElement?.dataset?.related) {
+      for (const relatedElementId of (element.dataset.related || element.parentElement.dataset.related).split(' ')) {
+        const relatedElement = document.getElementById(relatedElementId);
+        if (relatedElement.classList.contains('system')) {
+          pointData.systemId = relatedElementId;
+        } else if (relatedElement.classList.contains('measure')) {
+          pointData.measureId = relatedElementId;
+        } else if (relatedElement.classList.contains('staff')) {
+          pointData.staffNumber = parseInt(relatedElement.dataset.n);
+        } else if (relatedElement.classList.contains('note')) {
+          pointData.noteIds.push(relatedElementId);
+          if (relatedElement.dataset.chPartId) {
+            pointData.partIds = relatedElement.dataset.chPartId.split(' ');
+          }
+        } else if (relatedElement.classList.contains('verse')) {
+          pointData.lyricId = relatedElementId;
+        }
+      }
+    }
+  }
+  
+  // Get sectionIds if not specified
+  if (pointData.sectionIds.length === 0) {
+    if (pointData.expandedChordPositions.length > 0 && this._scoreData.expandedChordPositions) {
+      pointData.sectionIds = pointData.expandedChordPositions.map(ecp => this._scoreData.expandedChordPositions[ecp].sectionId);
+    } else if (pointData.chordPosition && this._scoreData.chordPositions) {
+      pointData.sectionIds = Object.keys(this._scoreData.chordPositions[pointData.chordPosition].expandedChordPositions ?? {});
+    }
+  }
+  
+  return pointData;
+}    
+
+
+/********************** Other **********************/
 
 // Make Chorister.js available to JavaScript module (chorister.mjs)
 window.ChScore = ChScore;
