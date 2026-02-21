@@ -267,9 +267,11 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
   }
   
   if (this._currentOptions.keySignatureId) {
-    const nearbyKeyIndex = this._scoreData.keySignature.nearbyKeySignatureIds.indexOf(this._currentOptions.keySignatureId);
+    const keySignatureInfo = this.getKeySignatureInfo();
+    const nearbyKeyIndex = keySignatureInfo.nearbyKeySignatures.findIndex(ks => ks.keySignatureId === this._currentOptions.keySignatureId);
+    const nearbyKeyInfo = keySignatureInfo.nearbyKeySignatures[nearbyKeyIndex];
     const directionOperator = nearbyKeyIndex < 7 ? '-' : nearbyKeyIndex > 7 ? '+' : '';
-    verovioOptions.transpose = directionOperator + this._keySignatures[this._scoreData.keySignature.tonality][this._currentOptions.keySignatureId].meiPnameAccid;
+    verovioOptions.transpose = directionOperator + nearbyKeyInfo.meiPnameAccid;
   }
   
   if (this._currentOptions.showMeasureNumbers) {
@@ -1131,37 +1133,40 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   const meiAccid = keySignatureElement?.getAttribute('accid') ?? scoreDefElement?.getAttribute('key.accid') ?? null;
   const meiPnameAccid = meiPname ? (meiPname + (['f', 's'].includes(meiAccid) ? meiAccid : '')) : null;
   const tonality = keySignatureElement?.getAttribute('mode') ?? scoreDefElement?.getAttribute('key.mode') ?? 'major';
-  this._scoreData.keySignature = {
-    keySignatureId: null,
-    tonality: tonality,
-    nearbyKeySignatureIds: [],
-  }
-  let midiPitch;
-  const keySignatureTuples = Object.entries(this._keySignatures[tonality]);
-  for (const [keySignatureId, keySignatureInfo] of keySignatureTuples) {
-    this._scoreData.keySignature.nearbyKeySignatureIds.push(keySignatureId);
-    if (keySignatureInfo.meiSig === meiSig || keySignatureInfo.meiPnameAccid === meiPnameAccid) {
-      this._scoreData.keySignature.keySignatureId = keySignatureId;
-      midiPitch = keySignatureInfo.midiPitch;
-    }
-  }
-  const midpointIndex = (keySignatureTuples.length - 1) / 2;
-  const keyIndex = this._scoreData.keySignature.nearbyKeySignatureIds.indexOf(this._scoreData.keySignature.keySignatureId);
+  const keySignatures = this._getKeySignatures(tonality);
+  const [defaultKeySignatureId, defaultKeySignatureInfo] = Object.entries(keySignatures).find(ks => (ks[1].meiSig === meiSig || ks[1].meiPnameAccid === meiPnameAccid));
+  
+  // Get nearby key signatures
+  const nearbyKeySignatureIds = Object.keys(keySignatures);
+  const midpointIndex = (nearbyKeySignatureIds.length - 1) / 2;
+  const keyIndex = nearbyKeySignatureIds.indexOf(defaultKeySignatureId);
   if (keyIndex < midpointIndex) {
-    const itemsToMove = this._scoreData.keySignature.nearbyKeySignatureIds.splice(keyIndex - midpointIndex);
-    this._scoreData.keySignature.nearbyKeySignatureIds.unshift(...itemsToMove);
+    const itemsToMove = nearbyKeySignatureIds.splice(keyIndex - midpointIndex);
+    nearbyKeySignatureIds.unshift(...itemsToMove);
   } else if (keyIndex > midpointIndex) {
-    const itemsToMove = this._scoreData.keySignature.nearbyKeySignatureIds.splice(0, keyIndex - midpointIndex);
-    this._scoreData.keySignature.nearbyKeySignatureIds.push(...itemsToMove);
+    const itemsToMove = nearbyKeySignatureIds.splice(0, keyIndex - midpointIndex);
+    nearbyKeySignatureIds.push(...itemsToMove);
   }
-  for (let nk = 0; nk < this._scoreData.keySignature.nearbyKeySignatureIds.length; nk++) {
-    const keySignatureInfo = this._keySignatures[tonality][this._scoreData.keySignature.nearbyKeySignatureIds[nk]];
-    keySignatureInfo.midiPitchRelative = keySignatureInfo.midiPitch - midiPitch;
-    if (nk > 7 && keySignatureInfo.midiPitchRelative < 0) {
-      keySignatureInfo.midiPitchRelative += 12;
-    } else if (nk < 7 && keySignatureInfo.midiPitchRelative > 0) {
-      keySignatureInfo.midiPitchRelative -= 12;
+  const nearbyKeySignatures = [];
+  for (let nk = 0; nk < nearbyKeySignatureIds.length; nk++) {
+    const keySignatureId = nearbyKeySignatureIds[nk];
+    const keySignatureInfo = keySignatures[keySignatureId];
+    let midiPitchOffset = keySignatureInfo.midiPitch - defaultKeySignatureInfo.midiPitch;
+    if (nk > 7 && midiPitchOffset < 0) {
+      midiPitchOffset += 12;
+    } else if (nk < 7 && midiPitchOffset > 0) {
+      midiPitchOffset -= 12;
     }
+    nearbyKeySignatures.push({
+      keySignatureId: keySignatureId,
+      midiPitchOffset: midiPitchOffset,
+      ...keySignatureInfo,
+    });
+  }
+  this._scoreData.keySignatureInfo = {
+    keySignatureId: defaultKeySignatureId,
+    nearbyKeySignatures: nearbyKeySignatures,
+    ...defaultKeySignatureInfo,
   }
   
   // Get expanded chord positions (expand verses, repeats, codas, etc. based on score map)
@@ -3966,46 +3971,49 @@ ChScore.prototype._defaultOptions = {
   customEvents: [],
 }
 
-ChScore.prototype.getKeySignatures = function () {
-  return this._keySignatures;
+ChScore.prototype._getKeySignatures = function (tonality = 'major') {
+  const keySignatures = {
+    major: {
+      'g-flat-major':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'gf', midiPitch: 54, tonality: 'major', name: 'G♭ major' },
+      'g-major':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'major', name: 'G major'  },
+      'a-flat-major':  { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'af', midiPitch: 56, tonality: 'major', name: 'A♭ major' },
+      'a-major':       { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'a',  midiPitch: 57, tonality: 'major', name: 'A major'  },
+      'b-flat-major':  { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'major', name: 'B♭ major' },
+      'b-major':       { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'major', name: 'B major'  },
+      'c-flat-major':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'cf', midiPitch: 59, tonality: 'major', name: 'C♭ major' },
+      'c-major':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'c',  midiPitch: 60, tonality: 'major', name: 'C major'  },
+      'c-sharp-major': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'major', name: 'C# major' },
+      'd-flat-major':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'df', midiPitch: 61, tonality: 'major', name: 'D♭ major' },
+      'd-major':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'major', name: 'D major'  },
+      'e-flat-major':  { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'major', name: 'E♭ major' },
+      'e-major':       { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'major', name: 'E major'  },
+      'f-major':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'major', name: 'F major'  },
+      'f-sharp-major': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'major', name: 'F# major' },
+    },
+    minor: {
+      'g-minor':       { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'minor', name: 'G minor'  },
+      'g-sharp-minor': { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'gs', midiPitch: 56, tonality: 'minor', name: 'G# minor' },
+      'g-flat-minor':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'gf', midiPitch: 56, tonality: 'minor', name: 'A♭ minor' },
+      'a-minor':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'a',  midiPitch: 57, tonality: 'minor', name: 'A minor'  },
+      'a-sharp-minor': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'as', midiPitch: 58, tonality: 'minor', name: 'A# minor' },
+      'b-flat-minor':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'minor', name: 'B♭ minor' },
+      'b-minor':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'minor', name: 'B minor'  },
+      'c-minor':       { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'c',  midiPitch: 60, tonality: 'minor', name: 'C minor'  },
+      'c-sharp-minor': { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'minor', name: 'C# minor' },
+      'd-minor':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'minor', name: 'D minor'  },
+      'd-sharp-minor': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'ds', midiPitch: 63, tonality: 'minor', name: 'D# minor' },
+      'e-flat-minor':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'minor', name: 'E♭ minor' },
+      'e-minor':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'minor', name: 'E minor'  },
+      'f-minor':       { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'minor', name: 'F minor'  },
+      'f-sharp-minor': { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'minor', name: 'F# minor' },
+    },
+  };
+  return keySignatures[tonality];
 }
 
-ChScore.prototype._keySignatures = {
-  major: {
-    'g-flat-major':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'gf', midiPitch: 54, tonality: 'major', name: 'G♭ major' },
-    'g-major':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'major', name: 'G major'  },
-    'a-flat-major':  { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'af', midiPitch: 56, tonality: 'major', name: 'A♭ major' },
-    'a-major':       { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'a',  midiPitch: 57, tonality: 'major', name: 'A major'  },
-    'b-flat-major':  { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'major', name: 'B♭ major' },
-    'b-major':       { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'major', name: 'B major'  },
-    'c-flat-major':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'cf', midiPitch: 59, tonality: 'major', name: 'C♭ major' },
-    'c-major':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'c',  midiPitch: 60, tonality: 'major', name: 'C major'  },
-    'c-sharp-major': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'major', name: 'C# major' },
-    'd-flat-major':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'df', midiPitch: 61, tonality: 'major', name: 'D♭ major' },
-    'd-major':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'major', name: 'D major'  },
-    'e-flat-major':  { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'major', name: 'E♭ major' },
-    'e-major':       { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'major', name: 'E major'  },
-    'f-major':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'major', name: 'F major'  },
-    'f-sharp-major': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'major', name: 'F# major' },
-  },
-  minor: {
-    'g-minor':       { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'minor', name: 'G minor'  },
-    'g-sharp-minor': { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'gs', midiPitch: 56, tonality: 'minor', name: 'G# minor' },
-    'g-flat-minor':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'gf', midiPitch: 56, tonality: 'minor', name: 'A♭ minor' },
-    'a-minor':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'a',  midiPitch: 57, tonality: 'minor', name: 'A minor'  },
-    'a-sharp-minor': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'as', midiPitch: 58, tonality: 'minor', name: 'A# minor' },
-    'b-flat-minor':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'minor', name: 'B♭ minor' },
-    'b-minor':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'minor', name: 'B minor'  },
-    'c-minor':       { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'c',  midiPitch: 60, tonality: 'minor', name: 'C minor'  },
-    'c-sharp-minor': { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'minor', name: 'C# minor' },
-    'd-minor':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'minor', name: 'D minor'  },
-    'd-sharp-minor': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'ds', midiPitch: 63, tonality: 'minor', name: 'D# minor' },
-    'e-flat-minor':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'minor', name: 'E♭ minor' },
-    'e-minor':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'minor', name: 'E minor'  },
-    'f-minor':       { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'minor', name: 'F minor'  },
-    'f-sharp-minor': { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'minor', name: 'F# minor' },
-  },
-};
+ChScore.prototype.getKeySignatureInfo = function () {
+  return this._scoreData.keySignatureInfo;
+}
 
 // Make Highlighter available to ES module (highlight-helper.mjs)
 window.ChScore = ChScore;

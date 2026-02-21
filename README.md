@@ -114,7 +114,7 @@ Or you can install it using [npm](https://www.npmjs.com/package/@samuelbradshaw/
 - **getOptions()** – Get the currently-set options.
 - **getScoreData()** – Get information about the loaded score. Some of the provided data can be helpful for loading controls (for users to adjust options).
 - **getScoreContainer()** – Get a reference to the element that holds the rendered score.
-- **getKeySignatures()** – Get information about key signatures.
+- **getKeySignatureInfo()** – Get key signature information for the loaded score.
 - **drawScore()** – Draw or redraw the score. In most cases, Chorister.js will handle drawing automatically, so you shouldn’t usually need to call this.
 - **removeScore()** – Remove the current score from the page and clear stored data.
 

@@ -317,15 +317,15 @@
         
         // Transpose picker
         transposePicker.innerHTML = '';
-        for (const keySignatureId of scoreData.keySignature.nearbyKeySignatureIds.toReversed()) {
-          const keyName = chScore.getKeySignatures()[scoreData.keySignature.tonality][keySignatureId].name;
-          if (keySignatureId === scoreData.keySignature.keySignatureId) {
+        const keySignatureInfo = chScore.getKeySignatureInfo();
+        for (const nearbyKeyInfo of keySignatureInfo.nearbyKeySignatures.toReversed()) {
+          if (nearbyKeyInfo.keySignatureId === keySignatureInfo.keySignatureId) {
             transposePicker.insertAdjacentHTML('beforeend', `
-              <option value="${keySignatureId}" selected>${keyName} (Default)</option>
+              <option value="${nearbyKeyInfo.keySignatureId}" selected>${nearbyKeyInfo.name} (Default)</option>
             `);
           } else {
             transposePicker.insertAdjacentHTML('beforeend', `
-              <option value="${keySignatureId}">${keyName}</option>
+              <option value="${nearbyKeyInfo.keySignatureId}">${nearbyKeyInfo.name}</option>
             `);
           }
         }
