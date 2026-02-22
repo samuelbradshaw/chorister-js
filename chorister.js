@@ -20,7 +20,7 @@ function ChScore(containerSelector) {
   }
   
   // Remove the previous score if the container already has one
-  if (this._container.score) this.removeScore();
+  if (this._container.score) this._container.score.removeScore();
   
   // Load CSS styles and event listeners
   this._loadStyles();
@@ -81,7 +81,7 @@ ChScore.prototype._loadEventListeners = function () {
   }, { signal: this._controller.signal })
   
   // Score tap
-  const respondToClick = () => {
+  const respondToClick = (event) => {
     if (!this._currentOptions.customEvents.includes('ch:tap')) return;
     const pointData = this._getPointData(event.clientX, event.clientY);
     this._container.dispatchEvent(new CustomEvent('ch:tap', { detail: structuredClone(pointData) }));
@@ -237,7 +237,7 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
     if (!this._currentOptions.showChordSetImages) verovioOptions.breaks = 'line';
     verovioOptions.mmOutput = true;
     verovioOptions.scale = 100;
-    verovioOptions.pageWidth = 172 * 10; // 172mm (A4-210mm paper size, minus 19mm margin). TODO: See how this looks in print
+    verovioOptions.pageWidth = 172 * 10; // 172mm (A4-210mm paper size, minus 19mm margin).
     verovioOptions.pageHeight = 100; // If the page height were tall, for example 10000px, the whole song could be rendered as a single Verovio "page" (SVG element), which works well for most use cases. However, using a short height like 100px forces each system to be an independent SVG element, which is desirable when printing to a fixed paper size, because it allows a system to wrap to the next page instead of getting cut off in the middle. A downside of each system being its own SVG element is that the space between systems isn't consistent by default; however, this can be fixed by adding padding between systems after the SVG is rendered.
   } else if (mediaType === 'screen') {
     verovioOptions.scale = parseInt(this._currentOptions.zoomPercent);
@@ -376,7 +376,7 @@ ChScore.prototype.removeScore = function () {
   this._container.removeAttribute('data-status');
   this._container.removeAttribute('data-width');
   this._container.score = undefined;
-  this._chScores = this._chScores.filter(chScore => chScore.scoreContainer !== this._container);
+  this._chScores = this._chScores.filter(chScore => chScore._container !== this._container);
 }
 
 
@@ -899,6 +899,10 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   }
   
   const vrvTimemap = this._vrvToolkit.renderToTimemap({ includeRests: true, includeMeasures: true, });
+  if (!vrvTimemap || vrvTimemap.length === 0) {
+    console.error('Error: Verovio returned an empty or invalid timemap. The score data may be malformed.');
+    return;
+  }
   this._scoreData.staffNumbers = Array.from(this._scoreData.meiParsed.querySelectorAll('staffDef')).map(sf => parseInt(sf.getAttribute('n')));
   this._scoreData.hasLyrics = this._scoreData.meiParsed.querySelector('verse') !== null;
   this._scoreData.numChordPositions = vrvTimemap.filter(entry => (entry.on ?? entry.restsOn ?? []).length > 0).length;
@@ -1424,9 +1428,9 @@ ChScore.prototype._updateMei = function () {
     // Clean up spanning elements
     const uniqueSlurs = new Set();
     for (const spanningElement of this._scoreData.meiParsed.querySelectorAll('[startid], [endid]')) {
-      const startId = spanningElement.getAttribute('startid').substring(1);
-      const endId = spanningElement.getAttribute('startid').substring(1);
-      if (deletedElementIds.includes(startId) || deletedElementIds.includes(endId)) {
+      const startId = spanningElement.getAttribute('startid')?.substring(1);
+      const endId = spanningElement.getAttribute('endid')?.substring(1);
+      if ((startId && deletedElementIds.includes(startId)) || (endId && deletedElementIds.includes(endId))) {
         spanningElement.remove();
         continue;
       } else if (spanningElement.tagName.toLowerCase() === 'slur') {
@@ -1689,7 +1693,7 @@ ChScore.prototype._updateSvg = function (svg) {
   const noteheadWidth = 230;
   // Remove CSS styles added by Verovio (:not(:last-child) is to make sure the <style> element with @font-face isn't removed)
   svgParsed.querySelector('style:not(:last-child)')?.remove();
-  // TODO: Below may not be needed if https://github.com/rism-digital/verovio/issues/4252 is fixed
+  // Related: https://github.com/rism-digital/verovio/issues/4252
   definitionScaleElement.setAttribute('color', 'currentColor');
   definitionScaleElement.setAttribute('fill', 'currentColor');
   definitionScaleElement.setAttribute('stroke', 'currentColor');
@@ -3807,9 +3811,9 @@ ChScore.prototype._binaryFind = function (arr, targetValue, { key = null, return
   // Sort the array (if needed)
   if (sort) {
     if (key === null) {
-      arr.sort((a, b) => a[key] - b[key]);
-    } else {
       arr.sort((a, b) => a - b);
+    } else {
+      arr.sort((a, b) => a[key] - b[key]);
     }
   }
   
@@ -3931,6 +3935,7 @@ ChScore.prototype._addStylesheet = function (stylesheets, stylesheetKey) {
 
 // Remove CSS stylesheets (only those from the current ChScore instance)
 ChScore.prototype._removeStylesheets = function () {
+  if (!this._stylesheets) return;
   for (const stylesheet of Object.values(this._stylesheets)) {
     if (this._supportsCssStylesheetApi) {
       const adoptedStylesheetIndex = document.adoptedStyleSheets.indexOf(stylesheet);
@@ -3956,8 +3961,8 @@ ChScore.prototype._getPointData = function (x, y) {
     lyricLineId: null,
   }
   let elements = [];
-  try { // Avoid an error if the window loses focuses
-    elements = document.elementsFromPoint(event.clientX, event.clientY) ?? [];
+  try { // Avoid an error if the window loses focus
+    elements = document.elementsFromPoint(x, y) ?? [];
   } finally {}
   for (const element of elements) {
     if (element === this._container) break;
