@@ -112,7 +112,7 @@ You can also install it using [npm](https://www.npmjs.com/package/@samuelbradsha
   async function loadScore() {
     // Pass in a CSS selector that selects the score container
     chScore = new ChScore('#score-container');
-    scoreData = await chScore.loadScore(scoreType, inputData, options);
+    scoreData = await chScore.load(scoreType, inputData, options);
   }
   loadScore();
   

@@ -4,6 +4,10 @@
   "description": "Digital-first interactive sheet music.",
   "type": "module",
   "main": "chorister.mjs",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/samuelbradshaw/chorister-js.git"
@@ -28,5 +32,11 @@
   "bugs": {
     "url": "https://github.com/samuelbradshaw/chorister-js/issues"
   },
-  "homepage": "https://github.com/samuelbradshaw/chorister-js#readme"
+  "homepage": "https://github.com/samuelbradshaw/chorister-js#readme",
+  "devDependencies": {
+    "@magenta/music": "^1.23.1",
+    "jsdom": "^28.1.0",
+    "verovio": "^6.0.1",
+    "vitest": "^4.0.18"
+  }
 }

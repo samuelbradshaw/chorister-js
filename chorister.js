@@ -3909,7 +3909,7 @@ ChScore.prototype._isThrottled = function (key, ms) {
 }
 
 // Add a CSS stylesheet to the document
-ChScore.prototype._addStylesheet = function (stylesheets, stylesheetKey) {
+ChScore.prototype._addStylesheet = function (stylesheetKey) {
   let stylesheet = this._stylesheets[stylesheetKey];
   if (!stylesheet) {
     if (this._supportsCssStylesheetApi) {
