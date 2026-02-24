@@ -2600,8 +2600,14 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
   
   if (meiParsed.querySelector('section[type="introduction"]') || introMeasureRanges.length === 0) return meiParsed;
   
-  // Main extraction logic
+  // Add repeat barlines
   const originalMeasures = Array.from(meiParsed.querySelectorAll('measure'));
+  const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed);
+  if (!this._scoreData.hasRepeatOrJump && verseNumbers.length > 1) {
+    originalMeasures[0].setAttribute('left', 'rptstart');
+    originalMeasures[originalMeasures.length - 1].setAttribute('right', 'rptend');
+  }
+  
   const introSection = meiParsed.createElement('section');
   introSection.setAttribute('type', 'introduction');
   introSection.setAttribute('ch-chord-position', introChordPositions.join(' '));
@@ -3067,7 +3073,7 @@ ChScore.prototype._normalizeSections = function () {
   this._scoreData.hasRepeatOrJump = !!this._scoreData.meiParsed.querySelector('repeatMark, coda, segno, ending, measure:is([left="rptstart"], [left="rptboth"], [right="rptend"], [right="rptboth"]), dir:is([type="coda"], [type="tocoda"], [type="segno"], [type="dalsegno"], [type="dacapo"], [type="fine"])')
   
   let hasPrebuiltSections = this._scoreData.sections.length > 0;
-  const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed)
+  const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed);
   const introBracketElements = this._scoreData.meiParsed.querySelectorAll('[ch-intro-bracket]');
   const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionMap(this._scoreData.meiParsed, verseNumbers.length, introBracketElements.length > 0, this._scoreData.hasRepeatOrJump);
   
@@ -3463,12 +3469,6 @@ ChScore.prototype._updateExpansionMap = function (meiParsed, numVerses, hasIntro
     } else {
       expansion.setAttribute('type', 'complex');
       hasComplexSections = true;
-    }
-    
-    // Add repeat barlines
-    if (!hasComplexSections && numVerses > 1) {
-      measures[0].setAttribute('left', 'rptstart');
-      measures[measures.length - 1].setAttribute('right', 'rptend');
     }
     
     // Check for pre-expanded introduction
