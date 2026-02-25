@@ -82,7 +82,7 @@ ChScore.prototype._loadEventListeners = function () {
   
   // Score tap
   const respondToClick = (event) => {
-    if (!this._currentOptions.customEvents.includes('ch:tap')) return;
+    if (!this._currentOptions?.customEvents?.includes('ch:tap')) return;
     const pointData = this._getPointData(event.clientX, event.clientY);
     this._container.dispatchEvent(new CustomEvent('ch:tap', { detail: structuredClone(pointData) }));
   }
@@ -91,7 +91,7 @@ ChScore.prototype._loadEventListeners = function () {
   // Score hover
   this._hoverState = {};
   const respondToMouseMove = (event, ignoreThrottle = false) => {
-    if (!this._currentOptions.customEvents.includes('ch:hover')) return;
+    if (!this._currentOptions?.customEvents?.includes('ch:hover')) return;
     if (!ignoreThrottle && this._isThrottled('mousemove', 100)) return;
     const pointData = this._getPointData(event.clientX, event.clientY);
     const pointDataValues = Object.entries(pointData).map(e => (e ?? '').toString()).join(';');
@@ -234,7 +234,6 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
   const verovioOptions = structuredClone(this._defaultVerovioOptions);
   
   if (mediaType === 'print') {
-    if (!this._currentOptions.showChordSetImages) verovioOptions.breaks = 'line';
     verovioOptions.mmOutput = true;
     verovioOptions.scale = 100;
     verovioOptions.pageWidth = 172 * 10; // 172mm (A4-210mm paper size, minus 19mm margin).

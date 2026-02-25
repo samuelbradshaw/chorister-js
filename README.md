@@ -534,7 +534,7 @@ Options can be passed in to Chorister.js when calling the `load()` method to loa
 - **showFingeringMarks** – Whether fingering marks should be visible. Only applies if the score has fingering marks. Boolean. Default: `false`.
 - **showMeasureNumbers** – Whether measure numbers should be visible. Boolean. Default: `false`.
 - **showMelodyOnly** – Whether non-melody notes should be hidden. Boolean. Default: `false`.
-- **hiddenSectionIds** – Section IDs to hide. Possible values: One or more section (intro, verse, chorus, etc.) IDs. Array. Default: `[]`.
+- **hideSectionIds** – Section IDs to hide. Possible values: One or more section (intro, verse, chorus, etc.) IDs. Array. Default: `[]`.
 - **drawBackgroundShapes** – Background shapes to draw. Possible values: See “Background and foreground shapes.” Array. Default: `[]`.
 - **drawForegroundShapes** – Foreground shapes to draw. Possible values: See “Background and foreground shapes.” Array. Default: `[]`.
 - **customEvents** – Custom events to send. Possible values: See “Custom events.” Array. Default: `[]`.

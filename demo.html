@@ -168,8 +168,9 @@
       <!-- Demo scores -->
       <h2>Demo Scores</h2>
       <ul>
-        <li><a href="?scoreId=how-great-the-wisdom-and-the-love">How Great the Wisdom and the Love</a> (SATB hymn with intro brackets)</li>
-        <li><a href="?scoreId=this-little-light-of-mine">This Little Light of Mine</a> (traditional, includes repeats and second ending)</li>
+        <li><a href="?scoreId=how-great-the-wisdom-and-the-love">How Great the Wisdom and the Love</a> (SATB hymn with intro brackets, verses below)</li>
+        <li><a href="?scoreId=it-is-well-with-my-soul">It Is Well with My Soul</a> (SATB hymn with two sets of intro brackets, chorus, secondary lyrics, descant on verse 4)</li>
+        <li><a href="?scoreId=this-little-light-of-mine">This Little Light of Mine</a> (traditional, with repeats, second ending, verses with different syllable counts)</li>
         <li><a href="?scoreId=custom-score">Custom Score</a> (upload your own)</li>
       </ul>
       <p>Rendered by <a target="_blank" href="https://www.verovio.org/">Verovio</a> with <a target="_blank" href="https://github.com/samuelbradshaw/chorister-js">Chorister.js</a>.</p>
@@ -457,6 +458,249 @@
             chordSets: [demoChordSet],
             fermatas: [
               { chordPosition: 28, durationFactor: 2.5 },
+            ],
+          },
+          'it-is-well-with-my-soul': {
+            title: 'It Is Well with My Soul',
+            credits: '<i>Text:</i> Horatio G. Spafford (1828–1888).<br><i>Music:</i> Philip Paul Bliss (1838–1876).<br>Adapted from <i>Gospel Hymns, No. 2</i> (1876). Descant by Samuel H. Bradshaw (1990–).',
+            scoreType: 'musicxml',
+            scoreId: 'it-is-well-with-my-soul',
+            scoreUrl: 'resources/it-is-well-with-my-soul.musicxml',
+            lyricsUrl: 'resources/it-is-well-with-my-soul.txt',
+            parts: [
+              {
+                'partId': 'descant',
+                'name': 'Descant',
+                'isVocal': true,
+                'placement': 'auto',
+                'chordPositionRefs': {
+                  '0': {
+                    'isMelody': false,
+                    'staffNumbers': [1],
+                    'lyricLineIds': ['1.1']
+                  }
+                }
+              },
+              {
+                'partId': 'soprano',
+                'name': 'Soprano',
+                'isVocal': true,
+                'placement': 'auto',
+                'chordPositionRefs': {
+                  '0': {
+                    'isMelody': true,
+                    'staffNumbers': [2],
+                    'lyricLineIds': ['2.1', '2.2', '2.3', '2.4']
+                  },
+                  '42': {
+                    'isMelody': true,
+                    'staffNumbers': [2],
+                    'lyricLineIds': ['2.1']
+                  }
+                }
+              },
+              {
+                'partId': 'alto',
+                'name': 'Alto',
+                'isVocal': true,
+                'placement': 'auto',
+                'chordPositionRefs': {
+                  '0': {
+                    'isMelody': false,
+                    'staffNumbers': [2],
+                    'lyricLineIds': ['2.1', '2.2', '2.3', '2.4']
+                  },
+                  '42': {
+                    'isMelody': false,
+                    'staffNumbers': [2],
+                    'lyricLineIds': ['2.1']
+                  }
+                }
+              },
+              {
+                'partId': 'tenor',
+                'name': 'Tenor',
+                'isVocal': true,
+                'placement': 'auto',
+                'chordPositionRefs': {
+                  '0': {
+                    'isMelody': false,
+                    'staffNumbers': [3],
+                    'lyricLineIds': ['2.1', '2.2', '2.3', '2.4']
+                  },
+                  '42': {
+                    'isMelody': false,
+                    'staffNumbers': [3],
+                    'lyricLineIds': ['2.1']
+                  }
+                }
+              },
+              {
+                'partId': 'bass',
+                'name': 'Bass',
+                'isVocal': true,
+                'placement': 'auto',
+                'chordPositionRefs': {
+                  '0': {
+                    'isMelody': false,
+                    'staffNumbers': [3],
+                    'lyricLineIds': ['2.1', '2.2', '2.3', '2.4']
+                  },
+                  '42': {
+                    'isMelody': false,
+                    'staffNumbers': [3],
+                    'lyricLineIds': ['2.1']
+                  }
+                }
+              }
+            ],
+            sections: [
+              {
+                'sectionId': 'introduction',
+                'type': 'introduction',
+                'name': 'Introduction',
+                'marker': null,
+                'placement': 'inline',
+                'pauseAfter': false,
+                'chordPositionRanges': [
+                  {
+                    'start': 0, 'end': 13,
+                    'staffNumbers': [2, 3],
+                    'lyricLineIds': []
+                  },
+                  {
+                    'start': 55, 'end': 64,
+                    'staffNumbers': [2, 3],
+                    'lyricLineIds': []
+                  }
+                ]
+              },
+              {
+                'sectionId': 'verse-1',
+                'type': 'verse',
+                'name': 'Verse 1',
+                'marker': '1',
+                'placement': 'inline',
+                'pauseAfter': false,
+                'chordPositionRanges': [
+                  {
+                    'start': 0, 'end': 42,
+                    'staffNumbers': [2, 3],
+                    'lyricLineIds': ['2.1']
+                  }
+                ]
+              },
+              {
+                'sectionId': 'chorus-1',
+                'type': 'chorus',
+                'name': 'Chorus',
+                'marker': null,
+                'placement': 'inline',
+                'pauseAfter': false,
+                'chordPositionRanges': [
+                  {
+                    'start': 42, 'end': 64,
+                    'staffNumbers': [2, 3],
+                    'lyricLineIds': ['2.1', '3.1']
+                  }
+                ]
+              },
+              {
+                'sectionId': 'verse-2',
+                'type': 'verse',
+                'name': 'Verse 2',
+                'marker': '2',
+                'placement': 'inline',
+                'pauseAfter': false,
+                'chordPositionRanges': [
+                  {
+                    'start': 0, 'end': 42,
+                    'staffNumbers': [2, 3],
+                    'lyricLineIds': ['2.2']
+                  }
+                ]
+              },
+              {
+                'sectionId': 'chorus-2',
+                'type': 'chorus',
+                'name': 'Chorus',
+                'marker': null,
+                'placement': 'inline',
+                'pauseAfter': false,
+                'chordPositionRanges': [
+                  {
+                    'start': 42, 'end': 64,
+                    'staffNumbers': [2, 3],
+                    'lyricLineIds': ['2.1',
+                      '3.1']
+                  }
+                ]
+              },
+              {
+                'sectionId': 'verse-3',
+                'type': 'verse',
+                'name': 'Verse 3',
+                'marker': '3',
+                'placement': 'inline',
+                'pauseAfter': false,
+                'chordPositionRanges': [
+                  {
+                    'start': 0, 'end': 42,
+                    'staffNumbers': [2, 3],
+                    'lyricLineIds': ['2.3']
+                  }
+                ]
+              },
+              {
+                'sectionId': 'chorus-3',
+                'type': 'chorus',
+                'name': 'Chorus',
+                'marker': null,
+                'placement': 'inline',
+                'pauseAfter': false,
+                'chordPositionRanges': [
+                  {
+                    'start': 42, 'end': 64,
+                    'staffNumbers': [2, 3],
+                    'lyricLineIds': ['2.1',
+                      '3.1']
+                  }
+                ]
+              },
+              {
+                'sectionId': 'verse-4',
+                'type': 'verse',
+                'name': 'Verse 4',
+                'marker': '4',
+                'placement': 'inline',
+                'pauseAfter': false,
+                'chordPositionRanges': [
+                  {
+                    'start': 0, 'end': 42,
+                    'staffNumbers': [2, 3],
+                    'lyricLineIds': ['2.4']
+                  }
+                ]
+              },
+              {
+                'sectionId': 'chorus-4',
+                'type': 'chorus',
+                'name': 'Chorus',
+                'marker': null,
+                'placement': 'inline',
+                'pauseAfter': false,
+                'chordPositionRanges': [
+                  {
+                    'start': 42, 'end': 64,
+                    'staffNumbers': [1, 2, 3],
+                    'lyricLineIds': ['1.1', '2.1', '3.1']
+                  }
+                ]
+              }
+            ],
+            chordSets: [demoChordSet],
+            fermatas: [
+              { chordPosition: 41, durationFactor: 3 },
             ],
           },
           'this-little-light-of-mine': {
