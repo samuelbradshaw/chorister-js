@@ -1450,16 +1450,22 @@ ChScore.prototype._updateMei = function () {
     }
   }
   
-  // Identify visible section IDs and chord positions
+  // Identify visible section IDs, chord positions, and staff numbers
   const sectionIdsToKeep = new Set();
   const chordPositionsToKeep = new Set();
   const expandedChordPositionsToKeep = new Set();
+  const staffNumbersToKeep = new Set();
   let ecpCounter = 0;
   if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0) {
     for (const sectionInfo of this._scoreData.sections) {
       const sectionChordPositions = [];
       const sectionExpandedChordPositions = [];
       for (const chordPositionRange of sectionInfo.chordPositionRanges) {
+        if (!this._currentOptions.hideSectionIds.includes(sectionInfo.sectionId)) {
+          for (const staffNumber of chordPositionRange.staffNumbers ?? []) {
+            staffNumbersToKeep.add(staffNumber);
+          }
+        }
         for (let cp = chordPositionRange.start; cp < chordPositionRange.end; cp++) {
           if (!this._currentOptions.hideSectionIds.includes(sectionInfo.sectionId)) {
             chordPositionsToKeep.add(cp);
@@ -1678,11 +1684,23 @@ ChScore.prototype._updateMei = function () {
     }
   }
   
-  // Remove unneeded section elements
-  if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0) {    
+  if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0) {
+    // Remove unneeded section elements
     for (const sectionElement of this._scoreData.meiParsed.querySelectorAll('section[ch-expanded-chord-position], ending[ch-expanded-chord-position]')) {
       const sectionElementExpandedChordPositions = new Set(sectionElement.getAttribute('ch-expanded-chord-position').trim().split(' ').map(ecp => parseInt(ecp)));
       if (sectionElementExpandedChordPositions.isDisjointFrom(expandedChordPositionsToKeep)) sectionElement.remove();
+    }
+    // Remove unneeded staff elements
+    if (staffNumbersToKeep.size > 0 && staffNumbersToKeep.size !== this._scoreData.staffNumbers.length) {
+      const sortedStaffNumbersToKeep = Array.from(staffNumbersToKeep).sort((a, b) => a - b);
+      const referringElementsSelector = '[staff]:not(' + sortedStaffNumbersToKeep.map(sn => `[staff="${sn}"]`).join(',') + ')';
+      for (const referringElement of this._scoreData.meiParsed.querySelectorAll(referringElementsSelector)) {
+        referringElement.setAttribute('staff', sortedStaffNumbersToKeep[0]);
+        // Prevent overlapping text if staff already has text above
+        referringElement.setAttribute('vgrp', 4000);
+      }
+      const stavesSelector = ':is(staff, staffDef):not(' + sortedStaffNumbersToKeep.map(sn => `[n="${sn}"]`).join(',') + ')';
+      for (const staff of this._scoreData.meiParsed.querySelectorAll(stavesSelector)) staff.remove();
     }
   }
   
@@ -2636,7 +2654,11 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
   if (scoreDef) scoreDef.parentNode.insertBefore(introSection, scoreDef.nextSibling);
   
   // Clean up unneeded elements in the introduction
-  introSection.querySelectorAll('verse, dir, tempo').forEach(v => v.remove());
+  let removeSelectors = ['verse', 'dir', 'tempo'];
+  const introSectionInfo = this._scoreData.sections[0].type === 'introduction' ? this._scoreData.sections[0] : null;
+  const introStaffNumbers = introSectionInfo?.chordPositionRanges?.[0]?.staffNumbers ?? [];
+  if (introStaffNumbers.length > 0) removeSelectors.push('staff:not(' + introStaffNumbers.map(sn => `[n="${sn}"]`).join(',') + ')');
+  introSection.querySelectorAll(removeSelectors.join(',')).forEach(v => v.remove());
   
   // Get all note and chord IDs that exist in the intro section
   const introNoteIds = new Set();
