@@ -3,17 +3,18 @@
  *
  * Covers: load(), setOptions(), getOptions(), getScoreData(), getScoreContainer(),
  * getMidi(), removeScore(), drawScore(), Custom Events, Options Effects,
- * Input Data Structures, Score Types, Edge Cases, _extractPianoIntroduction,
+ * Input Data Structures, Score Types, Edge Cases,
  * _extractLyricStanzas, _normalizeSections, _updateExpansionMap, _getPointData,
  * ch:hover/ch:tap events, lyrics-below, section types, parts, placements
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import './setup.js';
+import { initChScore, setupStandardHooks, resetScoreState } from './helpers.js';
 import {
-  initChScore, setupStandardHooks, resetScoreState,
-  sampleMusicXml, sampleMusicXml2, sampleLyrics, sampleLyrics2,
-} from './helpers.js';
+  sampleMusicXmlHGW as sampleMusicXml, sampleMusicXmlTLL as sampleMusicXml2,
+  sampleLyricsHGW as sampleLyrics,
+} from './song-data.js';
 
 let ChScore, origDrawScore;
 
@@ -200,9 +201,9 @@ describe('setOptions() and getOptions()', () => {
     expect(score.getOptions().showChordSet).toBe(false);
   });
 
-  it('should accept hiddenSectionIds as an array', () => {
-    score.setOptions({ hiddenSectionIds: ['verse-3', 'chorus-2'] });
-    expect(score.getOptions().hiddenSectionIds).toEqual(['verse-3', 'chorus-2']);
+  it('should accept hideSectionIds as an array', () => {
+    score.setOptions({ hideSectionIds: ['verse-3', 'chorus-2'] });
+    expect(score.getOptions().hideSectionIds).toEqual(['verse-3', 'chorus-2']);
   });
 
   it('should accept drawBackgroundShapes and drawForegroundShapes', () => {
@@ -248,7 +249,7 @@ describe('setOptions() and getOptions()', () => {
       showMeasureNumbers: true,
       showMelodyOnly: false,
       showChordSet: 'guitar',
-      hiddenSectionIds: ['verse-3'],
+      hideSectionIds: ['verse-3'],
       drawBackgroundShapes: ['ch-system-rect', 'ch-measure-rect'],
       drawForegroundShapes: ['ch-chord-position-line'],
       customEvents: ['ch:tap'],
@@ -700,167 +701,9 @@ describe('Edge Cases', () => {
 
 
 // ============================================================
-// _extractPianoIntroduction — shared load
-// ============================================================
-describe('_extractPianoIntroduction() — via expandScore intro', () => {
-  let score;
-
-  beforeAll(async () => {
-    document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
-    score = new ChScore('#score-container');
-    await score.load('musicxml', { scoreContent: sampleMusicXml });
-  });
-
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
-  afterEach(() => { resetScoreState(score); });
-
-  it('should create an introduction section element in MEI when expandScore is intro', () => {
-    score.setOptions({ expandScore: 'intro' });
-    const introSection = score._scoreData.meiParsed.querySelector('section[type="introduction"]');
-    expect(introSection).not.toBeNull();
-  });
-
-  it('should have measures inside the introduction section', () => {
-    score.setOptions({ expandScore: 'intro' });
-    const introSection = score._scoreData.meiParsed.querySelector('section[type="introduction"]');
-    const measures = introSection.querySelectorAll('measure');
-    expect(measures.length).toBe(4);
-  });
-
-  it('should have notes with -intro suffixed IDs in the introduction', () => {
-    score.setOptions({ expandScore: 'intro' });
-    const introSection = score._scoreData.meiParsed.querySelector('section[type="introduction"]');
-    const notes = introSection.querySelectorAll('note');
-    expect(notes.length).toBe(26);
-    let hasIntroSuffix = false;
-    for (const note of notes) {
-      if (note.getAttribute('xml:id')?.includes('-intro')) {
-        hasIntroSuffix = true;
-        break;
-      }
-    }
-    expect(hasIntroSuffix).toBe(true);
-  });
-
-  it('should place the introduction section after scoreDef', () => {
-    score.setOptions({ expandScore: 'intro' });
-    const scoreDef = score._scoreData.meiParsed.querySelector('scoreDef');
-    const nextSibling = scoreDef.nextElementSibling;
-    expect(nextSibling.getAttribute('type')).toBe('introduction');
-  });
-
-  it('should remove verse elements from the introduction section', () => {
-    score.setOptions({ expandScore: 'intro' });
-    const introSection = score._scoreData.meiParsed.querySelector('section[type="introduction"]');
-    const verses = introSection.querySelectorAll('verse');
-    expect(verses.length).toBe(0);
-  });
-
-  it('should remove dir elements from the introduction section', () => {
-    score.setOptions({ expandScore: 'intro' });
-    const introSection = score._scoreData.meiParsed.querySelector('section[type="introduction"]');
-    const dirs = introSection.querySelectorAll('dir');
-    expect(dirs.length).toBe(0);
-  });
-
-  it('should have ch-chord-position attribute on the introduction section element', () => {
-    score.setOptions({ expandScore: 'intro' });
-    const introSection = score._scoreData.meiParsed.querySelector('section[type="introduction"]');
-    expect(introSection.hasAttribute('ch-chord-position')).toBe(true);
-    const cpValues = introSection.getAttribute('ch-chord-position').trim().split(' ');
-    expect(cpValues.length).toBeGreaterThan(0);
-  });
-
-  it('should not create introduction for score without intro brackets', async () => {
-    const score2 = new ChScore('#score-container');
-    await score2.load('musicxml', { scoreContent: sampleMusicXml2 });
-    score2.setOptions({ expandScore: 'intro' });
-    const introSection = score2._scoreData.meiParsed.querySelector('section[type="introduction"]');
-    expect(introSection).toBeNull();
-  });
-
-  it('should restore MEI when expandScore is set back to false', () => {
-    const measuresBefore = score._scoreData.meiParsed.querySelectorAll('measure').length;
-    score.setOptions({ expandScore: 'intro' });
-    score.setOptions({ expandScore: false });
-    const measuresAfter = score._scoreData.meiParsed.querySelectorAll('measure').length;
-    expect(measuresAfter).toBe(measuresBefore);
-  });
-});
-
-
-// ============================================================
 // _extractLyricStanzas
 // ============================================================
 describe('_extractLyricStanzas() / alignSyllablesToLyrics()', () => {
-  it('should extract lyric stanzas when lyricsText is provided (How Great the Wisdom)', async () => {
-    const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
-    await score.load('musicxml', {
-      scoreContent: sampleMusicXml,
-      lyricsText: sampleLyrics,
-    });
-    ChScore.prototype.drawScore = origDrawScore;
-
-    const sections = score._scoreData.sections;
-    expect(sections.length).toBeGreaterThan(0);
-
-    const verseSections = sections.filter(s => s.type === 'verse');
-    expect(verseSections.length).toBeGreaterThan(0);
-  });
-
-  it('should have annotatedLyrics on sections when lyricsText is provided', async () => {
-    const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
-    await score.load('musicxml', {
-      scoreContent: sampleMusicXml,
-      lyricsText: sampleLyrics,
-    });
-    ChScore.prototype.drawScore = origDrawScore;
-
-    const verseSections = score._scoreData.sections.filter(s => s.type === 'verse');
-    expect(verseSections.length).toBeGreaterThan(0);
-    for (const section of verseSections) {
-      expect(section.annotatedLyrics).toBeDefined();
-      expect(section.annotatedLyrics.length).toBeGreaterThan(0);
-    }
-  });
-
-  it('should extract sections from This Little Light of Mine with lyrics', async () => {
-    const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
-    await score.load('musicxml', {
-      scoreContent: sampleMusicXml2,
-      lyricsText: sampleLyrics2,
-    });
-    ChScore.prototype.drawScore = origDrawScore;
-
-    const sections = score._scoreData.sections;
-    expect(sections.length).toBeGreaterThan(0);
-  });
-
-  it('should generate sections with chordPositionRanges from lyric alignment', async () => {
-    const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
-    await score.load('musicxml', {
-      scoreContent: sampleMusicXml,
-      lyricsText: sampleLyrics,
-    });
-    ChScore.prototype.drawScore = origDrawScore;
-
-    const verseSections = score._scoreData.sections.filter(s => s.type === 'verse');
-    const sectionsWithRanges = verseSections.filter(s => s.chordPositionRanges.length > 0);
-    expect(sectionsWithRanges.length).toBeGreaterThan(0);
-    for (const section of sectionsWithRanges) {
-      for (const range of section.chordPositionRanges) {
-        expect(range.start).toBeDefined();
-        expect(range.end).toBeDefined();
-        expect(range.end).toBeGreaterThanOrEqual(range.start);
-      }
-    }
-  });
-
   it('should handle missing lyricsText gracefully (returns empty stanzas)', async () => {
     const score = new ChScore('#score-container');
     ChScore.prototype.drawScore = function() {};
@@ -1194,7 +1037,7 @@ describe('drawScore() — lyrics-below', () => {
     expect(lyricsBelow).not.toBeNull();
   });
 
-  it('should hide sections in lyrics-below when hiddenSectionIds is set', async () => {
+  it('should hide sections in lyrics-below when hideSectionIds is set', async () => {
     const score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
@@ -1203,7 +1046,7 @@ describe('drawScore() — lyrics-below', () => {
 
     const belowSections = score._scoreData.sections.filter(s => s.placement === 'below');
     expect(belowSections.length).toBeGreaterThan(0);
-    score.setOptions({ hiddenSectionIds: [belowSections[0].sectionId] });
+    score.setOptions({ hideSectionIds: [belowSections[0].sectionId] });
     const lyricsBelow = document.getElementById('lyrics-below');
     const hiddenP = lyricsBelow.querySelector(`[data-ch-section-id="${belowSections[0].sectionId}"]`);
     expect(hiddenP).toBeNull();

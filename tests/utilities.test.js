@@ -8,7 +8,8 @@
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import './setup.js';
-import { initChScore, setupStandardHooks, resetScoreState, sampleMusicXml, sampleMusicXml2 } from './helpers.js';
+import { initChScore, setupStandardHooks, resetScoreState } from './helpers.js';
+import { sampleMusicXmlHGW as sampleMusicXml, sampleMusicXmlTLL as sampleMusicXml2 } from './song-data.js';
 
 let ChScore, origDrawScore;
 

@@ -2,37 +2,20 @@
  * Shared test helpers for Chorister.js tests.
  *
  * Provides:
- * - Sample MusicXML/lyrics data
  * - ChScore initialization (eval-based)
  * - Score state reset utilities
  * - MIDI test helpers
+ *
+ * Song-specific data (MusicXML, lyrics, expected counts, fermatas, parts,
+ * sections) lives in song-data.js.
  */
 
-import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { vi } from 'vitest';
 
-// ── Sample data ──────────────────────────────────────────────
+// ── Resource directory ────────────────────────────────────────
 
 export const resourcesDir = resolve(import.meta.dirname, '..', 'resources');
-
-export const sampleMusicXml = readFileSync(
-  resolve(resourcesDir, 'how-great-the-wisdom-and-the-love.musicxml'), 'utf-8'
-);
-export const sampleMusicXml2 = readFileSync(
-  resolve(resourcesDir, 'this-little-light-of-mine.musicxml'), 'utf-8'
-);
-export const sampleLyrics = readFileSync(
-  resolve(resourcesDir, 'how-great-the-wisdom-and-the-love.txt'), 'utf-8'
-);
-export const sampleLyrics2 = readFileSync(
-  resolve(resourcesDir, 'this-little-light-of-mine.txt'), 'utf-8'
-);
-
-// ── Expected chord position counts (independently verified) ──
-
-export const EXPECTED_HGW = { total: 37, audible: 37, expanded: 156, audibleExpanded: 156 };
-export const EXPECTED_TLL = { total: 61, audible: 58, expanded: 100, audibleExpanded: 94 };
 
 // ── ChScore initialization ──────────────────────────────────
 

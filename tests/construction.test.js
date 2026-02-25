@@ -4,7 +4,8 @@
 
 import { describe, it, expect, vi, beforeAll } from 'vitest';
 import './setup.js';
-import { initChScore, setupStandardHooks, sampleMusicXml } from './helpers.js';
+import { initChScore, setupStandardHooks } from './helpers.js';
+import { sampleMusicXmlHGW as sampleMusicXml } from './song-data.js';
 
 let ChScore;
 
@@ -72,7 +73,7 @@ describe('Default Options', () => {
     expect(defaults.showFingeringMarks).toBe(false);
     expect(defaults.showMeasureNumbers).toBe(false);
     expect(defaults.showMelodyOnly).toBe(false);
-    expect(defaults.hiddenSectionIds).toEqual([]);
+    expect(defaults.hideSectionIds).toEqual([]);
     expect(defaults.drawBackgroundShapes).toEqual([]);
     expect(defaults.drawForegroundShapes).toEqual([]);
     expect(defaults.customEvents).toEqual([]);

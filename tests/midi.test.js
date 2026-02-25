@@ -6,10 +6,12 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } 
 import './setup.js';
 import {
   initChScore, setupStandardHooks,
-  sampleMusicXml, sampleMusicXml2,
-  EXPECTED_HGW, EXPECTED_TLL,
   buildFixedMock, resetMidiFields, restoreDefaultMagentaMock,
 } from './helpers.js';
+import {
+  sampleMusicXmlHGW as sampleMusicXml, sampleMusicXmlTLL as sampleMusicXml2,
+  EXPECTED_HGW, EXPECTED_TLL,
+} from './song-data.js';
 
 let ChScore, origDrawScore;
 
@@ -18,35 +20,6 @@ beforeAll(async () => {
 });
 
 setupStandardHooks();
-
-// ============================================================
-// Chord position count validation
-// ============================================================
-describe('Chord position counts — independently verified', () => {
-  it('How Great the Wisdom: 37 total, 37 audible chord positions', async () => {
-    ChScore.prototype.drawScore = function() {};
-    const score = new ChScore('#score-container');
-    await score.load('musicxml', { scoreContent: sampleMusicXml, partsTemplate: 'SA+TB' });
-    ChScore.prototype.drawScore = origDrawScore;
-
-    expect(score._scoreData.chordPositions.length).toBe(EXPECTED_HGW.total);
-    expect(score._scoreData.audibleChordPositions.length).toBe(EXPECTED_HGW.audible);
-    expect(score._scoreData.expandedChordPositions.length).toBe(EXPECTED_HGW.expanded);
-    expect(score._scoreData.audibleExpandedChordPositions.length).toBe(EXPECTED_HGW.audibleExpanded);
-  });
-
-  it('This Little Light: 61 total, 58 audible chord positions', async () => {
-    ChScore.prototype.drawScore = function() {};
-    const score = new ChScore('#score-container');
-    await score.load('musicxml', { scoreContent: sampleMusicXml2 });
-    ChScore.prototype.drawScore = origDrawScore;
-
-    expect(score._scoreData.chordPositions.length).toBe(EXPECTED_TLL.total);
-    expect(score._scoreData.audibleChordPositions.length).toBe(EXPECTED_TLL.audible);
-    expect(score._scoreData.expandedChordPositions.length).toBe(EXPECTED_TLL.expanded);
-    expect(score._scoreData.audibleExpandedChordPositions.length).toBe(EXPECTED_TLL.audibleExpanded);
-  });
-});
 
 // ============================================================
 // _loadMidi() — MIDI alignment (shared load + custom mock)
@@ -543,9 +516,9 @@ describe('Fermata durationFactor — before/after comparison', () => {
 
 
 // ============================================================
-// hiddenSectionIds should not alter MIDI data
+// hideSectionIds should not alter MIDI data
 // ============================================================
-describe('hiddenSectionIds — MIDI data unchanged', () => {
+describe('hideSectionIds — MIDI data unchanged', () => {
   it('should not change midiNoteSequence when sections are hidden', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
     ChScore.prototype.drawScore = function() {};
@@ -557,7 +530,7 @@ describe('hiddenSectionIds — MIDI data unchanged', () => {
     const totalTimeBefore = score._scoreData.midiNoteSequence.totalTime;
 
     const allSectionIds = score._scoreData.sections.map(s => s.sectionId);
-    score.setOptions({ hiddenSectionIds: [allSectionIds[allSectionIds.length - 1]] });
+    score.setOptions({ hideSectionIds: [allSectionIds[allSectionIds.length - 1]] });
 
     expect(score._scoreData.midiNoteSequence.notes.length).toBe(noteCountBefore);
     expect(score._scoreData.midiNoteSequence.totalTime).toBe(totalTimeBefore);
@@ -574,7 +547,7 @@ describe('hiddenSectionIds — MIDI data unchanged', () => {
     const cp0DurationBefore = score._scoreData.chordPositions[0].midiDuration;
 
     const allSectionIds = score._scoreData.sections.map(s => s.sectionId);
-    score.setOptions({ hiddenSectionIds: [allSectionIds[0]] });
+    score.setOptions({ hideSectionIds: [allSectionIds[0]] });
 
     expect(score._scoreData.chordPositions[0].midiStartTime).toBe(cp0TimeBefore);
     expect(score._scoreData.chordPositions[0].midiDuration).toBe(cp0DurationBefore);

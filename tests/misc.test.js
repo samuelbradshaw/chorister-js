@@ -5,10 +5,8 @@
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import './setup.js';
-import {
-  initChScore, setupStandardHooks,
-  sampleMusicXml,
-} from './helpers.js';
+import { initChScore, setupStandardHooks } from './helpers.js';
+import { sampleMusicXmlHGW as sampleMusicXml } from './song-data.js';
 
 let ChScore, origDrawScore;
 
