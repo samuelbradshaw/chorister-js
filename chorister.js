@@ -718,6 +718,11 @@ ChScore.prototype._loadMidi = function () {
 ChScore.prototype._parseAndAnnotateMei = function () {
   this._scoreData.meiParsed = (new DOMParser()).parseFromString(this._scoreData.meiStringOriginal, 'text/xml');
   
+  // Enable collapsing empty staves. Example: "True to the Faith" (1985 Hymns).
+  for (const scoreDef of this._scoreData.meiParsed.querySelectorAll('scoreDef')) {
+    scoreDef.setAttribute('optimize', 'true');
+  }
+  
   // Replace page breaks with system breaks
   // When printing, Verovio page height options are set so that each system is drawn as a separate SVG element. This allows the sheet music to flow between pages more cleanly. However, when Verovio is set to respect encoded page and system breaks, page height options are ignored. Replacing page breaks with system breaks allows the page height options for printing to work as expected.
   const pageBreaks = this._scoreData.meiParsed.querySelectorAll('pb');
@@ -2725,31 +2730,34 @@ ChScore.prototype._defaultInputData = {
 
 // Default Verovio options
 // See https://book.verovio.org/toolkit-reference/toolkit-options.html
+// Some of these options are adjusted when printing, or when displaying chord set images
 ChScore.prototype._defaultVerovioOptions = {
-  expandNever: true,
-  lyricHeightFactor: 1.4,
-  header: 'none', footer: 'none',
-  lyricSize: 4.5,
-  lyricWordSpace: 2.0,
-  lyricVerseCollapse: true,
-  lyricNoStartHyphen: true,
-  lyricTopMinMargin: 8.0,
-  mmOutput: false,
-  transpose: '',
-  pageMarginTop: 0, pageMarginBottom: 0,
+  header: 'none', footer: 'none', // Hide header and footer
+  pageMarginTop: 0, pageMarginBottom: 0, // Minimal top and bottom margins
   pageMarginLeft: 4, pageMarginRight: 4, // Slight margin to prevent elements at the edge of the score from getting clipped
-  adjustPageHeight: true,
-  pageHeight: 10000,
-  scaleToPageSize: false,
-  breaks: 'smart',
-  breaksSmartSb: 0.8,
-  minLastJustification: 0.4,
-  breaksNoWidow: true,
-  spacingStaff: 12,
-  spacingSystem: 4,
-  spacingLinear: 0.25,
-  spacingNonLinear: 0.6,
-  condense: 'auto',
+  pageHeight: 10000, // Large height to create one continuous page with all systems
+  adjustPageHeight: true, // Shrink the page height to avoid extra whitespace at the bottom
+  scaleToPageSize: false, // Don't expand music to fill the page
+  spacingStaff: 16, // Vertical spacing
+  spacingSystem: 2, // Vertical spacing
+  spacingLinear: 0.25, // Horizontal spacing
+  spacingNonLinear: 0.6, // Horizontal spacing
+  lyricHeightFactor: 1.4, // Lyric line spacing
+  lyricSize: 4.5, // Lyric size relative to size of notes
+  lyricWordSpace: 2.0, // Space between lyric syllables (slightly bigger than default ensures that syllables remain spaced well when wider fonts are set with CSS)
+  lyricVerseCollapse: true, // Prevents extra whitespace if there are empty lyric syllables
+  lyricNoStartHyphen: true, // Don't draw extra hyphen on the left when a word wraps to the next system
+  lyricTopMinMargin: 8.0, // Prevent lyrics from getting too close to notation
+  breaks: 'smart', // Prefer breaking at encoded system breaks, but only if they're nearby
+  breaksSmartSb: 0.8, // How close nearby system break needs to be for it to be used
+  minLastJustification: 0.4, // Justification of last system
+  breaksNoWidow: true, // Prevent single measure on last page
+  condense: 'auto', // Hide empty staves. Example: "True to the Faith" (1985 Hymns). Requires setting scoreDef@optimize to 'true' in the MEI.
+  condenseFirstPage: true, // Allow empty staves in the first system to be hidden
+  systemDivider: 'none', // When a score is condensed, Verovio draws dividers between systems by default. This turns them off.
+  transpose: '', // Don't transpose by default
+  expandNever: true, // Prevent Verovio-generated MIDI from expanding
+  mmOutput: false, // Use pixel units, not millimeters
   svgAdditionalAttribute: [
     // Standard MEI attributes
     'staff@n', 'tie@startid', 'slur@startid',
@@ -2758,7 +2766,7 @@ ChScore.prototype._defaultVerovioOptions = {
     'dir@ch-chord-position', 'harm@ch-chord-position', 'fermata@ch-chord-position',
     'verse@ch-lyric-line-id',
     'dir@ch-intro-bracket', 'rend@ch-superscript', 'syl@end-underscore',
-    // Chorister.js optional attributes
+    // Chorister.js advanced attributes (based on parts and sections data)
     'chord@ch-expanded-chord-position', 'note@ch-expanded-chord-position', 'rest@ch-expanded-chord-position',
     'dir@ch-expanded-chord-position', 'harm@ch-expanded-chord-position', 'fermata@ch-expanded-chord-position',
     'note@ch-part-id', 'note@ch-melody',
