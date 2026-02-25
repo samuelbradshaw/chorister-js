@@ -398,8 +398,8 @@
           `);
           const sectionToggle = sectionTogglesDiv.querySelector(`[value="${sectionInfo.sectionId}"]`);
           sectionToggle.addEventListener('change', (event) => {
-            const hiddenSectionIds = Array.from(sectionTogglesDiv.querySelectorAll('input:not(:checked)')).map(toggle => toggle.value);
-            chScore.setOptions({ hiddenSectionIds: hiddenSectionIds });
+            const hideSectionIds = Array.from(sectionTogglesDiv.querySelectorAll('input:not(:checked)')).map(toggle => toggle.value);
+            chScore.setOptions({ hideSectionIds: hideSectionIds });
           });
           sectionToggle.parentElement.addEventListener('mouseenter', (event) => {
             document.body.dataset.sectionId = sectionInfo.sectionId;

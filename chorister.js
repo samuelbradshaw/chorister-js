@@ -289,7 +289,7 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
   
   // Reload score, if it was loaded previously
   if (this._vrvToolkit.getPageCount() > 0) {
-    if (updatedOptionKeys.some(key => ['showMelodyOnly', 'showChordSet', 'showChordSetImages', 'showFingeringMarks', 'showMeasureNumbers', 'hiddenSectionIds', 'expandScore'].includes(key))) {
+    if (updatedOptionKeys.some(key => ['showMelodyOnly', 'showChordSet', 'showChordSetImages', 'showFingeringMarks', 'showMeasureNumbers', 'hideSectionIds', 'expandScore'].includes(key))) {
       this._updateMei();
     }
     
@@ -349,7 +349,7 @@ ChScore.prototype.drawScore = function () {
   const lyricsBelowContainer = document.createElement('div');
   lyricsBelowContainer.id = 'lyrics-below';
   for (const section of this._scoreData.sections) {
-    if ((this._currentOptions.hiddenSectionIds ?? []).includes(section.sectionId) || section.placement !== 'below') {
+    if ((this._currentOptions.hideSectionIds ?? []).includes(section.sectionId) || section.placement !== 'below') {
       continue;
     }
     const lyricContainer = document.createElement('p');
@@ -1455,20 +1455,20 @@ ChScore.prototype._updateMei = function () {
   const chordPositionsToKeep = new Set();
   const expandedChordPositionsToKeep = new Set();
   let ecpCounter = 0;
-  if (this._currentOptions.hiddenSectionIds && this._currentOptions.hiddenSectionIds.length > 0) {
+  if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0) {
     for (const sectionInfo of this._scoreData.sections) {
       const sectionChordPositions = [];
       const sectionExpandedChordPositions = [];
       for (const chordPositionRange of sectionInfo.chordPositionRanges) {
         for (let cp = chordPositionRange.start; cp < chordPositionRange.end; cp++) {
-          if (!this._currentOptions.hiddenSectionIds.includes(sectionInfo.sectionId)) {
+          if (!this._currentOptions.hideSectionIds.includes(sectionInfo.sectionId)) {
             chordPositionsToKeep.add(cp);
             expandedChordPositionsToKeep.add(ecpCounter);
           }
           ecpCounter += 1;
         }
       }
-      if (!this._currentOptions.hiddenSectionIds.includes(sectionInfo.sectionId)) {
+      if (!this._currentOptions.hideSectionIds.includes(sectionInfo.sectionId)) {
         sectionIdsToKeep.add(sectionInfo.sectionId);
       }
     }
@@ -1656,7 +1656,7 @@ ChScore.prototype._updateMei = function () {
   }
   
   // Set section lyrics visibility (non-expanded score)
-  if (this._currentOptions.hiddenSectionIds && this._currentOptions.hiddenSectionIds.length > 0 && this._currentOptions.expandScore !== 'full-score') {
+  if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0 && this._currentOptions.expandScore !== 'full-score') {
     const oldToNewLineNumber = {}
     for (const element of this._scoreData.meiParsed.querySelectorAll('label[ch-section-id], verse[ch-section-id]')) {
       const sectionIds = element.getAttribute('ch-section-id').split(' ');
@@ -1679,7 +1679,7 @@ ChScore.prototype._updateMei = function () {
   }
   
   // Remove unneeded section elements
-  if (this._currentOptions.hiddenSectionIds && this._currentOptions.hiddenSectionIds.length > 0) {    
+  if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0) {    
     for (const sectionElement of this._scoreData.meiParsed.querySelectorAll('section[ch-expanded-chord-position], ending[ch-expanded-chord-position]')) {
       const sectionElementExpandedChordPositions = new Set(sectionElement.getAttribute('ch-expanded-chord-position').trim().split(' ').map(ecp => parseInt(ecp)));
       if (sectionElementExpandedChordPositions.isDisjointFrom(expandedChordPositionsToKeep)) sectionElement.remove();
@@ -1770,7 +1770,7 @@ ChScore.prototype._updateSvg = function (svg) {
     } else {
       introBracket.setAttribute('dx', '100');
     }
-    if (this._currentOptions.hiddenSectionIds && this._currentOptions.hiddenSectionIds.includes('introduction')) {
+    if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.includes('introduction')) {
       introBracket.setAttribute('opacity', '0');
     }
   }
@@ -2785,7 +2785,7 @@ ChScore.prototype._defaultOptions = {
   showFingeringMarks: false,
   showMeasureNumbers: false,
   showMelodyOnly: false,
-  hiddenSectionIds: [],
+  hideSectionIds: [],
   drawBackgroundShapes: [],
   drawForegroundShapes: [],
   customEvents: [],
