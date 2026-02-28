@@ -3146,7 +3146,7 @@ ChScore.prototype._normalizeSections = function () {
   
   // Get annotated lyric stanzas
   this._markSingleLineChordPositions(lyricChordPositionRanges);
-  const lyricStanzas = this._extractLyricStanzas(lyricChordPositionRanges, firstLyricExpandedChordPosition);  
+  const lyricStanzas = this._extractLyricStanzas(lyricChordPositionRanges, firstLyricExpandedChordPosition);
   
   // Generate sections based on lyric stanzas, falling back to default sections
   if (otherSections.length === 0) {
@@ -3601,7 +3601,7 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
           lyricGap[0] = '0';
         }
         if (parseInt(lyricGap.at(-1)) + maxAllowedGap > this._scoreData.numChordPositions - 1) {
-          lyricGap[lyricGaps.length - 1] = String(this._scoreData.numChordPositions - 1);
+          lyricGap[lyricGap.length - 1] = String(this._scoreData.numChordPositions - 1);
         }
         // Save chorus chord position ranges
         const start = parseInt(lyricGap[0]);
