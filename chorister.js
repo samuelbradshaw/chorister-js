@@ -3244,6 +3244,7 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
     
     // Test cases: 
     // "Gethsemane" (Hymns—For Home and Church), "This Is the Christ" (Hymns—For Home and Church), "Beautiful Savior" (1989 CSB) – complex sections
+    // Japanese "When the Savior Comes Again" (Hymns—For Home and Church) – ruby text
     // "Have I Done Any Good?" (1985 Hymns) – simple verses and chorus, but verses have chord positions with only one lyric syllable. When there's only one lyric syllable, it should be extracted only in the correct verse.
     for (let cp = start; cp < end; cp++) {
       const chordPositionIsSingleLine = this._scoreData.chordPositions[cp].isSingleLine;
@@ -3276,17 +3277,12 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
       ecpCounter += 1;
     }
   }
-  return alignSyllablesToLyrics(this._scoreData.lyricsText, extractedLyricSyllables, this._scoreData.staffNumbers);
-  
-  // Help from AI: https://claude.ai/chat/71346065-9bc9-4cb9-b8dd-f8718ce5dc10
-  // JavaScript version: https://claude.ai/chat/ab222e85-8da6-494d-97dc-f969cb8097f7
-  function alignSyllablesToLyrics(expandedLyrics, syllables, staffNumbers) {
-    // Normalize text: lowercase, remove accents/punctuation/digits/extra whitespace
-    function normalize(text) {
-      if (text == null) return null;
-      return text.normalize('NFD').replace(/[\u0300-\u036f\p{P}\p{N}]/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
-    }
-    
+  return this._alignSyllablesToLyrics(this._scoreData.lyricsText, extractedLyricSyllables, this._scoreData.staffNumbers);
+}
+
+// Help from AI: https://claude.ai/chat/71346065-9bc9-4cb9-b8dd-f8718ce5dc10
+// JavaScript version: https://claude.ai/chat/ab222e85-8da6-494d-97dc-f969cb8097f7
+ChScore.prototype._alignSyllablesToLyrics = function alignSyllablesToLyrics(expandedLyrics, syllables, staffNumbers) {
     // Longest common substring similarity (like Python's SequenceMatcher)
     function similarity(str1, str2) {
       const matrix = Array(str1.length + 1).fill(null)
@@ -3300,8 +3296,7 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
           }
         }
       }
-      const maxLength = Math.max(str1.length, str2.length);
-      return maxLength > 0 ? (maxLen * 2) / (str1.length + str2.length) : 0;
+      return str1.length + str2.length > 0 ? (maxLen * 2) / (str1.length + str2.length) : 0;
     }
     
     const stanzas = [];
@@ -3310,13 +3305,12 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
     }
     
     // Extract stanza headers
-    expandedLyrics = expandedLyrics.replace(/\[.*?\]\n/g, match => {
-      match = match.trim().replace('[', '').replace(']', '');
-      const splitMatch = match.split(' ');
+    expandedLyrics = expandedLyrics.replace(/\[([^\]]*)\]\n/g, (_, name) => {
+      const parts = name.split(' ');
       stanzas.push({
-        name: match,
-        type: splitMatch[0].toLowerCase(),
-        marker: splitMatch.length > 1 ? splitMatch[1] : null,
+        name,
+        type: parts[0].toLowerCase(),
+        marker: parts[1] ?? null,
         annotatedLyrics: '',
         chordPositionRanges: [],
         expandedChordPositions: [],
@@ -3324,21 +3318,57 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
       return '';
     });
     
-    // Build normalized version with position mapping
+    // Build normalized version with position mapping (HTML-aware)
+    // For <ruby> blocks, use the <rt> reading text for matching and map to the <ruby> tag position.
+    // For other HTML tags (<em>, <strong>, etc.), skip them entirely.
+    // For plain text, apply the existing normalization (strip accents, punctuation, digits; collapse whitespace).
     const normChars = [];
     const posMap = [];
-    for (let i = 0; i < expandedLyrics.length; i++) {
-      const char = expandedLyrics[i];
-      if (!/[\u0300-\u036f\p{P}\p{N}]/gu.test(char)) {
-        const norm = char.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        if (norm && !/\s/.test(norm)) {
-          normChars.push(norm.toLowerCase());
-          posMap.push(i);
-        } else if (/\s/.test(norm) && normChars[normChars.length - 1] !== ' ') {
-          normChars.push(' ');
-          posMap.push(i);
+    const rubyRegex = /<ruby[^>]*>[\s\S]*?<\/ruby>/gi;
+    const stripRe = /[\u0300-\u036f\p{P}\p{N}]/u;
+    let lastPlainIndex = 0;
+    let rubyMatch;
+    
+    // Normalize a single character into normChars/posMap.
+    // When collapseWhitespace is true, runs of whitespace become a single space.
+    function addNormChar(char, position, collapseWhitespace) {
+      const norm = char.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      if (norm && !/\s/.test(norm)) {
+        for (const ch of norm) {
+          normChars.push(ch);
+          posMap.push(position);
         }
+      } else if (collapseWhitespace && /\s/.test(norm) && normChars.at(-1) !== ' ') {
+        normChars.push(' ');
+        posMap.push(position);
       }
+    }
+    
+    function addPlainText(text, startOriginalIndex) {
+      for (let j = 0; j < text.length; j++) {
+        const char = text[j];
+        // Skip HTML tags (e.g. <em>, </strong>, <span class="...">)
+        if (char === '<') {
+          const closeIdx = text.indexOf('>', j);
+          if (closeIdx !== -1) { j = closeIdx; continue; }
+        }
+        // Skip punctuation, digits, and combining marks
+        if (stripRe.test(char)) continue;
+        addNormChar(char, startOriginalIndex + j, true);
+      }
+    }
+    
+    while ((rubyMatch = rubyRegex.exec(expandedLyrics)) !== null) {
+      if (rubyMatch.index > lastPlainIndex) {
+        addPlainText(expandedLyrics.substring(lastPlainIndex, rubyMatch.index), lastPlainIndex);
+      }
+      const rtMatch = rubyMatch[0].match(/<rt>(.*?)<\/rt>/i);
+      const reading = rtMatch ? rtMatch[1] : '';
+      for (const char of reading) addNormChar(char, rubyMatch.index, false);
+      lastPlainIndex = rubyRegex.lastIndex;
+    }
+    if (lastPlainIndex < expandedLyrics.length) {
+      addPlainText(expandedLyrics.substring(lastPlainIndex), lastPlainIndex);
     }
     
     const normText = normChars.join('');
@@ -3348,7 +3378,7 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
     
     // Match each syllable
     for (const syllable of syllables) {
-      const normSylText = normalize(syllable.text);
+      const normSylText = syllable.text?.normalize('NFD').replace(/[\u0300-\u036f\p{P}\p{N}]/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
       if (!normSylText) continue;
       
       const windowEnd = Math.min(pos + 20, normText.length);
@@ -3412,21 +3442,23 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
       }
     }
     
-    function consolidateChordPositionRanges(chordPositionRanges) {
-      const newChordPositionRanges = [];
-      for (const chordPositionRange of chordPositionRanges) {
-        if (newChordPositionRanges.length > 0 && newChordPositionRanges.at(-1).end === chordPositionRange.start && newChordPositionRanges.at(-1).staffNumbers.toString() === chordPositionRange.staffNumbers.toString() && newChordPositionRanges.at(-1).lyricLineIds.toString() === chordPositionRange.lyricLineIds.toString()) {
-          newChordPositionRanges.at(-1).end = chordPositionRange.end;
-          for (const lyricLineId of chordPositionRange.lyricLineIds) {
-            if (!newChordPositionRanges.at(-1).lyricLineIds.includes(lyricLineId)) {
-              newChordPositionRanges.at(-1).lyricLineIds.push(lyricLineId);
-            }
+    function consolidateChordPositionRanges(ranges) {
+      const result = [];
+      for (const range of ranges) {
+        const last = result.at(-1);
+        if (last
+            && last.end === range.start
+            && last.staffNumbers.toString() === range.staffNumbers.toString()
+            && last.lyricLineIds.toString() === range.lyricLineIds.toString()) {
+          last.end = range.end;
+          for (const id of range.lyricLineIds) {
+            if (!last.lyricLineIds.includes(id)) last.lyricLineIds.push(id);
           }
         } else {
-          newChordPositionRanges.push(chordPositionRange);
+          result.push(range);
         }
       }
-      return newChordPositionRanges;
+      return result;
     }
     
     for (const stanza of stanzas) {
@@ -3446,9 +3478,7 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
     }
     
     return stanzas;
-  }
-
-}
+  };
 
 ChScore.prototype._updateExpansionMap = function (meiParsed, numVerses, hasIntroBrackets, hasRepeatOrJump) {  
   // Check for complex sections and update expansion map
