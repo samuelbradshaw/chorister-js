@@ -1,9 +1,10 @@
 /**
  * Tests: Utility functions and template parsing.
  *
- * Covers: _getKeySignatures, _buildPartsFromTemplate, _binaryFind, _bisectLeft,
- * _qstampToTstamp, _getMidiDuration, _debounce, _isThrottled, _getQpmAtTime,
- * _normalizeChordSets, _markSingleLineChordPositions, _getInlineVerseNumbers
+ * Covers: _getKeySignatures, _normalizeParts, _buildPartsFromTemplate, _binaryFind,
+ * _bisectLeft, _qstampToTstamp, _getMidiDuration, _debounce, _isThrottled,
+ * _getQpmAtTime, _normalizeChordSets, _markSingleLineChordPositions,
+ * _getInlineVerseNumbers
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
@@ -105,6 +106,159 @@ describe('_getKeySignatures()', () => {
     const keys = score._getKeySignatures('minor');
     expect(keys['a-minor'].mxlFifths).toBe('0');
     expect(keys['a-minor'].midiPitch).toBe(57);
+  });
+});
+
+// ============================================================
+// Normalize Parts (_normalizeParts)
+// ============================================================
+describe('_normalizeParts()', () => {
+  let score;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+    score._scoreData = {
+      parts: [],
+      partsById: null,
+      partsTemplate: null,
+      staffNumbers: [1, 2],
+      numChordPositions: 64,
+      hasLyrics: true,
+    };
+  });
+
+  // ── Default fallback (no parts, no template) ──
+
+  it('should create default melody + accompaniment when no parts or template are provided', () => {
+    score._normalizeParts();
+    const partIds = score._scoreData.parts.map(p => p.partId);
+    expect(partIds).toEqual(['melody', 'accompaniment']);
+  });
+
+  it('should mark the default melody part as isMelody=true', () => {
+    score._normalizeParts();
+    const melody = score._scoreData.parts.find(p => p.partId === 'melody');
+    expect(melody.chordPositionRefs[0].isMelody).toBe(true);
+  });
+
+  it('should mark the default accompaniment part as isMelody=false', () => {
+    score._normalizeParts();
+    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
+    expect(accompaniment.chordPositionRefs[0].isMelody).toBe(false);
+  });
+
+  it('should assign melody to staff 1 only', () => {
+    score._normalizeParts();
+    const melody = score._scoreData.parts.find(p => p.partId === 'melody');
+    expect(melody.chordPositionRefs[0].staffNumbers).toEqual([1]);
+  });
+
+  it('should assign accompaniment to all staff numbers', () => {
+    score._normalizeParts();
+    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
+    expect(accompaniment.chordPositionRefs[0].staffNumbers).toEqual([1, 2]);
+  });
+
+  it('should assign accompaniment to 3 staves when staffNumbers has 3 entries', () => {
+    score._scoreData.staffNumbers = [1, 2, 3];
+    score._normalizeParts();
+    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
+    expect(accompaniment.chordPositionRefs[0].staffNumbers).toEqual([1, 2, 3]);
+  });
+
+  it('should set melody isVocal=true and accompaniment isVocal=false', () => {
+    score._normalizeParts();
+    const melody = score._scoreData.parts.find(p => p.partId === 'melody');
+    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
+    expect(melody.isVocal).toBe(true);
+    expect(accompaniment.isVocal).toBe(false);
+  });
+
+  it('should set correct placement values on default parts', () => {
+    score._normalizeParts();
+    const melody = score._scoreData.parts.find(p => p.partId === 'melody');
+    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
+    expect(melody.placement).toBe('auto');
+    expect(accompaniment.placement).toBe('full');
+  });
+
+  it('should set correct name values on default parts', () => {
+    score._normalizeParts();
+    const melody = score._scoreData.parts.find(p => p.partId === 'melody');
+    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
+    expect(melody.name).toBe('Melody');
+    expect(accompaniment.name).toBe('Accompaniment');
+  });
+
+  // ── partsTemplate branch ──
+
+  it('should delegate to _buildPartsFromTemplate when partsTemplate is set', () => {
+    score._scoreData.partsTemplate = 'SATB';
+    score._normalizeParts();
+    const partIds = score._scoreData.parts.map(p => p.partId);
+    expect(partIds).toContain('soprano');
+    expect(partIds).toContain('alto');
+    expect(partIds).toContain('tenor');
+    expect(partIds).toContain('bass');
+  });
+
+  it('should pass staffNumbers and numChordPositions to _buildPartsFromTemplate', () => {
+    score._scoreData.partsTemplate = 'Unison';
+    score._scoreData.staffNumbers = [1, 2, 3];
+    score._normalizeParts();
+    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
+    expect(accompaniment).toBeDefined();
+  });
+
+  // ── Explicit parts branch ──
+
+  it('should keep existing parts when parts array is non-empty', () => {
+    const customParts = [
+      { partId: 'custom-voice', name: 'Custom Voice', isVocal: true, chordPositionRefs: { 0: { isMelody: true, staffNumbers: [1], lyricLineIds: null } } },
+    ];
+    score._scoreData.parts = customParts;
+    score._normalizeParts();
+    expect(score._scoreData.parts).toEqual(customParts);
+  });
+
+  it('should prefer explicit parts over partsTemplate', () => {
+    const customParts = [
+      { partId: 'custom', name: 'Custom', isVocal: true, chordPositionRefs: {} },
+    ];
+    score._scoreData.parts = customParts;
+    score._scoreData.partsTemplate = 'SATB';
+    score._normalizeParts();
+    expect(score._scoreData.parts.length).toBe(1);
+    expect(score._scoreData.parts[0].partId).toBe('custom');
+  });
+
+  // ── partsById ──
+
+  it('should populate partsById from the resulting parts', () => {
+    score._normalizeParts();
+    expect(score._scoreData.partsById).toBeDefined();
+    expect(score._scoreData.partsById['melody']).toBe(score._scoreData.parts[0]);
+    expect(score._scoreData.partsById['accompaniment']).toBe(score._scoreData.parts[1]);
+  });
+
+  it('should populate partsById when using a template', () => {
+    score._scoreData.partsTemplate = 'SATB';
+    score._normalizeParts();
+    expect(score._scoreData.partsById['soprano']).toBeDefined();
+    expect(score._scoreData.partsById['alto']).toBeDefined();
+    expect(score._scoreData.partsById['tenor']).toBeDefined();
+    expect(score._scoreData.partsById['bass']).toBeDefined();
+  });
+
+  it('should populate partsById when using explicit parts', () => {
+    score._scoreData.parts = [
+      { partId: 'voice-a', name: 'A' },
+      { partId: 'voice-b', name: 'B' },
+    ];
+    score._normalizeParts();
+    expect(score._scoreData.partsById['voice-a']).toBe(score._scoreData.parts[0]);
+    expect(score._scoreData.partsById['voice-b']).toBe(score._scoreData.parts[1]);
   });
 });
 
@@ -755,7 +909,7 @@ describe('_getQpmAtTime()', () => {
 // _normalizeChordSets
 // ============================================================
 describe('_normalizeChordSets()', () => {
-  it('should create a default chord set from <harm> elements in MEI', async () => {
+  it('should create a default chord set from <harm> elements in MEI (integration)', async () => {
     const score = new ChScore('#score-container');
     ChScore.prototype.drawScore = function() {};
 
@@ -777,7 +931,7 @@ describe('_normalizeChordSets()', () => {
     expect(score._scoreData.chordSetsById['user-chords']).toBeDefined();
   });
 
-  it('should populate chordSetsById lookup', async () => {
+  it('should populate chordSetsById lookup (integration)', async () => {
     const score = new ChScore('#score-container');
     ChScore.prototype.drawScore = function() {};
     await score.load('musicxml', {
@@ -794,6 +948,149 @@ describe('_normalizeChordSets()', () => {
 
     expect(score._scoreData.chordSetsById['test-normalize']).toBeDefined();
   });
+
+  // ── Unit tests (lightweight MEI snippets) ──
+  const parser = new DOMParser();
+
+  function buildMEI(harms) {
+    let xml = '<mei xmlns="http://www.music-encoding.org/ns/mei"><music><body><mdiv><score><section>';
+    for (const harm of harms) {
+      const measureId = harm.measureId || 'measure-1';
+      xml += `<measure xml:id="${measureId}">`;
+      const cpAttr = harm.cp != null ? ` ch-chord-position="${harm.cp}"` : '';
+      const tstamp = harm.tstamp != null ? ` tstamp="${harm.tstamp}"` : '';
+      xml += `<harm${cpAttr}${tstamp}>${harm.text}</harm>`;
+      xml += '</measure>';
+    }
+    if (harms.length === 0) {
+      xml += '<measure xml:id="m1"><note/></measure>';
+    }
+    xml += '</section></score></mdiv></body></music></mei>';
+    return parser.parseFromString(xml, 'text/xml');
+  }
+
+  function callNormalize(meiParsed, chordSets = []) {
+    const scoreData = { meiParsed, chordSets: [...chordSets], chordSetsById: {} };
+    ChScore.prototype._normalizeChordSets.call({ _scoreData: scoreData });
+    return scoreData;
+  }
+
+  // ── No <harm> elements ──
+  it('should not add default chord set when no <harm> elements exist', () => {
+    const sd = callNormalize(buildMEI([]));
+    expect(sd.chordSets.length).toBe(0);
+    expect(Object.keys(sd.chordSetsById).length).toBe(0);
+  });
+
+  it('should still build chordSetsById from user chord sets when no <harm> elements exist', () => {
+    const userSet = { chordSetId: 'user', name: 'User', chordPositionRefs: {}, svgSymbolsUrl: null, chordInfoList: [] };
+    const sd = callNormalize(buildMEI([]), [userSet]);
+    expect(sd.chordSets.length).toBe(1);
+    expect(sd.chordSetsById['user']).toBe(userSet);
+  });
+
+  // ── Default chord set from <harm> ──
+  it('should create a default chord set with id "default" from <harm> elements', () => {
+    const sd = callNormalize(buildMEI([{ text: 'C', cp: 0, tstamp: '1' }]));
+    expect(sd.chordSets.length).toBe(1);
+    expect(sd.chordSets[0].chordSetId).toBe('default');
+    expect(sd.chordSets[0].name).toBe('Default');
+    expect(sd.chordSetsById['default']).toBeDefined();
+  });
+
+  it('default chord set should have null svgSymbolsUrl', () => {
+    const sd = callNormalize(buildMEI([{ text: 'C', cp: 0, tstamp: '1' }]));
+    expect(sd.chordSets[0].svgSymbolsUrl).toBeNull();
+  });
+
+  // ── chordInfoList ──
+  it('should populate chordInfoList with one entry per <harm> element', () => {
+    const sd = callNormalize(buildMEI([
+      { text: 'C', cp: 0, tstamp: '1', measureId: 'm1' },
+      { text: 'G', cp: 1, tstamp: '3', measureId: 'm1' },
+    ]));
+    expect(sd.chordSets[0].chordInfoList.length).toBe(2);
+  });
+
+  it('chordInfo should have correct text, prefix null, svgSymbolId null', () => {
+    const sd = callNormalize(buildMEI([{ text: 'Am', cp: 0, tstamp: '1' }]));
+    const info = sd.chordSets[0].chordInfoList[0];
+    expect(info.text).toBe('Am');
+    expect(info.prefix).toBeNull();
+    expect(info.svgSymbolId).toBeNull();
+  });
+
+  it('chordInfo should include measureId from closest <measure>', () => {
+    const sd = callNormalize(buildMEI([{ text: 'D', cp: 0, tstamp: '1', measureId: 'meas-42' }]));
+    expect(sd.chordSets[0].chordInfoList[0].measureId).toBe('meas-42');
+  });
+
+  it('chordInfo should include tstamp attribute', () => {
+    const sd = callNormalize(buildMEI([{ text: 'F', cp: 0, tstamp: '2.5' }]));
+    expect(sd.chordSets[0].chordInfoList[0].tstamp).toBe('2.5');
+  });
+
+  // ── Symbol replacement ──
+  it('should replace ♭ with b in chord text', () => {
+    const sd = callNormalize(buildMEI([{ text: 'B♭', cp: 0, tstamp: '1' }]));
+    expect(sd.chordSets[0].chordInfoList[0].text).toBe('Bb');
+  });
+
+  it('should replace ♯ with # in chord text', () => {
+    const sd = callNormalize(buildMEI([{ text: 'F♯', cp: 0, tstamp: '1' }]));
+    expect(sd.chordSets[0].chordInfoList[0].text).toBe('F#');
+  });
+
+  it('should trim whitespace from chord text', () => {
+    const sd = callNormalize(buildMEI([{ text: '  G  ', cp: 0, tstamp: '1' }]));
+    expect(sd.chordSets[0].chordInfoList[0].text).toBe('G');
+  });
+
+  // ── chordPositionRefs ──
+  it('should map ch-chord-position to chordInfo in chordPositionRefs', () => {
+    const sd = callNormalize(buildMEI([
+      { text: 'C', cp: 0, tstamp: '1' },
+      { text: 'G', cp: 4, tstamp: '1' },
+    ]));
+    const refs = sd.chordSets[0].chordPositionRefs;
+    expect(refs[0]).toBeDefined();
+    expect(refs[0].text).toBe('C');
+    expect(refs[4]).toBeDefined();
+    expect(refs[4].text).toBe('G');
+  });
+
+  it('should not add to chordPositionRefs when ch-chord-position is absent', () => {
+    const sd = callNormalize(buildMEI([{ text: 'Em', tstamp: '1' }]));
+    expect(Object.keys(sd.chordSets[0].chordPositionRefs).length).toBe(0);
+    // But chordInfoList should still have the entry
+    expect(sd.chordSets[0].chordInfoList.length).toBe(1);
+  });
+
+  // ── Prepend (unshift) ──
+  it('should prepend default chord set before user chord sets', () => {
+    const userSet = { chordSetId: 'user', name: 'User', chordPositionRefs: {}, svgSymbolsUrl: null, chordInfoList: [] };
+    const sd = callNormalize(buildMEI([{ text: 'A', cp: 0, tstamp: '1' }]), [userSet]);
+    expect(sd.chordSets.length).toBe(2);
+    expect(sd.chordSets[0].chordSetId).toBe('default');
+    expect(sd.chordSets[1].chordSetId).toBe('user');
+  });
+
+  // ── chordSetsById ──
+  it('should index all chord sets (default + user) in chordSetsById', () => {
+    const userSet = { chordSetId: 'my-set', name: 'My', chordPositionRefs: {}, svgSymbolsUrl: null, chordInfoList: [] };
+    const sd = callNormalize(buildMEI([{ text: 'Dm', cp: 0, tstamp: '1' }]), [userSet]);
+    expect(sd.chordSetsById['default']).toBe(sd.chordSets[0]);
+    expect(sd.chordSetsById['my-set']).toBe(sd.chordSets[1]);
+  });
+
+  it('should handle multiple user chord sets in chordSetsById', () => {
+    const set1 = { chordSetId: 'a', name: 'A', chordPositionRefs: {}, svgSymbolsUrl: null, chordInfoList: [] };
+    const set2 = { chordSetId: 'b', name: 'B', chordPositionRefs: {}, svgSymbolsUrl: null, chordInfoList: [] };
+    const sd = callNormalize(buildMEI([]), [set1, set2]);
+    expect(Object.keys(sd.chordSetsById).length).toBe(2);
+    expect(sd.chordSetsById['a']).toBe(set1);
+    expect(sd.chordSetsById['b']).toBe(set2);
+  });
 });
 
 
@@ -801,7 +1098,7 @@ describe('_normalizeChordSets()', () => {
 // _markSingleLineChordPositions
 // ============================================================
 describe('_markSingleLineChordPositions()', () => {
-  it('should mark chord positions as single line when only one lyric line exists', async () => {
+  it('should mark chord positions as single line when only one lyric line exists (integration)', async () => {
     const score = new ChScore('#score-container');
     ChScore.prototype.drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml2 });
@@ -817,6 +1114,265 @@ describe('_markSingleLineChordPositions()', () => {
     expect(score._scoreData.chordPositions.length).toBeGreaterThan(0);
     expect(hasSingleLine).toBe(true);
   });
+
+  // ── Unit tests (lightweight MEI snippets) ──
+  const parser = new DOMParser();
+
+  /**
+   * Build a minimal MEI with melody notes at specific chord positions.
+   * @param {Array} notes - [{cp, lyricLines:[{staff, line},...]}]
+   *   Each note becomes <note ch-melody="" ch-chord-position="cp"> with verse children.
+   *   Omit lyricLines (or pass []) for a melody note without lyrics.
+   */
+  function buildMEI(notes) {
+    let xml = '<mei><music><body><mdiv><score><section><measure><staff n="1"><layer>';
+    for (const note of notes) {
+      xml += `<note ch-melody="" ch-chord-position="${note.cp}">`;
+      if (note.lyricLines) {
+        for (const ll of note.lyricLines) {
+          xml += `<verse n="${ll.line}" ch-lyric-line-id="${ll.staff}.${ll.line}"><syl>la</syl></verse>`;
+        }
+      }
+      xml += '</note>';
+    }
+    xml += '</layer></staff></measure></section></score></mdiv></body></music></mei>';
+    return parser.parseFromString(xml, 'text/xml');
+  }
+
+  /** Create an array of chordPosition objects with isSingleLine: null. */
+  function makeCPs(count) {
+    return Array.from({ length: count }, (_, i) => ({ chordPosition: i, isSingleLine: null }));
+  }
+
+  /** Call _markSingleLineChordPositions with a mock _scoreData context. */
+  function callMark(meiParsed, chordPositions, lyricCpRanges, maxAllowedGap) {
+    const args = [lyricCpRanges];
+    if (maxAllowedGap != null) args.push(maxAllowedGap);
+    return ChScore.prototype._markSingleLineChordPositions.apply(
+      { _scoreData: { meiParsed, chordPositions } },
+      args,
+    );
+  }
+
+  /** Shorthand: melody notes on staff 1 with N lyric lines. */
+  function s1Notes(cpCount, linesPerCp) {
+    return Array.from({ length: cpCount }, (_, i) => ({
+      cp: i,
+      lyricLines: linesPerCp(i),
+    }));
+  }
+
+  // ── All multi-line: no single-line positions ──
+  it('should not mark any CP when all positions have multiple lyric lines', () => {
+    // CPs 0-4, each with lines 1 and 2 on staff 1
+    const notes = s1Notes(5, () => [{ staff: 1, line: 1 }, { staff: 1, line: 2 }]);
+    const cps = makeCPs(5);
+    const result = callMark(buildMEI(notes), cps, [[0, 5]]);
+    expect(cps.every(cp => cp.isSingleLine === null)).toBe(true);
+    expect(result['1']).toEqual([]);
+  });
+
+  // ── Basic single-line detection ──
+  it('should mark CPs where only one lyric line exists (range > default gap)', () => {
+    // CP 0: multi-line, CPs 1-5: single-line (5 positions > gap 3)
+    const notes = [
+      { cp: 0, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }] },
+      ...Array.from({ length: 5 }, (_, i) => ({
+        cp: i + 1, lyricLines: [{ staff: 1, line: 1 }],
+      })),
+    ];
+    const cps = makeCPs(6);
+    callMark(buildMEI(notes), cps, [[0, 6]]);
+    expect(cps[0].isSingleLine).toBeNull();
+    for (let i = 1; i <= 5; i++) {
+      expect(cps[i].isSingleLine).toBe(true);
+    }
+  });
+
+  // ── Gap threshold boundary ──
+  it('should NOT mark when single-line range length equals maxAllowedGap', () => {
+    // CP 0: multi-line, CPs 1-3: single-line (3 = default gap → filtered)
+    const notes = [
+      { cp: 0, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }] },
+      ...Array.from({ length: 3 }, (_, i) => ({
+        cp: i + 1, lyricLines: [{ staff: 1, line: 1 }],
+      })),
+    ];
+    const cps = makeCPs(4);
+    callMark(buildMEI(notes), cps, [[0, 4]]);
+    expect(cps.every(cp => cp.isSingleLine === null)).toBe(true);
+  });
+
+  it('should mark when single-line range length is maxAllowedGap + 1', () => {
+    // CP 0: multi-line, CPs 1-4: single-line (4 > gap 3 → kept)
+    const notes = [
+      { cp: 0, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }] },
+      ...Array.from({ length: 4 }, (_, i) => ({
+        cp: i + 1, lyricLines: [{ staff: 1, line: 1 }],
+      })),
+    ];
+    const cps = makeCPs(5);
+    callMark(buildMEI(notes), cps, [[0, 5]]);
+    for (let i = 1; i <= 4; i++) {
+      expect(cps[i].isSingleLine).toBe(true);
+    }
+  });
+
+  it('should respect custom maxAllowedGap parameter', () => {
+    // CP 0: multi-line, CPs 1-5: single-line, maxAllowedGap=5 → length 5 = gap → filtered
+    const notes = [
+      { cp: 0, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }] },
+      ...Array.from({ length: 5 }, (_, i) => ({
+        cp: i + 1, lyricLines: [{ staff: 1, line: 1 }],
+      })),
+    ];
+    const cps = makeCPs(6);
+    callMark(buildMEI(notes), cps, [[0, 6]], 5);
+    expect(cps.every(cp => cp.isSingleLine === null)).toBe(true);
+  });
+
+  // ── Gap expansion forward ──
+  it('should expand range forward into no-lyric ECPs at the end', () => {
+    // CP 0: multi-line, CPs 1-5: single-line, CP 6: no lyrics (in range but no MEI note)
+    const notes = [
+      { cp: 0, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }] },
+      ...Array.from({ length: 5 }, (_, i) => ({
+        cp: i + 1, lyricLines: [{ staff: 1, line: 1 }],
+      })),
+      // CP 6 intentionally omitted → no-lyric ECP
+    ];
+    const cps = makeCPs(7);
+    callMark(buildMEI(notes), cps, [[0, 7]]);
+    // CPs 1-5 from single-line range + CP 6 from forward expansion
+    for (let i = 1; i <= 6; i++) {
+      expect(cps[i].isSingleLine).toBe(true);
+    }
+  });
+
+  // ── Gap expansion backward (firstLyricEcp) ──
+  it('should expand range backward into no-lyric ECPs when range starts at firstLyricEcp', () => {
+    // CP 0: no lyrics (in range), CPs 1-5: single-line (firstLyricEcp = ECP 1)
+    const notes = Array.from({ length: 5 }, (_, i) => ({
+      cp: i + 1, lyricLines: [{ staff: 1, line: 1 }],
+    }));
+    const cps = makeCPs(6);
+    callMark(buildMEI(notes), cps, [[0, 6]]);
+    // CP 0 included via backward expansion, CPs 1-5 from single-line range
+    for (let i = 0; i <= 5; i++) {
+      expect(cps[i].isSingleLine).toBe(true);
+    }
+  });
+
+  it('should NOT expand backward when range does not start at firstLyricEcp', () => {
+    // CP 0: multi-line, CP 5: no lyrics, CPs 6-10: single-line (5 > gap 3)
+    const notes = [
+      { cp: 0, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }] },
+      // CP 5: no lyrics
+      ...Array.from({ length: 5 }, (_, i) => ({
+        cp: i + 6, lyricLines: [{ staff: 1, line: 1 }],
+      })),
+    ];
+    const cps = makeCPs(11);
+    callMark(buildMEI(notes), cps, [[0, 11]]);
+    // firstLyricEcp = 0 (CP 0 has lyrics). Single-line range starts at ECP 6 ≠ firstLyricEcp.
+    // CP 5 should NOT be included (no backward expansion for non-first ranges)
+    expect(cps[5].isSingleLine).toBeNull();
+    // But forward expansion at end still occurs (no ECP 11 to expand into here)
+    for (let i = 6; i <= 10; i++) {
+      expect(cps[i].isSingleLine).toBe(true);
+    }
+  });
+
+  // ── Non-contiguous lyricChordPositionRanges ──
+  it('should handle non-contiguous lyricChordPositionRanges via ECP mapping', () => {
+    // Range 1: CPs 0-4, Range 2: CPs 10-14  →  ECPs 0-4 and 5-9
+    // CP 0: multi, CPs 1-4 single, CP 10: multi, CPs 11-14 single
+    const notes = [
+      { cp: 0, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }] },
+      ...Array.from({ length: 4 }, (_, i) => ({ cp: i + 1, lyricLines: [{ staff: 1, line: 1 }] })),
+      { cp: 10, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }] },
+      ...Array.from({ length: 4 }, (_, i) => ({ cp: i + 11, lyricLines: [{ staff: 1, line: 1 }] })),
+    ];
+    const cps = makeCPs(15);
+    callMark(buildMEI(notes), cps, [[0, 5], [10, 15]]);
+    // Both ranges have 4 single-line ECPs (> gap 3)
+    for (const cp of [1, 2, 3, 4]) expect(cps[cp].isSingleLine).toBe(true);
+    for (const cp of [11, 12, 13, 14]) expect(cps[cp].isSingleLine).toBe(true);
+    // CPs not in any range should be untouched
+    expect(cps[0].isSingleLine).toBeNull();
+    expect(cps[10].isSingleLine).toBeNull();
+    for (let i = 5; i <= 9; i++) expect(cps[i].isSingleLine).toBeNull();
+  });
+
+  // ── Multi-staff ──
+  it('should process staves independently', () => {
+    // Staff 1: CP 0 multi, CPs 1-4 single → marked
+    // Staff 2: CPs 0-4 all multi → not marked
+    const notes = [
+      { cp: 0, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }, { staff: 2, line: 1 }, { staff: 2, line: 2 }] },
+      ...Array.from({ length: 4 }, (_, i) => ({
+        cp: i + 1,
+        lyricLines: [{ staff: 1, line: 1 }, { staff: 2, line: 1 }, { staff: 2, line: 2 }],
+      })),
+    ];
+    const cps = makeCPs(5);
+    const result = callMark(buildMEI(notes), cps, [[0, 5]]);
+    expect(result).toHaveProperty('1');
+    expect(result).toHaveProperty('2');
+    expect(result['1'].length).toBe(1); // one single-line range for staff 1
+    expect(result['2']).toEqual([]);     // no single-line range for staff 2
+  });
+
+  // ── Return structure ──
+  it('returned ranges should have start, end, and lineNumbers properties', () => {
+    const notes = [
+      { cp: 0, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }] },
+      ...Array.from({ length: 5 }, (_, i) => ({
+        cp: i + 1, lyricLines: [{ staff: 1, line: 1 }],
+      })),
+    ];
+    const cps = makeCPs(6);
+    const result = callMark(buildMEI(notes), cps, [[0, 6]]);
+    const range = result['1'][0];
+    expect(range).toHaveProperty('start');
+    expect(range).toHaveProperty('end');
+    expect(range).toHaveProperty('lineNumbers');
+    expect(typeof range.start).toBe('number');
+    expect(typeof range.end).toBe('number');
+    expect(range.lineNumbers).toBeInstanceOf(Set);
+    expect(range.start).toBe(1);
+    expect(range.end).toBe(6);
+  });
+
+  // ── No lyrics at all ──
+  it('should return empty object when MEI has no lyrics', () => {
+    const mei = parser.parseFromString(
+      '<mei><music><body><mdiv><score><section><measure><staff n="1"><layer>' +
+      '<note ch-melody="" ch-chord-position="0"/>' +
+      '</layer></staff></measure></section></score></mdiv></body></music></mei>',
+      'text/xml',
+    );
+    const cps = makeCPs(5);
+    const result = callMark(mei, cps, [[0, 5]]);
+    expect(Object.keys(result).length).toBe(0);
+    expect(cps.every(cp => cp.isSingleLine === null)).toBe(true);
+  });
+
+  // ── Multiple single-line ranges in one staff ──
+  it('should detect multiple separate single-line ranges', () => {
+    // multi(0), single(1-5), multi(6), single(7-11)
+    const notes = [
+      { cp: 0, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }] },
+      ...Array.from({ length: 5 }, (_, i) => ({ cp: i + 1, lyricLines: [{ staff: 1, line: 1 }] })),
+      { cp: 6, lyricLines: [{ staff: 1, line: 1 }, { staff: 1, line: 2 }] },
+      ...Array.from({ length: 5 }, (_, i) => ({ cp: i + 7, lyricLines: [{ staff: 1, line: 1 }] })),
+    ];
+    const cps = makeCPs(12);
+    const result = callMark(buildMEI(notes), cps, [[0, 12]]);
+    expect(result['1'].length).toBe(2);
+    expect(result['1'][0]).toMatchObject({ start: 1, end: 6 });
+    expect(result['1'][1]).toMatchObject({ start: 7, end: 12 });
+  });
 });
 
 
@@ -824,25 +1380,150 @@ describe('_markSingleLineChordPositions()', () => {
 // _getInlineVerseNumbers
 // ============================================================
 describe('_getInlineVerseNumbers()', () => {
-  it('should extract verse numbers from label elements', async () => {
-    const score = new ChScore('#score-container');
+  let score;
+  const parser = new DOMParser();
+
+  /** Build a minimal MEI XML document with <verse> and <label> elements. */
+  function buildMei(verses) {
+    // verses: array of { n, labelText } or null for no-label verses
+    const verseXml = verses.map(v => {
+      const label = v.labelText != null ? `<label>${v.labelText}</label>` : '';
+      return `<verse n="${v.n}"><syl>la</syl>${label}</verse>`;
+    }).join('');
+    return parser.parseFromString(
+      `<mei><note>${verseXml}</note></mei>`,
+      'text/xml'
+    );
+  }
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  // ── Integration tests (full score load) ──
+
+  it('should extract verse numbers from label elements (integration)', async () => {
+    const integrationScore = new ChScore('#score-container');
     ChScore.prototype.drawScore = function() {};
-    await score.load('musicxml', { scoreContent: sampleMusicXml });
+    await integrationScore.load('musicxml', { scoreContent: sampleMusicXml });
     ChScore.prototype.drawScore = origDrawScore;
 
-    const verseNumbers = score._getInlineVerseNumbers(score._scoreData.meiParsed);
+    const verseNumbers = integrationScore._getInlineVerseNumbers(integrationScore._scoreData.meiParsed);
     expect(verseNumbers.length).toBe(4);
     expect(verseNumbers).toEqual([1, 2, 3, 4]);
   });
 
-  it('should return [1] for single-verse songs without labels', async () => {
+  it('should return [1] for single-verse songs without labels (integration)', async () => {
     const abcContent = `X:1\nT:Test\nL:1/4\nM:4/4\nK:C\nw:la la\nCDEF|`;
-    const score = new ChScore('#score-container');
+    const integrationScore = new ChScore('#score-container');
     ChScore.prototype.drawScore = function() {};
-    await score.load('abc', { scoreContent: abcContent });
+    await integrationScore.load('abc', { scoreContent: abcContent });
     ChScore.prototype.drawScore = origDrawScore;
 
-    const verseNumbers = score._getInlineVerseNumbers(score._scoreData.meiParsed);
+    const verseNumbers = integrationScore._getInlineVerseNumbers(integrationScore._scoreData.meiParsed);
     expect(verseNumbers).toEqual([1]);
+  });
+
+  // ── Unit tests (lightweight MEI snippets) ──
+
+  it('should return [1] when no verse labels exist', () => {
+    const mei = buildMei([{ n: 1, labelText: null }]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([1]);
+  });
+
+  it('should return [1] when there are no verse elements at all', () => {
+    const mei = parser.parseFromString('<mei><note></note></mei>', 'text/xml');
+    expect(score._getInlineVerseNumbers(mei)).toEqual([1]);
+  });
+
+  it('should return [1, 2] for two sequential verses', () => {
+    const mei = buildMei([
+      { n: 1, labelText: '1' },
+      { n: 2, labelText: '2' },
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([1, 2]);
+  });
+
+  it('should return [1, 2, 3] for three sequential verses', () => {
+    const mei = buildMei([
+      { n: 1, labelText: '1' },
+      { n: 2, labelText: '2' },
+      { n: 3, labelText: '3' },
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([1, 2, 3]);
+  });
+
+  it('should strip parentheses from label text like "(1)"', () => {
+    const mei = buildMei([
+      { n: 1, labelText: '(1)' },
+      { n: 2, labelText: '(2)' },
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([1, 2]);
+  });
+
+  it('should strip periods from label text like "1."', () => {
+    const mei = buildMei([
+      { n: 1, labelText: '1.' },
+      { n: 2, labelText: '2.' },
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([1, 2]);
+  });
+
+  it('should strip combined punctuation like "(1.)"', () => {
+    const mei = buildMei([
+      { n: 1, labelText: '(1.)' },
+      { n: 2, labelText: '(2.)' },
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([1, 2]);
+  });
+
+  it('should handle whitespace around label text', () => {
+    const mei = buildMei([
+      { n: 1, labelText: '  1  ' },
+      { n: 2, labelText: '  2  ' },
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([1, 2]);
+  });
+
+  it('should return [] when verse n attribute does not match label text', () => {
+    const mei = buildMei([
+      { n: 1, labelText: '1' },
+      { n: 3, labelText: '2' },  // n=3 but label says 2
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([]);
+  });
+
+  it('should return [] when label text does not match expected counter', () => {
+    const mei = buildMei([
+      { n: 1, labelText: '1' },
+      { n: 2, labelText: '5' },  // label says 5, counter expects 2
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([]);
+  });
+
+  it('should return [] when labels start at 2 instead of 1', () => {
+    const mei = buildMei([
+      { n: 2, labelText: '2' },
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([]);
+  });
+
+  it('should return [] when n and label are consistent but skip a number', () => {
+    const mei = buildMei([
+      { n: 1, labelText: '1' },
+      { n: 3, labelText: '3' },  // skips 2; counter expects 2
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([]);
+  });
+
+  it('should stop collecting and return [] on first mismatch in a longer sequence', () => {
+    const mei = buildMei([
+      { n: 1, labelText: '1' },
+      { n: 2, labelText: '2' },
+      { n: 3, labelText: '99' },  // mismatch
+      { n: 4, labelText: '4' },
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([]);
   });
 });
