@@ -287,14 +287,11 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
       verovioOptions.pageMarginLeft = Math.max(verovioOptions.pageMarginLeft, 150);
     }
   }
-  
-  if (this._scoreData?.hasChordSets && this._currentOptions.showChordSet && this._currentOptions.showChordSetImages) {
+  if (this._currentOptions.showChordSet && this._currentOptions.showChordSetImages) {
     verovioOptions.spacingLinear = 1.0;
     verovioOptions.spacingNonLinear = 0.5;
-    verovioOptions.spacingSystem = 26;
+    verovioOptions.spacingSystem = 22;
     verovioOptions.pageMarginTop = 220;
-    if (this._currentOptions.showMelodyOnly) verovioOptions.spacingSystem += 5;
-  }
   }
   if (this._currentOptions.showMeasureNumbers) {
     verovioOptions.pageMarginLeft = Math.max(verovioOptions.pageMarginLeft, 30);
@@ -1343,8 +1340,7 @@ ChScore.prototype._updateMei = function () {
   // Set chord set visibility
   // Add attributes to chord symbols: @ch-superscript
   if (this._scoreData.hasChordSets) {
-    const harms = this._scoreData.meiParsed.querySelectorAll('harm');
-    for (const harm of harms) harm.remove();
+    const harmStaffNumber = this._scoreData.meiParsed.querySelector('[ch-melody]')?.closest('staff')?.getAttribute('n') ?? '1';
     const chordSet = this._scoreData.chordSetsById[this._currentOptions.showChordSet];
     if (chordSet) {
       if (!chordSet.chordInfoList || chordSet.chordInfoList.length === 0) {
@@ -1363,8 +1359,8 @@ ChScore.prototype._updateMei = function () {
         }
       }
       for (const chordInfo of chordSet.chordInfoList) {
-        const harm = document.createElement('harm');
-        harm.setAttribute('staff', '1');
+        const harm = this._scoreData.meiParsed.createElement('harm');
+        harm.setAttribute('staff', harmStaffNumber);
         let text = chordInfo.text ?? '';
         text = text.replaceAll(/♭|b/g, '\u200A<rend glyph.auth="smufl">♭</rend>\u200A');
         text = text.replaceAll(/♯|#/g, '\u200A<rend glyph.auth="smufl">♯</rend>\u200A');
@@ -2186,7 +2182,7 @@ ChScore.prototype._updateSvg = function (svg) {
     }
   }
   
-  // Set chord chart visibility
+  // Set chord set image visibility
   // TODO: Add guitar chord charts: https://github.com/andresmegias/acordia
   if (this._currentOptions.showChordSet && this._currentOptions.showChordSetImages) {
     const currentChordSet = this._scoreData.chordSetsById[this._currentOptions.showChordSet];
@@ -2202,10 +2198,14 @@ ChScore.prototype._updateSvg = function (svg) {
             measure.append(chordChartsGroup);
           }
           if (harmElement && chordPositionRefInfo.svgSymbolId) {
-            const harmPositioningTspan = harmElement.querySelector('tspan[x]');
-            const harmTop = parseInt(harmPositioningTspan.getAttribute('y')) - 2000;
-            const harmLeft = parseInt(harmPositioningTspan.getAttribute('x')) - 600;
-            chordChartsGroup.insertAdjacentHTML('beforeend', `<use x="${harmLeft}" y="${harmTop}" href="${currentChordSet.svgSymbolsUrl}#${chordPositionRefInfo.svgSymbolId}" width="1200" height="1200" />`);
+            const imageSize = 1600;
+            const harmTspan = harmElement.querySelector('tspan[x]');
+            const firstStaffY = parseInt(harmTspan.closest('g.measure').querySelector('g.staff path').getAttribute('d').split(' ')[1]);
+            const harmTspanY = parseInt(harmTspan.getAttribute('y'));
+            // Position above the first staff, if there's a staff above the chord symbol (for example, on songs with a descant)
+            const y = Math.min(firstStaffY, harmTspanY) - (imageSize * 1.25);
+            const x = parseInt(harmTspan.getAttribute('x')) - (imageSize / 2);
+            chordChartsGroup.insertAdjacentHTML('beforeend', `<use x="${x}" y="${y}" href="${currentChordSet.svgSymbolsUrl}?3#${chordPositionRefInfo.svgSymbolId}" width="${imageSize}" height="${imageSize}" />`);
           }
         }
       }
@@ -3838,6 +3838,7 @@ ChScore.prototype._normalizeChordSets = function () {
         const chordPosition = parseInt(harmElement.getAttribute('ch-chord-position'));
         defaultChordSet.chordPositionRefs[chordPosition] = chordInfo;
       }
+      harmElement.remove();
     }
     this._scoreData.chordSets.unshift(defaultChordSet);
   }

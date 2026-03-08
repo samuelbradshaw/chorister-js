@@ -1,31 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg">
 
   <!-- Created with AI (Claude) -->
-  <symbol id="pc-asterisk" viewBox="0 0 100 100">
+  <symbol id="pc-asterisk" viewBox="0 0 120 120">
     <title>Asterisk</title>
-    <rect x="5" y="5" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
-    <path d="M 50 25 L 55 42 L 73 42 L 59 52 L 64 69 L 50 59 L 36 69 L 41 52 L 27 42 L 45 42 Z" fill="currentColor"/>
+    <rect x="15" y="15" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M 60 37 L 65 54 L 83 54 L 69 64 L 74 81 L 60 71 L 46 81 L 51 64 L 37 54 L 55 54 Z" fill="currentColor"/>
   </symbol>
-
+  
   <!-- Created with AI (Claude) -->
-  <symbol id="pc-up" viewBox="0 0 100 100">
+  <symbol id="pc-up" viewBox="0 0 120 120">
     <title>Up</title>
-    <rect x="5" y="5" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
-    <path d="M 35 65 L 65 35 M 65 35 L 50 35 M 65 35 L 65 50" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <rect x="15" y="15" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M 45 75 L 75 45 M 75 45 L 60 45 M 75 45 L 75 60" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
   </symbol>
-
+  
   <!-- Created with AI (Claude) -->
-  <symbol id="pc-down" viewBox="0 0 100 100">
+  <symbol id="pc-down" viewBox="0 0 120 120">
     <title>Down</title>
-    <rect x="5" y="5" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
-    <path d="M 35 35 L 65 65 M 65 65 L 65 50 M 65 65 L 50 65" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <rect x="15" y="15" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M 45 45 L 75 75 M 75 75 L 75 60 M 75 75 L 60 75" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
   </symbol>
-
+  
   <!-- Created with AI (Claude) -->
-  <symbol id="pc-repeat" viewBox="0 0 100 100">
+  <symbol id="pc-repeat" viewBox="0 0 120 120">
     <title>Repeat</title>
-    <rect x="5" y="5" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
-    <line x1="30" y1="50" x2="70" y2="50" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+    <rect x="15" y="15" width="90" height="90" rx="15" fill="none" stroke="currentColor" stroke-width="2"/>
+    <line x1="40" y1="60" x2="80" y2="60" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
   </symbol>
   
   <!-- Loosely based on https://github.com/omnibrain/svguitar -->
