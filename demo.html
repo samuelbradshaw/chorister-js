@@ -192,7 +192,7 @@
           <select name="expandScore">
             <option value="">None</option>
             <option value="intro">Introduction</option>
-            <option value="full-score">Full Score</option>
+            <option value="full-score">Full score</option>
           </select>
         </label></p>
         <p><label>Chord set:
@@ -259,7 +259,7 @@
         const scoreType = demoScores[scoreId].scoreType;
         const inputData = demoScores[scoreId];
         const options = {
-          drawBackgroundShapes: ['ch-system-rect', 'ch-measure-rect', 'ch-staff-rect', 'ch-chord-position-rect', 'ch-note-circle', 'ch-lyric-rect'],
+          drawBackgroundShapes: ['ch-chord-position-rect', 'ch-staff-rect', 'ch-note-circle', 'ch-lyric-rect'],
           drawForegroundShapes: ['ch-chord-position-rect'],
           customEvents: ['ch:tap'],
         }

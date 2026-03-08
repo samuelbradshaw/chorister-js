@@ -96,7 +96,7 @@ You can also install it using [npm](https://www.npmjs.com/package/@samuelbradsha
 
 <script>
   // Gather input data
-  const scoreType = 'mxl';
+  const scoreType = 'musicxml';
   const inputData = {
     scoreUrl: 'https://cdn.jsdelivr.net/gh/samuelbradshaw/chorister-js@main/resources/how-great-the-wisdom-and-the-love.musicxml',
     partsTemplate: 'SATB',
@@ -543,17 +543,23 @@ Options can be passed in to Chorister.js when calling the `load()` method to loa
 
 When enabled in options, Chorister.js sends [custom events](https://developer.mozilla.org/en-US/docs/Web/Events/Creating_and_triggering_events) to the score container:
 
-- **ch:tap** – Sent when the user taps on an item in the score.
-- **ch:hover** – Sent when the user hovers over an element in the score (with a mouse or trackpad).
+- **ch:tap** – Sent when the user taps on a shape in the score.
+- **ch:hover** – Sent when the user hovers over a shape in the score with a mouse or trackpad.
 
-These events have a `detail` attribute that provides information about what was tapped or hovered. This information can be used to trigger selection or playback of certain parts of the score. Here’s an example:
+Each event has a `detail` attribute that provides additional information. For example, the `ch:tap` event could be used to trigger playback from a specific place in the score:
 
 ```javascript
 const scoreContainer = document.getElementById('score-container');
 scoreContainer.addEventListener('ch:tap', (event) => {
   console.log(event.detail);
+  if (event.detail.expandedChordPositions.length > 0) {
+    const startTime = getTimestamp(event.detail.expandedChordPositions[0]);
+    prPlayer.seekToTime(startTime, { play: true });
+  }
 });
 ```
+
+The `ch:tap` and `ch:hover` events require corresponding shapes to be added in Chorister.js options. This is because SVG elements don’t respond to pointer events in empty spaces. For example, if you want the event to include chord position information, you'll need to add `ch-chord-position-rect` as a foreground or background shape.
 
 ### <a name="elements-and-attributes"></a>Elements and attributes
 

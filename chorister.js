@@ -89,16 +89,16 @@ ChScore.prototype._loadEventListeners = function () {
   this._container.addEventListener('click', respondToClick, { signal: this._controller.signal });
   
   // Score hover
-  this._hoverState = {};
+  let hoverState = {};
   const respondToMouseMove = (event, ignoreThrottle = false) => {
     if (!this._currentOptions?.customEvents?.includes('ch:hover')) return;
     if (!ignoreThrottle && this._isThrottled('mousemove', 100)) return;
     const pointData = this._getPointData(event.clientX, event.clientY);
     const pointDataValues = Object.entries(pointData).map(e => (e ?? '').toString()).join(';');
-    const hoverStateValues = Object.entries(this._hoverState).map(e => (e ?? '').toString()).join(';');
+    const hoverStateValues = Object.entries(hoverState).map(e => (e ?? '').toString()).join(';');
     if (pointDataValues === hoverStateValues) return;
-    this._hoverState = pointData;
-    this._container.dispatchEvent(new CustomEvent('ch:hover', { detail: structuredClone(this._hoverState) }));
+    hoverState = pointData;
+    this._container.dispatchEvent(new CustomEvent('ch:hover', { detail: { pointData: structuredClone(pointData) } }));
   }
   this._container.addEventListener('mousemove', (event) => respondToMouseMove(event), { signal: this._controller.signal });
   this._container.addEventListener('mouseleave', (event) => respondToMouseMove(event, true), { signal: this._controller.signal });
@@ -231,7 +231,10 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
   }
   
   // Set Verovio options
+  // Get default Verovio options
   const verovioOptions = structuredClone(this._defaultVerovioOptions);
+  verovioOptions.scale = parseInt(this._currentOptions.zoomPercent);
+  verovioOptions.pageWidth = Math.max(this._container.offsetWidth, 100);
   
   if (mediaType === 'print') {
     verovioOptions.mmOutput = true;
@@ -243,11 +246,12 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
     verovioOptions.pageWidth = this._container.offsetWidth * 100 / this._currentOptions.zoomPercent;
   }
   
+  // Set spacing
   const shapeClassNames = (this._currentOptions.drawBackgroundShapes || []).concat(this._currentOptions.drawForegroundShapes || []);
   if (shapeClassNames.length > 0) {
     if (shapeClassNames.includes('ch-chord-position-label')) {
-      verovioOptions.spacingSystem = 12;
-      verovioOptions.pageMarginBottom = 100;
+      verovioOptions.spacingSystem = Math.max(verovioOptions.spacingSystem, 12);
+      verovioOptions.pageMarginBottom = Math.max(verovioOptions.pageMarginBottom, 100);
     }
     if (shapeClassNames.includes('ch-lyric-line-label')) {
       verovioOptions.pageMarginLeft = Math.max(verovioOptions.pageMarginLeft, 90);
@@ -264,23 +268,23 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
     verovioOptions.pageMarginTop = 220;
     if (this._currentOptions.showMelodyOnly) verovioOptions.spacingSystem += 5;
   }
+  }
+  if (this._currentOptions.showMeasureNumbers) {
+    verovioOptions.pageMarginLeft = Math.max(verovioOptions.pageMarginLeft, 30);
+    verovioOptions.pageMarginRight = Math.max(verovioOptions.pageMarginRight, 30);
+  }
+  if (this._currentOptions.showMelodyOnly) {
+    verovioOptions.spacingSystem += 5;
+    verovioOptions.pageMarginBottom = Math.max(verovioOptions.pageMarginBottom, 50);
+  }
   
+  // Transpose
   if (this._currentOptions.keySignatureId) {
     const keySignatureInfo = this.getKeySignatureInfo();
     const nearbyKeyIndex = keySignatureInfo.nearbyKeySignatures.findIndex(ks => ks.keySignatureId === this._currentOptions.keySignatureId);
     const nearbyKeyInfo = keySignatureInfo.nearbyKeySignatures[nearbyKeyIndex];
     const directionOperator = nearbyKeyIndex < 7 ? '-' : nearbyKeyIndex > 7 ? '+' : '';
     verovioOptions.transpose = directionOperator + nearbyKeyInfo.meiPnameAccid;
-  }
-  
-  if (this._currentOptions.showMeasureNumbers) {
-    verovioOptions.pageMarginLeft = Math.max(verovioOptions.pageMarginLeft, 30);
-    verovioOptions.pageMarginRight = Math.max(verovioOptions.pageMarginRight, 30);
-  }
-  
-  if (this._currentOptions.showMelodyOnly) {
-    verovioOptions.spacingSystem += 5;
-    verovioOptions.pageMarginBottom = Math.max(verovioOptions.pageMarginBottom, 50);
   }
   
   this._vrvToolkit.resetOptions();
@@ -299,9 +303,9 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
     } else {
       this._vrvToolkit.redoLayout();
     }
+    
+    if (redraw) this._drawScore();
   }
-  
-  if (redraw) this.drawScore();
 }
 
 ChScore.prototype.getOptions = function () {
@@ -334,46 +338,14 @@ ChScore.prototype.getMidi = function (format = 'note-sequence') {
   }
 }
 
-ChScore.prototype.drawScore = function () {
-  // Render to SVG
-  const numPages = this._vrvToolkit.getPageCount();
-  this._container.innerHTML = '';
-  for (let p = 1; p <= numPages; p++) {
-    let svg = this._vrvToolkit.renderToSVG(p);
-    svg = this._updateSvg(svg);
-    this._container.insertAdjacentHTML('beforeend', svg);
-  }
-  
-  // Add additional lyrics below the music
-  const lyricsBelowContainer = document.createElement('div');
-  lyricsBelowContainer.id = 'lyrics-below';
-  for (const section of this._scoreData.sections) {
-    if ((this._currentOptions.hideSectionIds ?? []).includes(section.sectionId) || section.placement !== 'below') {
-      continue;
-    }
-    const lyricContainer = document.createElement('p');
-    lyricContainer.dataset.chSectionId = section.sectionId;
-    const lyricLines = section.annotatedLyrics.replace(/\||•|_|◠|◡/g, '').trim().split('\n');
-    for (let ln = 0; ln < lyricLines.length; ln++) {
-      const lyricLineContainer = document.createElement('div');
-      let lineHtml = '';
-      if (section.marker && ln === 0) lineHtml += `<span class="label">${section.marker}. </span>`;
-      lineHtml += lyricLines[ln];
-      lyricLineContainer.innerHTML = lineHtml;
-      lyricContainer.append(lyricLineContainer);
-    }
-    lyricsBelowContainer.append(lyricContainer);
-  }
-  this._container.append(lyricsBelowContainer);
-}
-
 ChScore.prototype.removeScore = function () {
   this._removeStylesheets();
   this._resizeObserver?.disconnect()
   this._controller?.abort();
   this._container.innerHTML = '';
-  this._container.removeAttribute('data-status');
-  this._container.removeAttribute('data-width');
+  this._container.removeAttribute('data-ch-layout');
+  this._container.removeAttribute('data-ch-width');
+  this._container.removeAttribute('data-ch-height');
   this._container.score = undefined;
   this._chScores = this._chScores.filter(chScore => chScore._container !== this._container);
 }
@@ -726,7 +698,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   // When printing, Verovio page height options are set so that each system is drawn as a separate SVG element. This allows the sheet music to flow between pages more cleanly. However, when Verovio is set to respect encoded page and system breaks, page height options are ignored. Replacing page breaks with system breaks allows the page height options for printing to work as expected.
   const pageBreaks = this._scoreData.meiParsed.querySelectorAll('pb');
   for (const pageBreak of pageBreaks) {
-    const systemBreak = document.createElementNS('http://www.music-encoding.org/ns/mei', 'sb');
+    const systemBreak = this._scoreData.meiParsed.createElement('sb');
     Array.from(pageBreak.attributes).forEach(attribute => systemBreak.setAttribute(attribute.name, attribute.value));
     pageBreak.parentNode.replaceChild(systemBreak, pageBreak);
   }
@@ -1238,7 +1210,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
           staffNumbers: staffNumbers,
           lyricLabels: lyricLabels,
           lyricSyllables: lyricSyllables,
-          lyricIsSkipSymbol: lyricSyllables.join() === '—',
+          lyricIsSkipSymbol: ['—'].includes(lyricSyllables.join()),
           midiNotes: [], // Added later
           midiStartTime: null, // Added later
           midiEndTime: null, // Added later
@@ -1541,7 +1513,7 @@ ChScore.prototype._updateMei = function () {
       
       // Clean up endings
       for (const ending of this._scoreData.meiParsed.querySelectorAll('ending')) {
-        const endingSection = document.createElementNS('http://www.music-encoding.org/ns/mei', 'section');
+        const endingSection = this._scoreData.meiParsed.createElement('section');
         endingSection.setAttribute('xml:id', ending.getAttribute('xml:id'));
         endingSection.setAttribute('ch-chord-position', ending.getAttribute('ch-chord-position'));
         ending.before(endingSection);
@@ -1817,10 +1789,10 @@ ChScore.prototype._updateSvg = function (svg) {
   
   // Set up background and foreground shape layers
   const pageMarginElement = svgParsed.querySelector('.page-margin');
-  const backgroundShapes = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const backgroundShapes = svgParsed.createElement('g');
   backgroundShapes.classList.add('ch-shapes', 'ch-shapes-background');
   pageMarginElement.prepend(backgroundShapes);
-  const foregroundShapes = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const foregroundShapes = svgParsed.createElement('g');
   foregroundShapes.classList.add('ch-shapes', 'ch-shapes-foreground');
   pageMarginElement.append(foregroundShapes);
   
@@ -1878,7 +1850,7 @@ ChScore.prototype._updateSvg = function (svg) {
       // Draw staff labels
       const staffLabelClassName = 'ch-staff-label';
       for (const shapeLayer of shapeLayersByClassName[staffLabelClassName]) {
-        const staffLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        const staffLabel = svgParsed.createElement('text');
         staffLabel.setAttribute('x', systemX1 - 300);
         staffLabel.setAttribute('y', staffY1 + ((staffY2 - staffY1) / 2));
         staffLabel.setAttribute('font-size', 350);
@@ -1894,7 +1866,7 @@ ChScore.prototype._updateSvg = function (svg) {
       const staffRectClassName = 'ch-staff-rect';
       const leftExtension = shapeLayersByClassName['ch-chord-position-label'].length > 0 ? 1500 : 0;
       for (const shapeLayer of shapeLayersByClassName[staffRectClassName]) {
-        const staffRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        const staffRect = svgParsed.createElement('rect');
         staffRect.setAttribute('x', systemX1 - leftExtension);
         staffRect.setAttribute('y', staffY1);
         staffRect.setAttribute('width', systemX2 - systemX1 + leftExtension);
@@ -1915,7 +1887,7 @@ ChScore.prototype._updateSvg = function (svg) {
     // Draw system rects
     const systemRectClassName = 'ch-system-rect';
     for (const shapeLayer of shapeLayersByClassName[systemRectClassName]) {
-      const systemRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      const systemRect = svgParsed.createElement('rect');
       systemRect.setAttribute('x', systemX1);
       systemRect.setAttribute('y', systemY1);
       systemRect.setAttribute('width', systemX2 - systemX1);
@@ -1935,7 +1907,7 @@ ChScore.prototype._updateSvg = function (svg) {
       // Draw measure rects
       const measureRectClassName = 'ch-measure-rect';
       for (const shapeLayer of shapeLayersByClassName[measureRectClassName]) {
-        const measureRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        const measureRect = svgParsed.createElement('rect');
         measureRect.setAttribute('x', measureX1);
         measureRect.setAttribute('y', systemY1);
         measureRect.setAttribute('width', measureX2 - measureX1);
@@ -1964,7 +1936,7 @@ ChScore.prototype._updateSvg = function (svg) {
         const noteCircleClassName = 'ch-note-circle';
         for (const shapeLayer of shapeLayersByClassName[noteCircleClassName]) {
           if (noteSymbol.parentElement.classList.contains('rest')) continue;
-          const noteCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          const noteCircle = svgParsed.createElement('circle');
           noteCircle.setAttribute('cx', noteX1 + (noteheadWidth / 2));
           noteCircle.setAttribute('cy', noteY1);
           noteCircle.setAttribute('r', 180);
@@ -1988,7 +1960,7 @@ ChScore.prototype._updateSvg = function (svg) {
         // Draw chord position labels
         const cpLabelClassName = 'ch-chord-position-label';
         for (const shapeLayer of shapeLayersByClassName[cpLabelClassName]) {
-          const cpLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          const cpLabel = svgParsed.createElement('text');
           cpLabel.setAttribute('x', cpLineX);
           cpLabel.setAttribute('y', systemY2 + 800);
           cpLabel.setAttribute('font-size', 350);
@@ -2004,7 +1976,7 @@ ChScore.prototype._updateSvg = function (svg) {
         // Draw chord position lines
         const cpLineClassName = 'ch-chord-position-line';
         for (const shapeLayer of shapeLayersByClassName[cpLineClassName]) {
-          const cpLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          const cpLine = svgParsed.createElement('line');
           cpLine.setAttribute('x1', cpLineX);
           cpLine.setAttribute('y1', systemY1);
           cpLine.setAttribute('x2', cpLineX);
@@ -2020,7 +1992,7 @@ ChScore.prototype._updateSvg = function (svg) {
         const cpRectClassName = 'ch-chord-position-rect';
         const bottomExtension = shapeLayersByClassName['ch-chord-position-label'].length > 0 ? 1000 : 0;
         for (const shapeLayer of shapeLayersByClassName[cpRectClassName]) {
-          const cpRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          const cpRect = svgParsed.createElement('rect');
           cpRect.setAttribute('x', cpRectX1);
           cpRect.setAttribute('y', systemY1);
           cpRect.setAttribute('width', measureX2 - cpRectX1); // Updated later if not the last chord position in the measure
@@ -2035,18 +2007,7 @@ ChScore.prototype._updateSvg = function (svg) {
           if (previousCpRect) previousCpRect.setAttribute('width', cpRectX1 - parseInt(previousCpRect.getAttribute('x')));
           previousCpRect = cpRect;
         }
-        
       }
-      
-    }
-    
-    // Add missing system line at the left edge of the system (this happens after removing staves from the MEI, such as the empty staves in True to the Faith, 1985 Hymns)
-    if (!system.querySelector(':scope > path')) {
-      const systemLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      // Match system lines drawn by Verovio (13px inset and 27px stroke width)
-      systemLine.setAttribute('d', `M13 ${systemY1} L13 ${lastStaffY2}`);
-      systemLine.setAttribute('stroke-width', '27');
-      system.insertBefore(systemLine, system.firstChild);
     }
   }
   
@@ -2096,7 +2057,7 @@ ChScore.prototype._updateSvg = function (svg) {
           const lyricLineLabelClassName = 'ch-lyric-line-label';
           if (!addedLyricLabels.includes(lyric.dataset.chLyricLineId)) {
             for (const shapeLayer of shapeLayersByClassName[lyricLineLabelClassName]) {
-              const lyricLineLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+              const lyricLineLabel = svgParsed.createElement('text');
               lyricLineLabel.setAttribute('x', measureX1 - 300);
               lyricLineLabel.setAttribute('y', lyricY);
               lyricLineLabel.setAttribute('font-size', 350);
@@ -2115,7 +2076,7 @@ ChScore.prototype._updateSvg = function (svg) {
           const lyricRectClassName = 'ch-lyric-rect';
           for (const shapeLayer of shapeLayersByClassName[lyricRectClassName]) {
             if (lyric.classList.contains('label')) continue;
-            const lyricRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            const lyricRect = svgParsed.createElement('rect');
             lyricRect.setAttribute('x', lyricX);
             lyricRect.setAttribute('y', lyricY - lyricFontSize + lyricPadding);
             lyricRect.setAttribute('width', measureX2 - lyricX); // Updated later
@@ -2207,7 +2168,7 @@ ChScore.prototype._updateSvg = function (svg) {
           const measure = harmElement.closest('.measure');
           let chordChartsGroup = measure.querySelector('.ch-chord-set-images');
           if (!chordChartsGroup) {
-            chordChartsGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            chordChartsGroup = svgParsed.createElement('g');
             chordChartsGroup.classList.add('ch-chord-set-images');
             measure.append(chordChartsGroup);
           }
@@ -2751,14 +2712,17 @@ ChScore.prototype._defaultInputData = {
 
 // Default Verovio options
 // See https://book.verovio.org/toolkit-reference/toolkit-options.html
-// Some of these options are adjusted when printing, or when displaying chord set images
+// Some of these defaults are adjusted in setOptions()
 ChScore.prototype._defaultVerovioOptions = {
   header: 'none', footer: 'none', // Hide header and footer
   pageMarginTop: 0, pageMarginBottom: 0, // Minimal top and bottom margins
   pageMarginLeft: 4, pageMarginRight: 4, // Slight margin to prevent elements at the edge of the score from getting clipped
-  pageHeight: 10000, // Large height to create one continuous page with all systems
+  pageHeight: 60000, // Large height to create one continuous page with all systems
+  pageWidth: 100, // Adjusted in setOptions()
   adjustPageHeight: true, // Shrink the page height to avoid extra whitespace at the bottom
-  scaleToPageSize: false, // Don't expand music to fill the page
+  adjustPageWidth: false, // Don't shrink page width
+  scaleToPageSize: true, // Responsive layout without needing as much manual calculation
+  scale: 40, // Adjusted in setOptions()
   spacingStaff: 16, // Vertical spacing
   spacingSystem: 2, // Vertical spacing
   spacingLinear: 0.25, // Horizontal spacing
@@ -2770,7 +2734,7 @@ ChScore.prototype._defaultVerovioOptions = {
   lyricNoStartHyphen: true, // Don't draw extra hyphen on the left when a word wraps to the next system
   lyricTopMinMargin: 8.0, // Prevent lyrics from getting too close to notation
   breaks: 'smart', // Prefer breaking at encoded system breaks, but only if they're nearby
-  breaksSmartSb: 0.8, // How close nearby system break needs to be for it to be used
+  breaksSmartSb: 0.6, // How close nearby system break needs to be for it to be used
   minLastJustification: 0.4, // Justification of last system
   breaksNoWidow: true, // Prevent single measure on last page
   condense: 'auto', // Hide empty staves. Example: "True to the Faith" (1985 Hymns). Requires setting scoreDef@optimize to 'true' in the MEI.
@@ -2799,9 +2763,9 @@ ChScore.prototype._defaultVerovioOptions = {
 // Default options
 ChScore.prototype._defaultOptions = {
   zoomPercent: 40,
-  keySignatureId: null, // null, 
-  expandScore: false, // false, 'intro', 'full-score'
-  showChordSet: false, // true, false, or chordSetId
+  keySignatureId: null,
+  expandScore: false,
+  showChordSet: false,
   showChordSetImages: false,
   showFingeringMarks: false,
   showMeasureNumbers: false,
@@ -2968,7 +2932,7 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
   function getPartName(partId) {
     const capitalizedWords = [];
     for (const word of partId.split('-')) {
-      const capitalizedWord = word[0].toUpperCase() + (word.length > 1 ? word.slice(1) : '');
+      const capitalizedWord = word[0].toUpperCase() + word.slice(1);
       capitalizedWords.push(capitalizedWord);
     }
     return capitalizedWords.join(' ');
@@ -3282,7 +3246,7 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
 
 // Help from AI: https://claude.ai/chat/71346065-9bc9-4cb9-b8dd-f8718ce5dc10
 // JavaScript version: https://claude.ai/chat/ab222e85-8da6-494d-97dc-f969cb8097f7
-ChScore.prototype._alignSyllablesToLyrics = function alignSyllablesToLyrics(expandedLyrics, syllables, staffNumbers) {
+ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables, staffNumbers) {
     // Longest common substring similarity (like Python's SequenceMatcher)
     function similarity(str1, str2) {
       const matrix = Array(str1.length + 1).fill(null)
