@@ -81,12 +81,37 @@ ChScore.prototype._loadEventListeners = function () {
   }, { signal: this._controller.signal })
   
   // Score tap
-  const respondToClick = (event) => {
+  const respondToTap = (event, isLongPress = false) => {
     if (!this._currentOptions?.customEvents?.includes('ch:tap')) return;
-    const pointData = this._getPointData(event.clientX, event.clientY);
-    this._container.dispatchEvent(new CustomEvent('ch:tap', { detail: structuredClone(pointData) }));
+    this._container.dispatchEvent(new CustomEvent('ch:tap', { detail: {
+      pointData: this._getPointData(event.clientX, event.clientY),
+      pointerEvent: event,
+      isLongPress: isLongPress,
+    } }));
   }
-  this._container.addEventListener('click', respondToClick, { signal: this._controller.signal });
+  
+  // Score pointer down
+  let downTarget = null;
+  let tapTimeoutId = null;
+  const respondToPointerDown = (event) => {
+    downTarget = event.target;
+    tapTimeoutId = setTimeout(() => {
+      tapTimeoutId = null;
+      respondToTap(event, true);
+    }, 500);
+  }
+  this._container.addEventListener('pointerdown', respondToPointerDown, { signal: this._controller.signal });
+  
+  // Score pointer up
+  const respondToPointerUp = (event) => {
+    clearTimeout(tapTimeoutId);
+    if (tapTimeoutId !== null && event.target === downTarget && event.type === 'pointerup') {
+      respondToTap(event);
+    }
+    tapTimeoutId = null;
+  }
+  this._container.addEventListener('pointerup', respondToPointerUp, { signal: this._controller.signal });
+  this._container.addEventListener('pointerleave', respondToPointerUp, { signal: this._controller.signal });
   
   // Score hover
   let hoverState = {};
@@ -214,7 +239,9 @@ ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl =
   this.drawScore();
   this._loadMidi();
   
-  console.info('Chorister.js: Score loaded');
+  if (this._currentOptions.customEvents.includes('ch:scoreload')) {
+    this._container.dispatchEvent(new CustomEvent('ch:scoreload', { detail: { scoreData: this._scoreData } }));
+  }
   return this._scoreData;
 }
 
@@ -683,7 +710,9 @@ ChScore.prototype._loadMidi = function () {
   // Save changes to MIDI note sequence
   this._scoreData.midiNoteSequence = midiNoteSequence;
   
-  console.info('Chorister.js: MIDI ready');
+  if (this._currentOptions.customEvents.includes('ch:midiready')) {
+    this._container.dispatchEvent(new CustomEvent('ch:midiready', { detail: { midiNoteSequence: midiNoteSequence } }));
+  }
 }
 
 ChScore.prototype._parseAndAnnotateMei = function () {
@@ -2773,7 +2802,7 @@ ChScore.prototype._defaultOptions = {
   hideSectionIds: [],
   drawBackgroundShapes: [],
   drawForegroundShapes: [],
-  customEvents: [],
+  customEvents: ['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw'],
 }
 
 ChScore.prototype._getKeySignatures = function (tonality = 'major') {

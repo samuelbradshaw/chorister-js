@@ -537,7 +537,7 @@ Options can be passed in to Chorister.js when calling the `load()` method to loa
 - **hideSectionIds** – Section IDs to hide. Possible values: One or more section (intro, verse, chorus, etc.) IDs. Array. Default: `[]`.
 - **drawBackgroundShapes** – Background shapes to draw. Possible values: See “Background and foreground shapes.” Array. Default: `[]`.
 - **drawForegroundShapes** – Foreground shapes to draw. Possible values: See “Background and foreground shapes.” Array. Default: `[]`.
-- **customEvents** – Custom events to send. Possible values: See “Custom events.” Array. Default: `[]`.
+- **customEvents** – Custom events to send. Possible values: See “Custom events.” Array. Default: `['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw']`.
 
 ### <a name="custom-events"></a>Custom events
 
@@ -545,6 +545,9 @@ When enabled in options, Chorister.js sends [custom events](https://developer.mo
 
 - **ch:tap** – Sent when the user taps on a shape in the score.
 - **ch:hover** – Sent when the user hovers over a shape in the score with a mouse or trackpad.
+- **ch:midiready** – Sent when MIDI is processed and ready to use.
+- **ch:scoreload** – Sent when the score is loaded.
+- **ch:scoredraw** – Sent when the score is drawn or redrawn on the page.
 
 Each event has a `detail` attribute that provides additional information. For example, the `ch:tap` event could be used to trigger playback from a specific place in the score:
 

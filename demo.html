@@ -261,7 +261,6 @@
         const options = {
           drawBackgroundShapes: ['ch-chord-position-rect', 'ch-staff-rect', 'ch-note-circle', 'ch-lyric-rect'],
           drawForegroundShapes: ['ch-chord-position-rect'],
-          customEvents: ['ch:tap'],
         }
         chScore = new ChScore('#score-container');
         scoreData = await chScore.load(scoreType, inputData, options);
@@ -271,11 +270,9 @@
         
         // Listen for Chorister.js tap events
         scoreContainer.addEventListener('ch:tap', (event) => {
-          tapDetailsArea.textContent = JSON.stringify(event.detail, null, 2);
+          tapDetailsArea.textContent = JSON.stringify(event.detail.pointData, null, 2);
         });
         
-        // Log score data for debugging
-        console.log(scoreData);
       }
       
       function loadCustomScoreForm() {
@@ -745,6 +742,11 @@
         URL.revokeObjectURL(midiUrl);
       }
       
+      // Log score data for debugging
+      scoreContainer.addEventListener('ch:scoreload', (event) => {
+        console.log(event.detail.scoreData);
+      });
+
     </script>
   </body>
 </html>
