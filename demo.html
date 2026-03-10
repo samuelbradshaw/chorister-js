@@ -25,10 +25,6 @@
         background-color: #ddd;
         margin: 0.5em 0; padding: 0;
       }
-      #credits {
-        border-top: 1px solid #ddd;
-        padding: 1em 0;
-      }
       #action-bar {
         display: flex;
         justify-content: space-between;
@@ -44,7 +40,11 @@
       #score-container[data-ch-scale-to-fit="true"],
       #score-container[data-ch-layout="paginated"] {
         /* Scale to fit and paginated layout require a fixed container size */
-        height: calc(100vh - 2em);
+        height: calc(100vh - 4em);
+      }
+      [data-ch-footer] {
+        border-top: 1px solid #ddd;
+        padding: 1em 0;
       }
       
       /* Custom score form styles */
@@ -102,7 +102,7 @@
           position: absolute;
           inset: 0;
         }
-        #title, #credits {
+        #title {
           width: 172mm;
           margin-inline: auto;
         }
@@ -132,8 +132,7 @@
       <!-- Print area -->
       <div id="print-area">
         <h2 id="title"></h2>
-        <div id="score-container">Loading…</div>
-        <p id="credits"></p>
+        <div id="score-container"><p>Loading…</p></div>
       </div>
       
       <!-- Custom score form -->
@@ -262,7 +261,6 @@
       const demoScores = getDemoScores();
       const scoreContainer = document.getElementById('score-container');
       const titleArea = document.getElementById('title');
-      const creditsArea = document.getElementById('credits');
       const tapDetailsArea = document.getElementById('tap-details');
       
       // Get scoreId from URL and load score or custom score form
@@ -274,13 +272,13 @@
       }
       document.body.dataset.scoreId = scoreId;
       titleArea.textContent = demoScores[scoreId].title;
-      creditsArea.innerHTML = demoScores[scoreId].credits;
       
       async function loadScore(scoreId) {
         // Initialize and load score
         const scoreType = demoScores[scoreId].scoreType;
         const inputData = demoScores[scoreId];
         const options = {
+          footerContent: demoScores[scoreId].credits,
           drawBackgroundShapes: ['ch-chord-position-rect', 'ch-staff-rect', 'ch-note-circle', 'ch-lyric-rect'],
           drawForegroundShapes: ['ch-chord-position-rect'],
         }
@@ -305,7 +303,6 @@
         const partsTemplateInput = customScoreForm.querySelector('[name="partsTemplate"]');
         
         scoreContainer.style.display = 'none';
-        creditsArea.style.display = 'none';
         
         const loadScoreButton = document.getElementById('load-score-btn');
         loadScoreButton.addEventListener('click', (event) => {
@@ -504,7 +501,7 @@
         const demoScores = {
           'how-great-the-wisdom-and-the-love': {
             title: 'How Great the Wisdom and the Love',
-            credits: '<i>Text:</i> Eliza R. Snow (1804–1887).<br><i>Music:</i> Thomas McIntyre (1832–1914).<br>Adapted from <i>Latter-day Saint Hymns</i> (1927).',
+            credits: '<p><i>Text:</i> Eliza R. Snow (1804–1887).<br><i>Music:</i> Thomas McIntyre (1832–1914).<br>Adapted from <i>Latter-day Saint Hymns</i> (1927).</p>',
             scoreType: 'musicxml',
             scoreId: 'how-great-the-wisdom-and-the-love',
             scoreUrl: 'resources/how-great-the-wisdom-and-the-love.musicxml',
@@ -517,7 +514,7 @@
           },
           'it-is-well-with-my-soul': {
             title: 'It Is Well with My Soul',
-            credits: '<i>Text:</i> Horatio G. Spafford (1828–1888).<br><i>Music:</i> Philip Paul Bliss (1838–1876).<br>Adapted from <i>Gospel Hymns, No. 2</i> (1876). Descant by Samuel H. Bradshaw (1990–).',
+            credits: '<p><i>Text:</i> Horatio G. Spafford (1828–1888).<br><i>Music:</i> Philip Paul Bliss (1838–1876).<br>Adapted from <i>Gospel Hymns, No. 2</i> (1876). Descant by Samuel H. Bradshaw (1990–).</p>',
             scoreType: 'musicxml',
             scoreId: 'it-is-well-with-my-soul',
             scoreUrl: 'resources/it-is-well-with-my-soul.musicxml',
@@ -760,7 +757,7 @@
           },
           'this-little-light-of-mine': {
             title: 'This Little Light of Mine',
-            credits: 'African American spiritual.',
+            credits: '<p>African American spiritual.</p>',
             scoreType: 'musicxml',
             scoreId: 'this-little-light-of-mine',
             scoreUrl: 'resources/this-little-light-of-mine.musicxml',

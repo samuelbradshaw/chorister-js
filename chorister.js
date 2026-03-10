@@ -35,16 +35,7 @@ ChScore.prototype._loadStyles = function () {
   this._stylesheets = {};
   const generalStylesheet = this._addStylesheet('general');
   generalStylesheet.replaceSync(`
-    [data-ch-layout], [data-ch-svg] {
-      display: flex;
-      flex-direction: column;
-    }
-    [data-ch-lyrics-below] {
-      font-size: calc(0.025em * var(--scale, 40));
-    }
-    [data-ch-layout="horizontal-scroll"] [data-ch-svg] {
-      overflow: scroll;
-    }
+    /* Shape styles */
     .ch-staff-label, .ch-chord-position-label, .ch-lyric-line-label {
       opacity: 1;
     }
@@ -54,23 +45,43 @@ ChScore.prototype._loadStyles = function () {
       opacity: 0;
     }
     
-    [data-ch-layout="print"] {
-      > * {
-        display: block;
-        margin-inline: auto;
-        width: 172mm;
-      }
-      [data-ch-lyrics-below] {
-        font-size: inherit;
-      }
-      svg.definition-scale {
-        color: black !important;
-        fill: black !important;
-        stroke: black !important;
-      }
-      g.ch-shapes > *:not(.ch-staff-label, .ch-chord-position-label, .ch-lyric-line-label) {
-        display: none;
-      }
+    /* Layout styles */
+    [data-ch-page] {
+      font-size: calc(0.025em * var(--scale, 40));
+    }
+    [data-ch-layout="horizontal-scroll"] [data-ch-svg] {
+      overflow: scroll hidden;
+    }
+    [data-ch-layout="paginated"] {
+      overflow: scroll hidden;
+      scroll-snap-type: x mandatory;
+      display: flex;
+      column-gap: 2em;
+    }
+    [data-ch-layout="paginated"] [data-ch-page] {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      flex-grow: 0;
+      flex-shrink: 0;
+      scroll-snap-align: start;
+    }
+    
+    /* Print styles */
+    [data-ch-layout="print"] [data-ch-page] {
+      display: block;
+      margin-inline: auto;
+      width: 172mm;
+      font-size: inherit;
+    }
+    [data-ch-layout="print"] svg.definition-scale {
+      color: black !important;
+      fill: black !important;
+      stroke: black !important;
+    }
+    [data-ch-layout="print"] g.ch-shapes > *:not(.ch-staff-label, .ch-chord-position-label, .ch-lyric-line-label) {
+      display: none !important;
     }
   `);
 }
@@ -144,7 +155,8 @@ ChScore.prototype._loadEventListeners = function () {
     for (const entry of entries) {
       const width = Math.round(entry.borderBoxSize[0].inlineSize);
       const height = Math.round(entry.borderBoxSize[0].blockSize);
-      if (width !== parseInt(this._container.dataset.chWidth) || (Array.isArray(this._currentOptions.scale) && height !== parseInt(this._container.dataset.chHeight))) {
+      const fixedHeight = (Array.isArray(this._currentOptions.scale) || this._currentOptions.layout === 'paginated');
+      if (width !== parseInt(this._container.dataset.chWidth) || (fixedHeight && height !== parseInt(this._container.dataset.chHeight))) {
         this.setOptions(this._currentOptions);
       }
       this._container.dataset.chWidth = width;
@@ -299,7 +311,7 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
   } else if (this._currentOptions.layout === 'horizontal-scroll') {
     verovioOptions.breaks = 'none'
   } else if (this._currentOptions.layout === 'paginated') {
-//     verovioOptions.systemMaxPerPage = 1;
+    verovioOptions.systemMaxPerPage = 1;
     verovioOptions.pageHeight = Math.max(this._container.offsetHeight, 100);
   }
   this._container.style.setProperty('--scale', verovioOptions.scale);
@@ -323,6 +335,7 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
     verovioOptions.spacingNonLinear = 0.5;
     verovioOptions.spacingSystem = 22;
     verovioOptions.pageMarginTop = 220;
+    verovioOptions.pageMarginBottom = 0;
   }
   if (this._currentOptions.showMeasureNumbers) {
     verovioOptions.pageMarginLeft = Math.max(verovioOptions.pageMarginLeft, 30);
@@ -2254,20 +2267,50 @@ ChScore.prototype._drawScore = function () {
   this._container.dataset.chStatus = 'drawing';
   this._container.innerHTML = '';
   
-  // Create inner containers
-  const innerContainers = {
-    header: document.createElement('div'),
-    svg: document.createElement('div'),
-    lyricsBelow: document.createElement('div'),
-    footer: document.createElement('div'),
+  // Add attributes: @data-ch-width, @data-ch-height
+  this._container.dataset.chWidth = this._container.offsetWidth;
+  this._container.dataset.chHeight = this._container.offsetHeight;
+  
+  const pages = [];
+  const createPage = () => {
+    const page = document.createElement('div');
+    const pageNumber = pages.length + 1;
+    page.setAttribute('data-ch-page', pageNumber);
+    page.style.visibility = 'hidden';
+    pages.push(page)
+    this._container.append(page);
   }
-  for (const [name, container] of Object.entries(innerContainers)) {
-    const datasetName = 'ch' + name[0].toUpperCase() + name.slice(1);
-    container.dataset[datasetName] = '';
-    container.style.visibility = 'hidden';
+  createPage();
+  
+  let lyricsBelowInnerContainer;
+  const addInnerContainer = (name, content) => {
+    const innerContainer = document.createElement('div');
+    innerContainer.setAttribute(`data-ch-${name}`, '');
+    if (name === 'svg') {
+      innerContainer.innerHTML = content;
+      pages.at(-1).insertBefore(innerContainer, lyricsBelowInnerContainer);
+    } else {
+      innerContainer.append(content);
+      pages.at(-1).append(innerContainer);
+    }
+    return innerContainer;
   }
   
-  // Add lyrics below the music
+  // Parse header and footer content
+  let headerNodes = [], footerNodes = [];
+  if (this._currentOptions.headerContent || this._currentOptions.footerContent) {
+    const parser = new DOMParser();
+    headerNodes = Array.from(parser.parseFromString(this._currentOptions.headerContent ?? '', 'text/html').body.childNodes);
+    footerNodes = Array.from(parser.parseFromString(this._currentOptions.footerContent ?? '', 'text/html').body.childNodes);
+  }
+  
+  // Add header content
+  if (headerNodes.length === 0) headerNodes.push(document.createTextNode(''));
+  for (const headerNode of headerNodes) {
+    addInnerContainer('header', headerNode);
+  }
+  
+  // Add lyrics content
   for (const section of this._scoreData.sections) {
     if ((this._currentOptions.hideSectionIds ?? []).includes(section.sectionId) || section.placement !== 'below') {
       continue;
@@ -2276,36 +2319,33 @@ ChScore.prototype._drawScore = function () {
     lyricParagraph.dataset.chSectionId = section.sectionId;
     const lyricLines = section.annotatedLyrics.replace(/\||•|_|◠|◡/g, '').trim().split('\n');
     for (let ln = 0; ln < lyricLines.length; ln++) {
-      const lyricLineContainer = document.createElement('div');
+      const lyricLineContainer = document.createElement('span');
+      const lyricLineBreak = document.createElement('br');
       let lineHtml = '';
       if (section.marker && ln === 0) lineHtml += `<span class="label">${section.marker}. </span>`;
       lineHtml += lyricLines[ln];
       lyricLineContainer.innerHTML = lineHtml;
       lyricParagraph.append(lyricLineContainer);
+      lyricParagraph.append(lyricLineBreak);
     }
-    innerContainers.lyricsBelow.append(lyricParagraph);
+    addInnerContainer('lyrics-below', lyricParagraph);
+  }
+  lyricsBelowInnerContainer = pages.at(-1).querySelector('[data-ch-lyrics-below]');
+  if (!lyricsBelowInnerContainer) {
+    lyricsBelowInnerContainer = addInnerContainer('lyrics-below', document.createTextNode(''));
   }
   
-  // Add inner containers to page
-  for (const container of Object.values(innerContainers)) {
-    this._container.append(container);
+  // Add footer content
+  if (footerNodes.length === 0) footerNodes.push(document.createTextNode(''));
+  for (const footerNode of footerNodes) {
+    addInnerContainer('footer', footerNode);
   }
-  
-  // Add attributes: @data-ch-width, @data-ch-height
-  this._container.dataset.chWidth = this._container.offsetWidth;
-  this._container.dataset.chHeight = this._container.offsetHeight;
   
   // If scale option is an array (min and max values), attempt to find an optimal scale that fits on a single page, without getting too small
   if (Array.isArray(this._currentOptions.scale) && this._currentOptions.layout !== 'print') {
     const getPageCountAtScale = (scale) => {
       this._container.style.setProperty('--scale', scale);
-      const availableHeight = Math.max(
-        this._container.offsetHeight - (
-          innerContainers.header.offsetHeight +
-          innerContainers.lyricsBelow.offsetHeight +
-          innerContainers.footer.offsetHeight
-        ), 100
-      );
+      const availableHeight = Math.max(this._container.offsetHeight - pages[0].scrollHeight, 100);
       this._vrvToolkit.setOptions({ scale: scale, pageHeight: availableHeight });
       this._vrvToolkit.redoLayout();
       return this._vrvToolkit.getPageCount();
@@ -2325,24 +2365,41 @@ ChScore.prototype._drawScore = function () {
     getPageCountAtScale(minScale);
   }
     
-  // Render to SVG
+  // Render SVG
   const numPages = this._vrvToolkit.getPageCount();
   for (let p = 1; p <= numPages; p++) {
     let svg = this._vrvToolkit.renderToSVG(p);
     svg = this._updateSvg(svg);
-    innerContainers.svg.insertAdjacentHTML('beforeend', svg);
+    addInnerContainer('svg', svg);
   }
   
   // If the score container has a fixed height that's not tall enough for the rendered score, add bottom margin to increase the available space. Setting container height directly is avoided, because that could trigger a redraw.
-  if (this._container.offsetHeight < this._container.scrollHeight) {
+  if (this._container.offsetHeight < this._container.scrollHeight && !['paginated', 'print'].includes(this._currentOptions.layout)) {
     this._container.style.marginBottom = `${this._container.scrollHeight - this._container.offsetHeight}px`;
   } else {
     this._container.style.marginBottom = '';
   }
   
-  // Remove visibility hidden
-  for (const container of Object.values(innerContainers)) {
-    container.style.visibility = '';
+  // Paginated layout: sort inner containers into pages
+  if (this._currentOptions.layout === 'paginated' && pages[0].scrollHeight > this._container.offsetHeight) {
+    let cumulativeHeight = 0;
+    for (const element of pages[0].children) {
+      const height = element.getBoundingClientRect().height;
+      if (cumulativeHeight + height > this._container.offsetHeight) {
+        createPage();
+        cumulativeHeight = 0;
+      }
+      cumulativeHeight += height;
+      element.pageIndex = pages.length - 1;
+    }
+    for (const element of Array.from(pages[0].children)) {
+      if (element.pageIndex !== 0) pages[element.pageIndex].append(element);
+    }
+  }
+  
+  // Remove temporary styles
+  for (const page of pages) {
+    page.style.visibility = '';
   }
   
   this._container.dataset.chStatus = 'ready';
@@ -2936,6 +2993,8 @@ ChScore.prototype._defaultOptions = {
   showFingeringMarks: false,  // true or false
   showMeasureNumbers: false,  // true or false
   showMelodyOnly: false,      // true or false
+  headerContent: '',          // HTML string
+  footerContent: '',          // HTML string
   hideSectionIds: [],         // array of section IDs
   drawBackgroundShapes: [],   // array of shape class names
   drawForegroundShapes: [],   // array of shape class names

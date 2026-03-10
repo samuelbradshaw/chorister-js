@@ -534,6 +534,8 @@ Options can be passed in to Chorister.js when calling the `load()` method to loa
 - **showFingeringMarks** – Whether fingering marks should be visible. Only applies if the score has fingering marks. Boolean. Default: `false`.
 - **showMeasureNumbers** – Whether measure numbers should be visible. Boolean. Default: `false`.
 - **showMelodyOnly** – Whether non-melody notes should be hidden. Boolean. Default: `false`.
+- **headerContent** – HTML content to display at the beginning of the score. Header and footer content is scaled with the score and included when printing. String or `null`. Default: `null`.
+- **footerContent** – HTML content to display at the end of the score. Header and footer content is scaled with the score and included when printing. String or `null`. Default: `null`.
 - **hideSectionIds** – Section IDs to hide. Possible values: One or more section (intro, verse, chorus, etc.) IDs. Array. Default: `[]`.
 - **drawBackgroundShapes** – Background shapes to draw. Possible values: See “Background and foreground shapes.” Array. Default: `[]`.
 - **drawForegroundShapes** – Foreground shapes to draw. Possible values: See “Background and foreground shapes.” Array. Default: `[]`.
@@ -598,10 +600,11 @@ These data attributes are set on the score container:
 
 The score container has inner containers identified by these data attributes:
 
-- **@data-ch-header** – Attribute on element that contains header content.
+- **@data-ch-page** – Attribute on each page of the score. The attribute value is the page number.
 - **@data-ch-svg** – Attribute on element that contains the SVG sheet music.
 - **@data-ch-lyrics-below** – Attribute on element that contains lyrics below the sheet music.
-- **@data-ch-footer** – Attribute on element that contains footer content.
+- **@data-ch-header** – Attribute on element that contains header content (set with `headerContent` option).
+- **@data-ch-footer** – Attribute on element that contains footer content (set with `footerContent` option).
 
 Additionally, the score container has a `style` attribute with the CSS [custom property](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/--*) `--scale`. This can be used to adjust the relative size of header and footer content and verses below.
 
