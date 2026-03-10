@@ -35,6 +35,16 @@ ChScore.prototype._loadStyles = function () {
   this._stylesheets = {};
   const generalStylesheet = this._addStylesheet('general');
   generalStylesheet.replaceSync(`
+    [data-ch-layout], [data-ch-svg] {
+      display: flex;
+      flex-direction: column;
+    }
+    [data-ch-lyrics-below] {
+      font-size: calc(0.025em * var(--scale, 40));
+    }
+    [data-ch-layout="horizontal-scroll"] [data-ch-svg] {
+      overflow: scroll;
+    }
     .ch-staff-label, .ch-chord-position-label, .ch-lyric-line-label {
       opacity: 1;
     }
@@ -43,17 +53,15 @@ ChScore.prototype._loadStyles = function () {
     .ch-note-circle, .ch-lyric-rect {
       opacity: 0;
     }
-    @media print {
-      ${this._containerSelector} > * {
+    
+    [data-ch-layout="print"] {
+      > * {
         display: block;
         margin-inline: auto;
+        width: 172mm;
       }
-      ${this._containerSelector} > svg {
-        margin-top: 4mm;
-      }
-      #lyrics-below {
-        width: 172mm; /* Same width as SVG when printing */
-        text-align: left;
+      [data-ch-lyrics-below] {
+        font-size: inherit;
       }
       svg.definition-scale {
         color: black !important;
@@ -72,12 +80,14 @@ ChScore.prototype._loadEventListeners = function () {
   this._controller = new AbortController;
   
   // Print
+  let previousLayout = null;
   window.addEventListener('beforeprint', (event) => {
     // TODO: Add blank space at the top of each page (except for the first page), so that systems on subsequent pages aren't higher than the title when viewing them side-by-side
-    this.setOptions(this._currentOptions, true, 'print');
+    previousLayout = this._currentOptions.layout;
+    this.setOptions({ layout: 'print' });
   }, { signal: this._controller.signal })
   window.addEventListener('afterprint', (event) => {
-    this.setOptions(this._currentOptions, true, 'screen');
+    this.setOptions({ layout: previousLayout });
   }, { signal: this._controller.signal })
   
   // Score tap
@@ -129,16 +139,16 @@ ChScore.prototype._loadEventListeners = function () {
   this._container.addEventListener('mouseleave', (event) => respondToMouseMove(event, true), { signal: this._controller.signal });
   
   // Score container resize
-  this._resizeObserver = null;
-  this._container.dataset.width = Math.round(this._container.clientWidth - parseInt(window.getComputedStyle(this._container).getPropertyValue('padding-left')) - parseInt(window.getComputedStyle(this._container).getPropertyValue('padding-right')));
   this._resizeObserver = new ResizeObserver(this._debounce((entries) => {
+    if (!this._scoreData) return;
     for (const entry of entries) {
-      const container = entry.target;
-      const width = Math.round(entry.contentBoxSize[0].inlineSize);
-      if (this._scoreData && width !== parseInt(container.dataset.width)) {
-        this.setOptions(this._currentOptions, true);
-        container.dataset.width = width;
+      const width = Math.round(entry.borderBoxSize[0].inlineSize);
+      const height = Math.round(entry.borderBoxSize[0].blockSize);
+      if (width !== parseInt(this._container.dataset.chWidth) || (Array.isArray(this._currentOptions.scale) && height !== parseInt(this._container.dataset.chHeight))) {
+        this.setOptions(this._currentOptions);
       }
+      this._container.dataset.chWidth = width;
+      this._container.dataset.chHeight = height;
     }
   }, 200));
   this._resizeObserver.observe(this._container);
@@ -148,6 +158,7 @@ ChScore.prototype._loadEventListeners = function () {
 /********************** Public methods **********************/
 
 ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl = null, midiUrl = null, lyricsUrl = null, scoreContent = null, midiNoteSequence = null, lyricsText = null, parts = null, partsTemplate = null, sections = null, chordSets = null, fermatas = null }, options = this._defaultOptions) {
+  this._container.dataset.chStatus = 'preparing';
   if (!scoreType || !(scoreUrl || scoreContent)) {
     console.error(`Score data is incomplete: scoreType and scoreUrl (or scoreContent) are required. Loading default score.`);
     scoreType = this._defaultInputData.scoreType;
@@ -196,6 +207,7 @@ ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl =
   ]);
   
   // Load score into Verovio
+  this._container.dataset.chStatus = 'processing';
   this._vrvToolkit = new verovio.toolkit();
   this.setOptions(options, false);
   if (scoreContent instanceof ArrayBuffer) {
@@ -236,8 +248,10 @@ ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl =
   
   // Process and render MEI and MIDI
   this._parseAndAnnotateMei();
-  this.drawScore();
   this._loadMidi();
+  
+  // Draw score
+  this._drawScore();
   
   if (this._currentOptions.customEvents.includes('ch:scoreload')) {
     this._container.dispatchEvent(new CustomEvent('ch:scoreload', { detail: { scoreData: this._scoreData } }));
@@ -245,33 +259,50 @@ ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl =
   return this._scoreData;
 }
 
-ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaType = 'screen') {
+ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
   this._currentOptions = this._currentOptions ?? {};
   for (const key of Object.keys(this._defaultOptions)) {
     this._currentOptions[key] = this._currentOptions[key] ?? this._defaultOptions[key];
+    // Normalize scale option
+    if (key === 'scale' && Array.isArray(this._currentOptions.scale)) {
+      let scale = this._currentOptions.scale;
+      scale = [parseInt(scale.at(0)), parseInt(scale.at(-1))];
+      if (scale[0] === scale[1]) scale = scale[0] ?? this._defaultOptions.scale;
+      this._currentOptions.scale = scale;
+    }
   }
   const updatedOptionKeys = [];
   const oldOptions = structuredClone(this._currentOptions);
   for (const key of Object.keys(optionsToUpdate)) {
-    if (oldOptions[key] !== optionsToUpdate[key]) updatedOptionKeys.push(key);
+    if ((oldOptions[key] ?? '').toString() !== (optionsToUpdate[key] ?? '').toString()) updatedOptionKeys.push(key);
     this._currentOptions[key] = optionsToUpdate[key];
   }
   
-  // Set Verovio options
+  // Add attributes: @data-ch-layout, @data-ch-scale-to-fit
+  this._container.dataset.chLayout = this._currentOptions.layout;
+  this._container.dataset.chScaleToFit = Array.isArray(this._currentOptions.scale);
+  
   // Get default Verovio options
+  // If scale option is an array (min and max values), final scale is calculated when drawing the SVG
   const verovioOptions = structuredClone(this._defaultVerovioOptions);
-  verovioOptions.scale = parseInt(this._currentOptions.zoomPercent);
+  verovioOptions.scale = Array.isArray(this._currentOptions.scale) ? null : this._currentOptions.scale;
   verovioOptions.pageWidth = Math.max(this._container.offsetWidth, 100);
   
-  if (mediaType === 'print') {
+  // Set page size and scale
+  if (this._currentOptions.layout === 'print') {
     verovioOptions.mmOutput = true;
     verovioOptions.scale = 100;
-    verovioOptions.pageWidth = 172 * 10; // 172mm (A4-210mm paper size, minus 19mm margin).
-    verovioOptions.pageHeight = 100; // If the page height were tall, for example 10000px, the whole song could be rendered as a single Verovio "page" (SVG element), which works well for most use cases. However, using a short height like 100px forces each system to be an independent SVG element, which is desirable when printing to a fixed paper size, because it allows a system to wrap to the next page instead of getting cut off in the middle. A downside of each system being its own SVG element is that the space between systems isn't consistent by default; however, this can be fixed by adding padding between systems after the SVG is rendered.
-  } else if (mediaType === 'screen') {
-    verovioOptions.scale = parseInt(this._currentOptions.zoomPercent);
-    verovioOptions.pageWidth = this._container.offsetWidth * 100 / this._currentOptions.zoomPercent;
+    verovioOptions.pageWidth = 172 * 10; // 172mm (A4-210mm paper size, minus 19mm margin)
+    verovioOptions.systemMaxPerPage = 1; // Separate page (SVG element) for each system, so systems wrap cleanly to the next printed page (instead of being split between pages)
+  } else if (this._currentOptions.layout === 'vertical-scroll') {
+    verovioOptions.pageHeight = 60000; // Maximum allowed by Verovio
+  } else if (this._currentOptions.layout === 'horizontal-scroll') {
+    verovioOptions.breaks = 'none'
+  } else if (this._currentOptions.layout === 'paginated') {
+//     verovioOptions.systemMaxPerPage = 1;
+    verovioOptions.pageHeight = Math.max(this._container.offsetHeight, 100);
   }
+  this._container.style.setProperty('--scale', verovioOptions.scale);
   
   // Set spacing
   const shapeClassNames = (this._currentOptions.drawBackgroundShapes || []).concat(this._currentOptions.drawForegroundShapes || []);
@@ -322,7 +353,7 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
     
     // Some options require loading the data into Verovio again
     // See https://github.com/rism-digital/verovio/discussions/4142
-    if (verovioOptions.transpose || verovioOptions.expand || verovioOptions.expandNever || verovioOptions.expandAlways) {
+    if (verovioOptions.transpose !== this._previousVerovioOptions.transpose || verovioOptions.expand !== this._previousVerovioOptions.expand || verovioOptions.expandNever !== this._previousVerovioOptions.expandNever || verovioOptions.expandAlways !== this._previousVerovioOptions.expandAlways) {
       this._vrvToolkit.loadData(this._scoreData.meiString);
     } else {
       this._vrvToolkit.redoLayout();
@@ -330,6 +361,8 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true, mediaTy
     
     if (redraw) this._drawScore();
   }
+  
+  this._previousVerovioOptions = verovioOptions;
 }
 
 ChScore.prototype.getOptions = function () {
@@ -367,7 +400,9 @@ ChScore.prototype.removeScore = function () {
   this._resizeObserver?.disconnect()
   this._controller?.abort();
   this._container.innerHTML = '';
+  this._container.removeAttribute('data-ch-status');
   this._container.removeAttribute('data-ch-layout');
+  this._container.removeAttribute('data-ch-scale-to-fit');
   this._container.removeAttribute('data-ch-width');
   this._container.removeAttribute('data-ch-height');
   this._container.score = undefined;
@@ -2215,6 +2250,107 @@ ChScore.prototype._updateSvg = function (svg) {
   return (new XMLSerializer()).serializeToString(svgParsed);
 }
 
+ChScore.prototype._drawScore = function () {
+  this._container.dataset.chStatus = 'drawing';
+  this._container.innerHTML = '';
+  
+  // Create inner containers
+  const innerContainers = {
+    header: document.createElement('div'),
+    svg: document.createElement('div'),
+    lyricsBelow: document.createElement('div'),
+    footer: document.createElement('div'),
+  }
+  for (const [name, container] of Object.entries(innerContainers)) {
+    const datasetName = 'ch' + name[0].toUpperCase() + name.slice(1);
+    container.dataset[datasetName] = '';
+    container.style.visibility = 'hidden';
+  }
+  
+  // Add lyrics below the music
+  for (const section of this._scoreData.sections) {
+    if ((this._currentOptions.hideSectionIds ?? []).includes(section.sectionId) || section.placement !== 'below') {
+      continue;
+    }
+    const lyricParagraph = document.createElement('p');
+    lyricParagraph.dataset.chSectionId = section.sectionId;
+    const lyricLines = section.annotatedLyrics.replace(/\||•|_|◠|◡/g, '').trim().split('\n');
+    for (let ln = 0; ln < lyricLines.length; ln++) {
+      const lyricLineContainer = document.createElement('div');
+      let lineHtml = '';
+      if (section.marker && ln === 0) lineHtml += `<span class="label">${section.marker}. </span>`;
+      lineHtml += lyricLines[ln];
+      lyricLineContainer.innerHTML = lineHtml;
+      lyricParagraph.append(lyricLineContainer);
+    }
+    innerContainers.lyricsBelow.append(lyricParagraph);
+  }
+  
+  // Add inner containers to page
+  for (const container of Object.values(innerContainers)) {
+    this._container.append(container);
+  }
+  
+  // Add attributes: @data-ch-width, @data-ch-height
+  this._container.dataset.chWidth = this._container.offsetWidth;
+  this._container.dataset.chHeight = this._container.offsetHeight;
+  
+  // If scale option is an array (min and max values), attempt to find an optimal scale that fits on a single page, without getting too small
+  if (Array.isArray(this._currentOptions.scale) && this._currentOptions.layout !== 'print') {
+    const getPageCountAtScale = (scale) => {
+      this._container.style.setProperty('--scale', scale);
+      const availableHeight = Math.max(
+        this._container.offsetHeight - (
+          innerContainers.header.offsetHeight +
+          innerContainers.lyricsBelow.offsetHeight +
+          innerContainers.footer.offsetHeight
+        ), 100
+      );
+      this._vrvToolkit.setOptions({ scale: scale, pageHeight: availableHeight });
+      this._vrvToolkit.redoLayout();
+      return this._vrvToolkit.getPageCount();
+    };
+    // Binary search for optimal scale
+    let [minScale, maxScale] = this._currentOptions.scale;
+    while (minScale < maxScale) {
+      const mid = Math.ceil((minScale + maxScale) / 2);
+      const numPages = getPageCountAtScale(mid);
+      if (numPages === 1) {
+        minScale = mid;
+      } else {
+        maxScale = mid - 1;
+      }
+    }
+    // Set final scale
+    getPageCountAtScale(minScale);
+  }
+    
+  // Render to SVG
+  const numPages = this._vrvToolkit.getPageCount();
+  for (let p = 1; p <= numPages; p++) {
+    let svg = this._vrvToolkit.renderToSVG(p);
+    svg = this._updateSvg(svg);
+    innerContainers.svg.insertAdjacentHTML('beforeend', svg);
+  }
+  
+  // If the score container has a fixed height that's not tall enough for the rendered score, add bottom margin to increase the available space. Setting container height directly is avoided, because that could trigger a redraw.
+  if (this._container.offsetHeight < this._container.scrollHeight) {
+    this._container.style.marginBottom = `${this._container.scrollHeight - this._container.offsetHeight}px`;
+  } else {
+    this._container.style.marginBottom = '';
+  }
+  
+  // Remove visibility hidden
+  for (const container of Object.values(innerContainers)) {
+    container.style.visibility = '';
+  }
+  
+  this._container.dataset.chStatus = 'ready';
+  if (this._currentOptions.customEvents.includes('ch:scoredraw')) {
+    this._container.dispatchEvent(new CustomEvent('ch:scoredraw', { detail: {} }));
+  }
+}
+
 // This function created with help from AI (Claude)
 ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
   const MUSICAL_ELEMENTS = ['note', 'rest', 'chord', 'space'];
@@ -2791,18 +2927,19 @@ ChScore.prototype._defaultVerovioOptions = {
 
 // Default options
 ChScore.prototype._defaultOptions = {
-  zoomPercent: 40,
-  keySignatureId: null,
-  expandScore: false,
-  showChordSet: false,
-  showChordSetImages: false,
-  showFingeringMarks: false,
-  showMeasureNumbers: false,
-  showMelodyOnly: false,
-  hideSectionIds: [],
-  drawBackgroundShapes: [],
-  drawForegroundShapes: [],
-  customEvents: ['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw'],
+  layout: 'vertical-scroll',  // 'vertical-scroll', 'horizontal-scroll', 'paginated', 'print'
+  scale: 40,                  // number (exact), or array with two numbers for fit to page (min and max)
+  keySignatureId: null,       // key signature ID or false
+  expandScore: false,         // 'intro', 'full-score', or false
+  showChordSet: false,        // chord set ID or false
+  showChordSetImages: false,  // true or false
+  showFingeringMarks: false,  // true or false
+  showMeasureNumbers: false,  // true or false
+  showMelodyOnly: false,      // true or false
+  hideSectionIds: [],         // array of section IDs
+  drawBackgroundShapes: [],   // array of shape class names
+  drawForegroundShapes: [],   // array of shape class names
+  customEvents: ['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw'], // array of custom event types
 }
 
 ChScore.prototype._getKeySignatures = function (tonality = 'major') {

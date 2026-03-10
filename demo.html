@@ -35,12 +35,17 @@
         flex-wrap: wrap;
       }
       
-      /* SVG styles */
+      /* Score styles */
       svg .ch-shapes-foreground > *:hover {
         opacity: 0.15;
         cursor: pointer;
       }
       svg .ch-shapes-foreground .ch-chord-position-line { stroke-width: 300px; }
+      #score-container[data-ch-scale-to-fit="true"],
+      #score-container[data-ch-layout="paginated"] {
+        /* Scale to fit and paginated layout require a fixed container size */
+        height: calc(100vh - 2em);
+      }
       
       /* Custom score form styles */
       body:not([data-score-id="custom-score"]) #custom-score-form { display: none; }
@@ -80,6 +85,10 @@
         align-items: center;
         gap: 0.5em;
       }
+      p:has([name="scaleToFit"]:checked) ~ p:has([name="scale"]),
+      p:has([name="scaleToFit"]:not(:checked)) ~ p:has([name="minScale"], [name="maxScale"]) {
+        display: none;
+      }
       
       /* Small screen and print styles */
       @media (max-width: 600px) {
@@ -105,7 +114,7 @@
     </style>
     <style id="dynamic-stylesheet"></style>
   </head>
-  <body>
+  <body data-score-id="">
     <!-- Main content -->
     <main>
       <h1>Chorister.js Demo</h1>
@@ -182,10 +191,21 @@
     <aside>
       <form id="controls">
         <h3>Options</h3>
-        <p><label>Zoom: <input type="range" name="zoomPercent" value="40" min="25" max="100" step="5"></label></p>
+        <p><label><input type="checkbox" name="scaleToFit" switch> Scale to fit</label></p>
+        <p><label>Scale: <input type="range" name="scale" value="40" min="25" max="100" step="5"></label></p>
+        <p><label>Min scale: <input type="range" name="minScale" value="40" min="25" max="100" step="5"></label></p>
+        <p><label>Max scale: <input type="range" name="maxScale" value="40" min="25" max="100" step="5"></label></p>
+        <hr>
         <p><label>Transpose:
           <select name="keySignatureId">
             <option value="">None</option>
+          </select>
+        </label></p>
+        <p><label>Layout:
+          <select name="layout">
+            <option value="vertical-scroll">Vertical scroll</option>
+            <option value="horizontal-scroll">Horizontal scroll</option>
+            <option value="paginated">Paginated</option>
           </select>
         </label></p>
         <p><label>Expand:
@@ -205,11 +225,13 @@
         <p><label><input type="checkbox" name="showMeasureNumbers" switch> Measure numbers</label></p>
         <p><label><input type="checkbox" name="showMelodyOnly" switch> Melody only</label></p>
         
+        <hr>
         <h3>Sections</h3>
         <div class="section-toggles">N/A</div>
         
+        <hr>
         <h3>Shapes and labels</h3>
-        <p><label>Hover/tap:
+        <p><label>Hover:
           <select name="drawForegroundShapes">
             <option value="">None</option>
             <option value="ch-system-rect">System rectangles</option>
@@ -226,7 +248,7 @@
         <p><label><input type="checkbox" name="drawForegroundShapes" value="ch-lyric-line-label" switch> Lyric line labels</label></p>
       </form>
       
-      <h3>Tapped element details</h3>
+      <p>Tap details:</p>
       <pre id="tap-details">N/A</pre>
     </aside>
     
@@ -270,7 +292,7 @@
         
         // Listen for Chorister.js tap events
         scoreContainer.addEventListener('ch:tap', (event) => {
-          tapDetailsArea.textContent = JSON.stringify(event.detail.pointData, null, 2);
+          tapDetailsArea.textContent = JSON.stringify(event.detail, null, 2);
         });
         
       }
@@ -303,8 +325,12 @@
       function loadControls(chScore, scoreData) {
         const dynamicStylesheet = document.getElementById('dynamic-stylesheet');
         const controlsArea = document.getElementById('controls');
-        const zoomSlider = controlsArea.querySelector('[name="zoomPercent"]');
+        const scaleToFitToggle = controlsArea.querySelector('[name="scaleToFit"]');
+        const scaleSlider = controlsArea.querySelector('[name="scale"]');
+        const minScaleSlider = controlsArea.querySelector('[name="minScale"]');
+        const maxScaleSlider = controlsArea.querySelector('[name="maxScale"]');
         const transposePicker = controlsArea.querySelector('[name="keySignatureId"]');
+        const layoutPicker = controlsArea.querySelector('[name="layout"]');
         const expandScorePicker = controlsArea.querySelector('[name="expandScore"]');
         const chordSetPicker = controlsArea.querySelector('[name="showChordSet"]');
         const chordSetImagesToggle = controlsArea.querySelector('[name="showChordSetImages"]');
@@ -314,10 +340,37 @@
         const sectionTogglesDiv = controlsArea.querySelector('.section-toggles');
         const shapesAndLabelsControls = controlsArea.querySelectorAll('[name="drawForegroundShapes"]');
         
-        // Zoom slider
-        zoomSlider.addEventListener('change', event => {
-          chScore.setOptions({ zoomPercent: event.target.value });
-        });
+        // Set scale
+        const setScale = (event) => {
+          let minScale, maxScale;
+          if (scaleToFitToggle.checked) {
+            minScale = parseInt(minScaleSlider.value);
+            maxScale = parseInt(maxScaleSlider.value);
+            if (minScale > maxScale) {
+              event.target === minScaleSlider ? maxScale = minScale : minScale = maxScale
+            }
+          } else {
+            minScale = maxScale = parseInt(scaleSlider.value);
+          }
+          minScaleSlider.value = minScale;
+          maxScaleSlider.value = maxScale;
+          scaleSlider.value = maxScale;
+          if (minScale === maxScale) {
+            chScore.setOptions({ scale: maxScale });
+          } else {
+            chScore.setOptions({ scale: [minScale, maxScale] });
+          }
+        }
+        scaleToFitToggle.addEventListener('change', setScale);
+        scaleSlider.addEventListener('change', setScale);
+        minScaleSlider.addEventListener('change', setScale);
+        maxScaleSlider.addEventListener('change', setScale);
+        
+        // TODO: Remove after testing scale to fit with pagination
+//         scaleToFitToggle.checked = true;
+//         minScaleSlider.value = 50;
+//         maxScaleSlider.value = 60;
+//         setScale();
         
         // Transpose picker
         transposePicker.innerHTML = '';
@@ -335,6 +388,11 @@
         }
         transposePicker.addEventListener('change', event => {
           chScore.setOptions({ keySignatureId: event.target.value });
+        });
+        
+        // Layout picker
+        layoutPicker.addEventListener('change', (event) => {
+          chScore.setOptions({ layout: event.target.value });
         });
         
         // Expand score picker

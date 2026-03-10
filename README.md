@@ -104,7 +104,7 @@ You can also install it using [npm](https://www.npmjs.com/package/@samuelbradsha
   
   // Define options
   const options = {
-    zoomPercent: 40,
+    scale: 40,
   }
   
   // Use an asynchronous function to load the score
@@ -133,7 +133,6 @@ You can also install it using [npm](https://www.npmjs.com/package/@samuelbradsha
 - **getKeySignatureInfo()** – Get key signature information for the loaded score.
 - **getMidi(format)** – Get processed MIDI content.
 - * **format** – Preferred format. Optional. Valid values: `note-sequence` (Magenta note sequence), `blob` ([Blob](https://developer.mozilla.org/en-US/docs/Web/API/Blob) object), `array-buffer` ([ArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer) object). Default: `note-sequence`.
-- **drawScore()** – Draw or redraw the score. In most cases, Chorister.js will handle drawing automatically, so you shouldn’t usually need to call this.
 - **removeScore()** – Remove the current score from the page and clear stored data.
 
 Most of these methods will only work after the score is loaded.
@@ -175,9 +174,9 @@ With only a score (`scoreUrl` or `scoreContent`), Chorister.js should render cle
 
 - **MIDI.** High-quality MIDI allows for more realistic playback, with variation in volume and tempo. Provided MIDI can be minimal (single play-through from top to bottom, ignoring jumps and repeats) or complete (play-through of the entire song with all verses). If MIDI isn’t provided or can’t be aligned with the score, Chorister.js will use Verovio-generated MIDI.
 
-- **Lyrics.** Chorister.js can align versified lyrics with sheet music syllables. This enables breaking complex scores into logical sections. Lyrics not in the score will be displayed below the sheet music. If lyrics aren't provided, Chorister.js will attempt to extract lyrics on the fly.
+- **Lyrics.** Chorister.js can align versified lyrics with sheet music syllables. This enables breaking complex scores into logical sections. Lyrics not in the score will be displayed below the sheet music. If lyrics aren’t provided, Chorister.js will attempt to extract lyrics on the fly.
 
-- **Parts.** The parts template or parts object provides information about the choral voicing and/or instruments in the score, as well as information about each staff. This enables Chorister.js to identify the melody, and to tag notes in the score and MIDI as belonging to a specific part. If parts metadata isn't provided, Chorister.js will mark the top part in the first staff as the melody, and remaining parts as accompaniment.
+- **Parts.** The parts template or parts object provides information about the choral voicing and/or instruments in the score, as well as information about each staff. This enables Chorister.js to identify the melody, and to tag notes in the score and MIDI as belonging to a specific part. If parts metadata isn’t provided, Chorister.js will mark the top part in the first staff as the melody, and remaining parts as accompaniment.
 
 - **Sections.** The sections object identifies the logical sections of the score, such as the introduction, verses, choruses, etc. If not provided, Chorister.js will attempt to generate sections automatically based on lyrics, MEI expansions, verse labels in the score, intro brackets, and other hints. Automatic section generation may be sufficient for some scores.
 
@@ -190,7 +189,7 @@ With only a score (`scoreUrl` or `scoreContent`), Chorister.js should render cle
 <details>
 <summary>Lyrics</summary>
 
-Provided lyrics should be written in the order they're sung (for example, repeat the chorus if it's sung multiple times), with bracketed labels such as [Verse 1], [Chorus], or [Bridge] above each lyric block. Only melody lyrics should be included (not lyrics from alternate or secondary parts).
+Provided lyrics should be written in the order they’re sung (for example, repeat the chorus if it’s sung multiple times), with bracketed labels such as [Verse 1], [Chorus], or [Bridge] above each lyric block. Only melody lyrics should be included (not lyrics from alternate or secondary parts).
 
 ```
 [Verse 1]
@@ -526,7 +525,8 @@ Properties:
 
 Options can be passed in to Chorister.js when calling the `load()` method to load the score. After the score is loaded, options can be changed with the `setOptions()` method (see “Methods”). An `options` object has the following optional properties:
 
-- **zoomPercent** – Size of the sheet music. Integer. Default: `40`.
+- **layout** – Score layout. Possible values: `vertical-scroll`, `horizontal-scroll`, `paginated`, or `print`. Default: `'vertical-scroll'`.
+- **scale** – Size of the sheet music. Positive integer (exact scale), or an array with two positive integers (min and max scale). When using min and max, the score will attempt to scale to fit within the score container (works best if the score container has a fixed size). Default: `40`.
 - **keySignatureId** – Key signature to transpose the sheet music to. Transposition is relative to the tonality (major or minor) at the beginning of the score. Possible values: (major) `'g-flat-major'`, `'g-major'`, `'a-flat-major'`, `'a-major'`, `'b-flat-major'`, `'b-major'`, `'c-flat-major'`, `'c-major'`, `'c-sharp-major'`, `'d-flat-major'`, `'d-major'`, `'e-flat-major'`, `'e-major'`, `'f-major'`, `'f-sharp-major'`, (minor) `'g-minor'`, `'g-sharp-minor'`, `'g-flat-minor'`, `'a-minor'`, `'a-sharp-minor'`, `'b-flat-minor'`, `'b-minor'`, `'c-minor'`, `'c-sharp-minor'`, `'d-minor'`, `'d-sharp-minor'`, `'e-flat-minor'`, `'e-minor'`, `'f-minor'`, `'f-sharp-minor'`, or `null`. Default: `null`.
 - **expandScore** – Whether the score should be expanded/unrolled. Possible values: `'intro'` (expand introduction only, based on intro brackets), `'full-score'` (expand full score), or `false` (don’t expand). Default: `false`.
 - **showChordSet** – Whether chord set should be visible. Possible values: ID of a provided chord set, or `false`. Default: `false`.
@@ -546,8 +546,8 @@ When enabled in options, Chorister.js sends [custom events](https://developer.mo
 - **ch:tap** – Sent when the user taps on a shape in the score.
 - **ch:hover** – Sent when the user hovers over a shape in the score with a mouse or trackpad.
 - **ch:midiready** – Sent when MIDI is processed and ready to use.
-- **ch:scoreload** – Sent when the score is loaded.
 - **ch:scoredraw** – Sent when the score is drawn or redrawn on the page.
+- **ch:scoreload** – Sent when the score is completely loaded and drawn.
 
 Each event has a `detail` attribute that provides additional information. For example, the `ch:tap` event could be used to trigger playback from a specific place in the score:
 
@@ -562,7 +562,7 @@ scoreContainer.addEventListener('ch:tap', (event) => {
 });
 ```
 
-The `ch:tap` and `ch:hover` events require corresponding shapes to be added in Chorister.js options. This is because SVG elements don’t respond to pointer events in empty spaces. For example, if you want the event to include chord position information, you'll need to add `ch-chord-position-rect` as a foreground or background shape.
+The `ch:tap` and `ch:hover` events require corresponding shapes to be added in Chorister.js options. This is because SVG elements don’t respond to pointer events in empty spaces. For example, if you want the event to include chord position information, you’ll need to add `ch-chord-position-rect` as a foreground or background shape.
 
 ### <a name="elements-and-attributes"></a>Elements and attributes
 
@@ -576,7 +576,7 @@ Verovio also adds the `@data-related` attribute to elements that are related to 
 
 #### Additional data attributes
 
-Chorister.js adds the following data attributes to elements in the SVG output:
+Chorister.js adds the following data attributes to elements in Verovio’s SVG output:
 
 - **@data-ch-chord-position** – Indicates the chord position of each element. Chord position is the relative position of each unique note or rest onset, as written in the sheet music, starting at 0 for the first written note or chord in the sheet music. Added to chord, note, rest, dir, harm, and fermata elements.
 - **@data-ch-expanded-chord-position** – Expanded chord position is similar to chord position, but it indicates relative position in the expanded score, or the order that notes are played. If the score has repeats or jumps, elements may have multiple expanded chord positions. Added to chord, note, rest, dir, harm, and fermata elements.
@@ -588,9 +588,26 @@ Chorister.js adds the following data attributes to elements in the SVG output:
 - **@data-ch-secondary** – Indicates that the lyric text is secondary, i.e. not part of the melody (if part information is provided). Added to verse elements.
 - **@data-ch-chorus** – Indicates that the lyric text is part of a chorus or refrain. Added to verse elements.
 
+These data attributes are set on the score container:
+
+- **@data-ch-status** – Attribute on score container that indicates the score loading status (preparing, processing, drawing, or ready).
+- **@data-ch-layout** – Attribute on score container that indicates the current layout type.
+- **@data-ch-scale-to-fit** – Attribute on score container that indicates if scale to fit is enabled (scale option set to an array with different min and max values).
+- **@data-ch-width** – Attribute on score container that indicates the score width.
+- **@data-ch-height** – Attribute on score container that indicates the score height.
+
+The score container has inner containers identified by these data attributes:
+
+- **@data-ch-header** – Attribute on element that contains header content.
+- **@data-ch-svg** – Attribute on element that contains the SVG sheet music.
+- **@data-ch-lyrics-below** – Attribute on element that contains lyrics below the sheet music.
+- **@data-ch-footer** – Attribute on element that contains footer content.
+
+Additionally, the score container has a `style` attribute with the CSS [custom property](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/--*) `--scale`. This can be used to adjust the relative size of header and footer content and verses below.
+
 #### Background and foreground shapes
 
-Chorister.js supports adding labels and shapes to the foreground or background in the SVG output, using the `drawBackgroundShapes` and `drawForegroundShapes` options. These can be used for hover effects, highlighting what's currently playing, or labeling parts of the score: `ch-staff-label`, `ch-chord-position-label`, `ch-lyric-line-label`, `ch-system-rect`, `ch-measure-rect`, `ch-staff-rect`, `ch-chord-position-line`, `ch-chord-position-rect`, `ch-note-circle`, `ch-lyric-rect`.
+Chorister.js supports adding labels and shapes to the foreground or background in the SVG output, using the `drawBackgroundShapes` and `drawForegroundShapes` options. These can be used for hover effects, highlighting what’s currently playing, or labeling parts of the score. They are identified by their class names: `ch-staff-label`, `ch-chord-position-label`, `ch-lyric-line-label`, `ch-system-rect`, `ch-measure-rect`, `ch-staff-rect`, `ch-chord-position-line`, `ch-chord-position-rect`, `ch-note-circle`, `ch-lyric-rect`.
 
 ## <a name="license"></a>License
 
