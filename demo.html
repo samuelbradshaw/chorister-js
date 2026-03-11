@@ -25,26 +25,44 @@
         background-color: #ddd;
         margin: 0.5em 0; padding: 0;
       }
-      #action-bar {
+      .toolbar {
         display: flex;
         justify-content: space-between;
+        align-items: center;
         flex-wrap: wrap;
+      }
+      #action-buttons,
+      #pagination-buttons {
+        display: flex;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 0.4em;
+      }
+      #pagination-buttons #page-numbers {
+        display: contents;
+      }
+      #print-area:has(#score-container:not([data-ch-layout="paginated"])) ~ #pagination-buttons {
+        display: none;
       }
       
       /* Score styles */
-      svg .ch-shapes-foreground > *:hover {
-        opacity: 0.15;
-        cursor: pointer;
+      @media (hover: hover) {
+        /* Disable hover effects on touch screens */
+        svg .ch-shapes-foreground > *:hover {
+          opacity: 0.15;
+          cursor: pointer;
+        }
       }
       svg .ch-shapes-foreground .ch-chord-position-line { stroke-width: 300px; }
       #score-container[data-ch-scale-to-fit="true"],
       #score-container[data-ch-layout="paginated"] {
         /* Scale to fit and paginated layout require a fixed container size */
-        height: calc(100vh - 4em);
+        height: 70vh;
       }
+      #score-container { scrollbar-width: none; } /* Firefox */
+      #score-container::-webkit-scrollbar { display: none; } /* Most browsers */
       [data-ch-footer] {
         border-top: 1px solid #ddd;
-        padding: 1em 0;
       }
       
       /* Custom score form styles */
@@ -118,10 +136,10 @@
     <!-- Main content -->
     <main>
       <h1>Chorister.js Demo</h1>
-      <div id="action-bar">
-        <p id="github-link">
+      <div class="toolbar">
+        <span id="github-link">
           ← <a href="https://github.com/samuelbradshaw/chorister-js">Back to GitHub</a>
-        </p>
+        </span>
         <p id="action-buttons">
           <button onclick="downloadMidi();">Download MIDI</button>
           <button onclick="window.print();">Print</button>
@@ -172,6 +190,13 @@
       </form>
       
       <hr>
+      
+      <!-- Pagination controls -->
+      <p id="pagination-buttons">
+        <button class="page-previous" onclick="chScore.jumpToPage('previous', true)">Previous</button>
+        <span id="page-numbers"></span>
+        <button class="page-next" onclick="chScore.jumpToPage('next', true)">Next</button>
+      </p>
       
       <!-- Demo scores -->
       <h2>Demo Scores</h2>
@@ -261,6 +286,7 @@
       const demoScores = getDemoScores();
       const scoreContainer = document.getElementById('score-container');
       const titleArea = document.getElementById('title');
+      const pageNumbersArea = document.getElementById('page-numbers');
       const tapDetailsArea = document.getElementById('tap-details');
       
       // Get scoreId from URL and load score or custom score form
@@ -286,14 +312,27 @@
         scoreData = await chScore.load(scoreType, inputData, options);
         
         // Load controls
-        loadControls(chScore, scoreData)
-        
-        // Listen for Chorister.js tap events
-        scoreContainer.addEventListener('ch:tap', (event) => {
-          tapDetailsArea.textContent = JSON.stringify(event.detail, null, 2);
-        });
-        
+        loadControls(chScore, scoreData)        
       }
+      
+      // Listen for Chorister.js tap events
+      scoreContainer.addEventListener('ch:tap', (event) => {
+        tapDetailsArea.textContent = JSON.stringify(event.detail, null, 2);
+      });
+      
+      // Listen for Chorister.js score draw events
+      scoreContainer.addEventListener('ch:scoredraw', (event) => {
+        let pageNumberButtons = '';
+        for (const pageNumber of event.detail.pageState.pageNumbers) {
+          pageNumberButtons += `<button class="page-number" onclick="chScore.jumpToPage(${pageNumber}, false)">${pageNumber}</button>`;
+        }
+        pageNumbersArea.innerHTML = pageNumberButtons;
+      });
+      
+      // Listen for Chorister.js score load
+      scoreContainer.addEventListener('ch:scoreload', (event) => {
+        console.log(event.detail.scoreData); // Log data for debugging
+      });
       
       function loadCustomScoreForm() {
         const customScoreForm = document.getElementById('custom-score-form');
@@ -362,12 +401,6 @@
         scaleSlider.addEventListener('change', setScale);
         minScaleSlider.addEventListener('change', setScale);
         maxScaleSlider.addEventListener('change', setScale);
-        
-        // TODO: Remove after testing scale to fit with pagination
-//         scaleToFitToggle.checked = true;
-//         minScaleSlider.value = 50;
-//         maxScaleSlider.value = 60;
-//         setScale();
         
         // Transpose picker
         transposePicker.innerHTML = '';
@@ -797,11 +830,6 @@
         URL.revokeObjectURL(midiUrl);
       }
       
-      // Log score data for debugging
-      scoreContainer.addEventListener('ch:scoreload', (event) => {
-        console.log(event.detail.scoreData);
-      });
-
     </script>
   </body>
 </html>

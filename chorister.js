@@ -59,12 +59,9 @@ ChScore.prototype._loadStyles = function () {
       column-gap: 2em;
     }
     [data-ch-layout="paginated"] [data-ch-page] {
-      display: flex;
-      flex-direction: column;
+      flex: 0 0 auto;
       width: 100%;
       height: 100%;
-      flex-grow: 0;
-      flex-shrink: 0;
       scroll-snap-align: start;
     }
     
@@ -144,7 +141,9 @@ ChScore.prototype._loadEventListeners = function () {
     const hoverStateValues = Object.entries(hoverState).map(e => (e ?? '').toString()).join(';');
     if (pointDataValues === hoverStateValues) return;
     hoverState = pointData;
-    this._container.dispatchEvent(new CustomEvent('ch:hover', { detail: { pointData: structuredClone(pointData) } }));
+    this._container.dispatchEvent(new CustomEvent('ch:hover', { detail: {
+      pointData: structuredClone(pointData),
+    } }));
   }
   this._container.addEventListener('mousemove', (event) => respondToMouseMove(event), { signal: this._controller.signal });
   this._container.addEventListener('mouseleave', (event) => respondToMouseMove(event, true), { signal: this._controller.signal });
@@ -163,7 +162,26 @@ ChScore.prototype._loadEventListeners = function () {
       this._container.dataset.chHeight = height;
     }
   }, 200));
-  this._resizeObserver.observe(this._container);
+  this._resizeObserver.observe(this._container, { box: 'border-box' });
+  
+  // Score container page change
+  this._pageObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('active');
+      } else {
+        entry.target.classList.remove('active');
+      }
+    }
+    if (this._currentOptions.customEvents.includes('ch:pagechange')) {
+      const pageState = this.getPageState();
+      if (pageState.currentPageNumber != null) {
+        this._container.dispatchEvent(new CustomEvent('ch:pagechange', { detail: {
+          pageState: pageState,
+        } }));
+      }
+    }
+  }, { root: this._container, threshold: 0.75 });
 }
 
 
@@ -266,7 +284,9 @@ ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl =
   this._drawScore();
   
   if (this._currentOptions.customEvents.includes('ch:scoreload')) {
-    this._container.dispatchEvent(new CustomEvent('ch:scoreload', { detail: { scoreData: this._scoreData } }));
+    this._container.dispatchEvent(new CustomEvent('ch:scoreload', { detail: {
+      scoreData: this._scoreData,
+    } }));
   }
   return this._scoreData;
 }
@@ -333,9 +353,8 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
   if (this._currentOptions.showChordSet && this._currentOptions.showChordSetImages) {
     verovioOptions.spacingLinear = 1.0;
     verovioOptions.spacingNonLinear = 0.5;
-    verovioOptions.spacingSystem = 22;
-    verovioOptions.pageMarginTop = 220;
-    verovioOptions.pageMarginBottom = 0;
+    verovioOptions.spacingSystem += 22;
+    verovioOptions.pageMarginTop += 220;
   }
   if (this._currentOptions.showMeasureNumbers) {
     verovioOptions.pageMarginLeft = Math.max(verovioOptions.pageMarginLeft, 30);
@@ -343,7 +362,7 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
   }
   if (this._currentOptions.showMelodyOnly) {
     verovioOptions.spacingSystem += 5;
-    verovioOptions.pageMarginBottom = Math.max(verovioOptions.pageMarginBottom, 50);
+    verovioOptions.pageMarginBottom += 20;
   }
   
   // Transpose
@@ -394,6 +413,33 @@ ChScore.prototype.getKeySignatureInfo = function () {
   return this._scoreData.keySignatureInfo;
 }
 
+ChScore.prototype.getPageState = function () {
+  let currentPageNumber;
+  const pageNumbers = [];
+  for (const page of this._pages) {
+    const pageNumber = parseInt(page.dataset.chPage);
+    if (page.classList.contains('active')) currentPageNumber = pageNumber;
+    pageNumbers.push(pageNumber);
+  }
+  return {
+    currentPageNumber: currentPageNumber,
+    pageNumbers: pageNumbers,
+  }
+}
+
+ChScore.prototype.jumpToPage = function (pageNumber, animate = false) {
+  const pageState = this.getPageState();
+  const currentPageIndex = pageState.pageNumbers.indexOf(pageState.currentPageNumber);
+  if (currentPageIndex == null) return;
+  if (pageNumber === 'previous') {
+    pageNumber = pageState.pageNumbers.at(Math.max(currentPageIndex - 1, 0));
+  } else if (pageNumber === 'next') {
+    pageNumber = pageState.pageNumbers.at(currentPageIndex + 1) ?? pageState.pageNumbers.at(-1);
+  }
+  const scrollBehavior = animate ? 'smooth' : 'instant';
+  this._container.querySelector(`[data-ch-page="${pageNumber}"]`).scrollIntoView({ behavior: scrollBehavior, block: 'start', inline: 'center', container: 'nearest' });
+}
+
 ChScore.prototype.getMidi = function (format = 'note-sequence') {
   const noteSequence = this._scoreData.midiNoteSequence;
   if (format === 'note-sequence') {
@@ -410,7 +456,8 @@ ChScore.prototype.getMidi = function (format = 'note-sequence') {
 
 ChScore.prototype.removeScore = function () {
   this._removeStylesheets();
-  this._resizeObserver?.disconnect()
+  this._resizeObserver?.disconnect();
+  this._pageObserver?.disconnect();
   this._controller?.abort();
   this._container.innerHTML = '';
   this._container.removeAttribute('data-ch-status');
@@ -756,7 +803,9 @@ ChScore.prototype._loadMidi = function () {
   this._scoreData.midiNoteSequence = midiNoteSequence;
   
   if (this._currentOptions.customEvents.includes('ch:midiready')) {
-    this._container.dispatchEvent(new CustomEvent('ch:midiready', { detail: { midiNoteSequence: midiNoteSequence } }));
+    this._container.dispatchEvent(new CustomEvent('ch:midiready', { detail: {
+      midiNoteSequence: midiNoteSequence,
+    } }));
   }
 }
 
@@ -2266,32 +2315,36 @@ ChScore.prototype._updateSvg = function (svg) {
 ChScore.prototype._drawScore = function () {
   this._container.dataset.chStatus = 'drawing';
   this._container.innerHTML = '';
+  if (this._pages) for (const page of this._pages) this._pageObserver.unobserve(page);
   
   // Add attributes: @data-ch-width, @data-ch-height
   this._container.dataset.chWidth = this._container.offsetWidth;
   this._container.dataset.chHeight = this._container.offsetHeight;
   
-  const pages = [];
+  // Create pages
+  this._pages = [];
   const createPage = () => {
     const page = document.createElement('div');
-    const pageNumber = pages.length + 1;
+    const pageNumber = this._pages.length + 1;
     page.setAttribute('data-ch-page', pageNumber);
     page.style.visibility = 'hidden';
-    pages.push(page)
+    if (this._pages.length === 0) page.classList.add('active');
+    this._pageObserver.observe(page);
+    this._pages.push(page);
     this._container.append(page);
   }
   createPage();
   
-  let lyricsBelowInnerContainer;
+  // Create inner container
   const addInnerContainer = (name, content) => {
     const innerContainer = document.createElement('div');
     innerContainer.setAttribute(`data-ch-${name}`, '');
     if (name === 'svg') {
       innerContainer.innerHTML = content;
-      pages.at(-1).insertBefore(innerContainer, lyricsBelowInnerContainer);
+      this._pages.at(-1).insertBefore(innerContainer, lyricsBelowInnerContainer);
     } else {
       innerContainer.append(content);
-      pages.at(-1).append(innerContainer);
+      this._pages.at(-1).append(innerContainer);
     }
     return innerContainer;
   }
@@ -2330,7 +2383,7 @@ ChScore.prototype._drawScore = function () {
     }
     addInnerContainer('lyrics-below', lyricParagraph);
   }
-  lyricsBelowInnerContainer = pages.at(-1).querySelector('[data-ch-lyrics-below]');
+  let lyricsBelowInnerContainer = this._pages.at(-1).querySelector('[data-ch-lyrics-below]');
   if (!lyricsBelowInnerContainer) {
     lyricsBelowInnerContainer = addInnerContainer('lyrics-below', document.createTextNode(''));
   }
@@ -2345,7 +2398,7 @@ ChScore.prototype._drawScore = function () {
   if (Array.isArray(this._currentOptions.scale) && this._currentOptions.layout !== 'print') {
     const getPageCountAtScale = (scale) => {
       this._container.style.setProperty('--scale', scale);
-      const availableHeight = Math.max(this._container.offsetHeight - pages[0].scrollHeight, 100);
+      const availableHeight = Math.max(this._container.offsetHeight - this._pages[0].scrollHeight, 100);
       this._vrvToolkit.setOptions({ scale: scale, pageHeight: availableHeight });
       this._vrvToolkit.redoLayout();
       return this._vrvToolkit.getPageCount();
@@ -2381,30 +2434,32 @@ ChScore.prototype._drawScore = function () {
   }
   
   // Paginated layout: sort inner containers into pages
-  if (this._currentOptions.layout === 'paginated' && pages[0].scrollHeight > this._container.offsetHeight) {
-    let cumulativeHeight = 0;
-    for (const element of pages[0].children) {
-      const height = element.getBoundingClientRect().height;
-      if (cumulativeHeight + height > this._container.offsetHeight) {
+  if (this._currentOptions.layout === 'paginated' && this._pages[0].scrollHeight > this._container.offsetHeight) {
+    const pageHeight = this._container.offsetHeight;
+    let pageStartY = this._pages[0].getBoundingClientRect().top;
+    for (const element of this._pages[0].children) {
+      const innerContainerRect = element.getBoundingClientRect();
+      if (innerContainerRect.bottom - pageStartY > pageHeight) {
         createPage();
-        cumulativeHeight = 0;
+        pageStartY = innerContainerRect.top;
       }
-      cumulativeHeight += height;
-      element.pageIndex = pages.length - 1;
+      element.pageIndex = this._pages.length - 1;
     }
-    for (const element of Array.from(pages[0].children)) {
-      if (element.pageIndex !== 0) pages[element.pageIndex].append(element);
+    for (const element of Array.from(this._pages[0].children)) {
+      if (element.pageIndex !== 0) this._pages[element.pageIndex].append(element);
     }
   }
   
   // Remove temporary styles
-  for (const page of pages) {
+  for (const page of this._pages) {
     page.style.visibility = '';
   }
   
   this._container.dataset.chStatus = 'ready';
   if (this._currentOptions.customEvents.includes('ch:scoredraw')) {
-    this._container.dispatchEvent(new CustomEvent('ch:scoredraw', { detail: {} }));
+    this._container.dispatchEvent(new CustomEvent('ch:scoredraw', { detail: {
+      pageState: this.getPageState(),
+    } }));
   }
 }
 
@@ -2945,8 +3000,8 @@ ChScore.prototype._defaultVerovioOptions = {
   adjustPageWidth: false, // Don't shrink page width
   scaleToPageSize: true, // Responsive layout without needing as much manual calculation
   scale: 40, // Adjusted in setOptions()
-  spacingStaff: 16, // Vertical spacing
-  spacingSystem: 2, // Vertical spacing
+  spacingStaff: 14, // Vertical spacing
+  spacingSystem: 0, // Vertical spacing
   spacingLinear: 0.25, // Horizontal spacing
   spacingNonLinear: 0.6, // Horizontal spacing
   lyricHeightFactor: 1.4, // Lyric line spacing
@@ -2985,20 +3040,20 @@ ChScore.prototype._defaultVerovioOptions = {
 // Default options
 ChScore.prototype._defaultOptions = {
   layout: 'vertical-scroll',  // 'vertical-scroll', 'horizontal-scroll', 'paginated', 'print'
-  scale: 40,                  // number (exact), or array with two numbers for fit to page (min and max)
-  keySignatureId: null,       // key signature ID or false
+  scale: 40,                  // Number (exact), or array with two numbers for fit to page (min and max)
+  keySignatureId: null,       // Key signature ID or false
   expandScore: false,         // 'intro', 'full-score', or false
-  showChordSet: false,        // chord set ID or false
+  showChordSet: false,        // Chord set ID or false
   showChordSetImages: false,  // true or false
   showFingeringMarks: false,  // true or false
   showMeasureNumbers: false,  // true or false
   showMelodyOnly: false,      // true or false
   headerContent: '',          // HTML string
   footerContent: '',          // HTML string
-  hideSectionIds: [],         // array of section IDs
-  drawBackgroundShapes: [],   // array of shape class names
-  drawForegroundShapes: [],   // array of shape class names
-  customEvents: ['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw'], // array of custom event types
+  hideSectionIds: [],         // Array of section IDs
+  drawBackgroundShapes: [],   // Array of shape class names
+  drawForegroundShapes: [],   // Array of shape class names
+  customEvents: ['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw', 'ch:pagechange'], // array of custom event types
 }
 
 ChScore.prototype._getKeySignatures = function (tonality = 'major') {

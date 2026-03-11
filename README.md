@@ -131,7 +131,11 @@ You can also install it using [npm](https://www.npmjs.com/package/@samuelbradsha
 - **getScoreData()** – Get information about the loaded score. Some of the provided data can be helpful for loading controls (for users to adjust options).
 - **getScoreContainer()** – Get a reference to the element that holds the rendered score.
 - **getKeySignatureInfo()** – Get key signature information for the loaded score.
-- **getMidi(format)** – Get processed MIDI content.
+- **getPageState()** – Get information about the current page state (for paginated layout).
+- **jumpToPage(pageNumber, animate = false)** – Jump to the specified page (for paginated layout).
+- * **pageNumber** – Which page to jump to. Required. Valid values: page number integer (starting at 1), `previous`, or `next`. Required.
+- * **animate** – Whether the transition between pages should animate. Optional boolean. Default: `false`.
+- **getMidi(format = 'note-sequence')** – Get processed MIDI content.
 - * **format** – Preferred format. Optional. Valid values: `note-sequence` (Magenta note sequence), `blob` ([Blob](https://developer.mozilla.org/en-US/docs/Web/API/Blob) object), `array-buffer` ([ArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer) object). Default: `note-sequence`.
 - **removeScore()** – Remove the current score from the page and clear stored data.
 
@@ -525,10 +529,10 @@ Properties:
 
 Options can be passed in to Chorister.js when calling the `load()` method to load the score. After the score is loaded, options can be changed with the `setOptions()` method (see “Methods”). An `options` object has the following optional properties:
 
-- **layout** – Score layout. Possible values: `vertical-scroll`, `horizontal-scroll`, `paginated`, or `print`. Default: `'vertical-scroll'`.
+- **layout** – Score layout. Possible values: `vertical-scroll`, `horizontal-scroll`, `paginated`, or `print`. Default: `vertical-scroll`.
 - **scale** – Size of the sheet music. Positive integer (exact scale), or an array with two positive integers (min and max scale). When using min and max, the score will attempt to scale to fit within the score container (works best if the score container has a fixed size). Default: `40`.
-- **keySignatureId** – Key signature to transpose the sheet music to. Transposition is relative to the tonality (major or minor) at the beginning of the score. Possible values: (major) `'g-flat-major'`, `'g-major'`, `'a-flat-major'`, `'a-major'`, `'b-flat-major'`, `'b-major'`, `'c-flat-major'`, `'c-major'`, `'c-sharp-major'`, `'d-flat-major'`, `'d-major'`, `'e-flat-major'`, `'e-major'`, `'f-major'`, `'f-sharp-major'`, (minor) `'g-minor'`, `'g-sharp-minor'`, `'g-flat-minor'`, `'a-minor'`, `'a-sharp-minor'`, `'b-flat-minor'`, `'b-minor'`, `'c-minor'`, `'c-sharp-minor'`, `'d-minor'`, `'d-sharp-minor'`, `'e-flat-minor'`, `'e-minor'`, `'f-minor'`, `'f-sharp-minor'`, or `null`. Default: `null`.
-- **expandScore** – Whether the score should be expanded/unrolled. Possible values: `'intro'` (expand introduction only, based on intro brackets), `'full-score'` (expand full score), or `false` (don’t expand). Default: `false`.
+- **keySignatureId** – Key signature to transpose the sheet music to. Transposition is relative to the tonality (major or minor) at the beginning of the score. Possible values: (major) `g-flat-major`, `g-major`, `a-flat-major`, `a-major`, `b-flat-major`, `b-major`, `c-flat-major`, `c-major`, `c-sharp-major`, `d-flat-major`, `d-major`, `e-flat-major`, `e-major`, `f-major`, `f-sharp-major`, (minor) `g-minor`, `g-sharp-minor`, `g-flat-minor`, `a-minor`, `a-sharp-minor`, `b-flat-minor`, `b-minor`, `c-minor`, `c-sharp-minor`, `d-minor`, `d-sharp-minor`, `e-flat-minor`, `e-minor`, `f-minor`, `f-sharp-minor`, or `null`. Default: `null`.
+- **expandScore** – Whether the score should be expanded/unrolled. Possible values: `intro` (expand introduction only, based on intro brackets), `full-score` (expand full score), or `false` (don’t expand). Default: `false`.
 - **showChordSet** – Whether chord set should be visible. Possible values: ID of a provided chord set, or `false`. Default: `false`.
 - **showChordSetImages** – Whether chord set images should show. Only applies if `showChordSet` is `true` and the currently-visible chord set has images. Boolean. Default: `false`.
 - **showFingeringMarks** – Whether fingering marks should be visible. Only applies if the score has fingering marks. Boolean. Default: `false`.
@@ -539,17 +543,18 @@ Options can be passed in to Chorister.js when calling the `load()` method to loa
 - **hideSectionIds** – Section IDs to hide. Possible values: One or more section (intro, verse, chorus, etc.) IDs. Array. Default: `[]`.
 - **drawBackgroundShapes** – Background shapes to draw. Possible values: See “Background and foreground shapes.” Array. Default: `[]`.
 - **drawForegroundShapes** – Foreground shapes to draw. Possible values: See “Background and foreground shapes.” Array. Default: `[]`.
-- **customEvents** – Custom events to send. Possible values: See “Custom events.” Array. Default: `['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw']`.
+- **customEvents** – Custom events to send. Possible values: See “Custom events.” Array. Default: `['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw', 'ch:pagechange']`.
 
 ### <a name="custom-events"></a>Custom events
 
 When enabled in options, Chorister.js sends [custom events](https://developer.mozilla.org/en-US/docs/Web/Events/Creating_and_triggering_events) to the score container:
 
 - **ch:tap** – Sent when the user taps on a shape in the score.
-- **ch:hover** – Sent when the user hovers over a shape in the score with a mouse or trackpad.
+- **ch:hover** – Sent when the user hovers over a shape in the score with a mouse or trackpad. Disabled by default to reduce processing.
 - **ch:midiready** – Sent when MIDI is processed and ready to use.
-- **ch:scoredraw** – Sent when the score is drawn or redrawn on the page.
-- **ch:scoreload** – Sent when the score is completely loaded and drawn.
+- **ch:scoreload** – Sent when the score finishes its initial loading.
+- **ch:scoredraw** – Sent each time the score is drawn or redrawn.
+- **ch:pagechange** – Sent when the current page changes (for paginated layout).
 
 Each event has a `detail` attribute that provides additional information. For example, the `ch:tap` event could be used to trigger playback from a specific place in the score:
 
@@ -601,10 +606,10 @@ These data attributes are set on the score container:
 The score container has inner containers identified by these data attributes:
 
 - **@data-ch-page** – Attribute on each page of the score. The attribute value is the page number.
-- **@data-ch-svg** – Attribute on element that contains the SVG sheet music.
-- **@data-ch-lyrics-below** – Attribute on element that contains lyrics below the sheet music.
-- **@data-ch-header** – Attribute on element that contains header content (set with `headerContent` option).
-- **@data-ch-footer** – Attribute on element that contains footer content (set with `footerContent` option).
+- **@data-ch-svg** – Attribute on element(s) that contain SVG sheet music.
+- **@data-ch-lyrics-below** – Attribute on element(s) that contain lyrics below the sheet music (for provided lyric stanzas that aren’t inline with the sheet music).
+- **@data-ch-header** – Attribute on element(s) that contain header content (set with `headerContent` option).
+- **@data-ch-footer** – Attribute on element(s) that contain footer content (set with `footerContent` option).
 
 Additionally, the score container has a `style` attribute with the CSS [custom property](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/--*) `--scale`. This can be used to adjust the relative size of header and footer content and verses below.
 
