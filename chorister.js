@@ -437,7 +437,7 @@ ChScore.prototype.jumpToPage = function (pageNumber, animate = false) {
     pageNumber = pageState.pageNumbers.at(currentPageIndex + 1) ?? pageState.pageNumbers.at(-1);
   }
   const scrollBehavior = animate ? 'smooth' : 'instant';
-  this._container.querySelector(`[data-ch-page="${pageNumber}"]`).scrollIntoView({ behavior: scrollBehavior, block: 'start', inline: 'center', container: 'nearest' });
+  this._container.querySelector(`[data-ch-page="${pageNumber}"]`).scrollIntoView({ behavior: scrollBehavior, block: 'nearest', inline: 'center', container: 'nearest' });
 }
 
 ChScore.prototype.getMidi = function (format = 'note-sequence') {
