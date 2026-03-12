@@ -46,7 +46,7 @@ Chorister.js doesn’t directly handle audio playback, but it processes and expo
 
 ### Tap events and CSS styles
 
-- Chorister.js sends [custom events](https://developer.mozilla.org/en-US/docs/Web/Events/Creating_and_triggering_events) when tapping or hovering over various elements in the score, such as measures, chord positions, and notes. These can be used to trigger actions in your code, such as starting playback at a specific place. See “Custom events” below.
+- Chorister.js sends [custom events](https://developer.mozilla.org/en-US/docs/Web/Events/Creating_and_triggering_events) when loading or interacting with the score. These can be used to trigger actions in your code, such as starting playback at a specific place. See “Custom events” below.
 - Because the score is rendered as SVG, colors, text fonts, and other visual attributes in the sheet music can be customized with CSS. Chorister.js processes Verovio’s output and adds additional elements and attributes for styling. See “Elements and attributes” below.
 
 ## <a name="getting-started"></a>Getting started
@@ -611,7 +611,7 @@ The score container has inner containers identified by these data attributes:
 - **@data-ch-header** – Attribute on element(s) that contain header content (set with `headerContent` option).
 - **@data-ch-footer** – Attribute on element(s) that contain footer content (set with `footerContent` option).
 
-Additionally, the score container has a `style` attribute with the CSS [custom property](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/--*) `--scale`. This can be used to adjust the relative size of header and footer content and verses below.
+Additionally, the score container has a `style` attribute with the CSS [custom property](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/--*) `--ch-scale`. This can be used to adjust the relative size of header and footer content and verses below.
 
 #### Background and foreground shapes
 

@@ -47,7 +47,7 @@ ChScore.prototype._loadStyles = function () {
     
     /* Layout styles */
     [data-ch-page] {
-      font-size: calc(0.025em * var(--scale, 40));
+      font-size: calc(0.025em * var(--ch-scale, 40));
     }
     [data-ch-layout="horizontal-scroll"] [data-ch-svg] {
       overflow: scroll hidden;
@@ -334,7 +334,7 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
     verovioOptions.systemMaxPerPage = 1;
     verovioOptions.pageHeight = Math.max(this._container.offsetHeight, 100);
   }
-  this._container.style.setProperty('--scale', verovioOptions.scale);
+  this._container.style.setProperty('--ch-scale', verovioOptions.scale);
   
   // Set spacing
   const shapeClassNames = (this._currentOptions.drawBackgroundShapes || []).concat(this._currentOptions.drawForegroundShapes || []);
@@ -460,11 +460,13 @@ ChScore.prototype.removeScore = function () {
   this._pageObserver?.disconnect();
   this._controller?.abort();
   this._container.innerHTML = '';
-  this._container.removeAttribute('data-ch-status');
-  this._container.removeAttribute('data-ch-layout');
-  this._container.removeAttribute('data-ch-scale-to-fit');
-  this._container.removeAttribute('data-ch-width');
-  this._container.removeAttribute('data-ch-height');
+  const attributeNames = this._container.getAttributeNames();
+  for (const attributeName of attributeNames) {
+    if (attributeName.startsWith('data-ch-')) {
+      this._container.removeAttribute(attributeName);
+    }
+  }
+  this._container.style.removeProperty('--ch-scale');
   this._container.score = undefined;
   this._chScores = this._chScores.filter(chScore => chScore._container !== this._container);
 }
@@ -2397,7 +2399,7 @@ ChScore.prototype._drawScore = function () {
   // If scale option is an array (min and max values), attempt to find an optimal scale that fits on a single page, without getting too small
   if (Array.isArray(this._currentOptions.scale) && this._currentOptions.layout !== 'print') {
     const getPageCountAtScale = (scale) => {
-      this._container.style.setProperty('--scale', scale);
+      this._container.style.setProperty('--ch-scale', scale);
       const availableHeight = Math.max(this._container.offsetHeight - this._pages[0].scrollHeight, 100);
       this._vrvToolkit.setOptions({ scale: scale, pageHeight: availableHeight });
       this._vrvToolkit.redoLayout();
