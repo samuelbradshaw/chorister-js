@@ -46,6 +46,10 @@ ChScore.prototype._loadStyles = function () {
     }
     
     /* Layout styles */
+    [data-ch-layout] {
+      /* Disable default pinch to zoom on the score container so it can be handled by JavaScript */
+      touch-action: pan-x pan-y;
+    }
     [data-ch-page] {
       font-size: calc(0.025em * var(--ch-scale, 40));
     }
@@ -147,6 +151,94 @@ ChScore.prototype._loadEventListeners = function () {
   }
   this._container.addEventListener('mousemove', (event) => respondToMouseMove(event), { signal: this._controller.signal });
   this._container.addEventListener('mouseleave', (event) => respondToMouseMove(event, true), { signal: this._controller.signal });
+  
+  // Pinch to zoom (general)
+  let initialPinchScale = null;
+  let targetPinchScale = null;
+  const clampScale = (s) => Math.min(100, Math.max(25, s));
+  const getTouchDistance = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+  const getCurrentScale = () => {
+    if (Array.isArray(this._currentOptions?.scale)) {
+      const resolved = parseFloat(this._container.style.getPropertyValue('--ch-scale'));
+      return resolved > 0 ? resolved : this._defaultOptions.scale;
+    }
+    return this._currentOptions?.scale ?? this._defaultOptions.scale;
+  };
+  const applyPinchTransform = () => {
+    if (initialPinchScale != null && targetPinchScale != null) {
+      const cssRatio = clampScale(targetPinchScale) / initialPinchScale;
+      this._container.style.transformOrigin = 'top left';
+      this._container.style.transform = `scale(${cssRatio})`;
+    }
+  };
+  const finalizePinch = () => {
+    this._container.style.transform = '';
+    this._container.style.transformOrigin = '';
+    initialPinchScale = null;
+    if (targetPinchScale != null) {
+      const clamped = clampScale(targetPinchScale);
+      targetPinchScale = null;
+      if (Math.round(clamped) !== getCurrentScale()) {
+        this.setOptions({ scale: clamped });
+      }
+    }
+  };
+  
+  // Pinch to zoom (touch screens)
+  let pinchStartDistance = null;
+  this._container.addEventListener('touchstart', (event) => {
+    if (event.touches.length === 2) {
+      pinchStartDistance = getTouchDistance(event.touches[0], event.touches[1]);
+      initialPinchScale = getCurrentScale();
+    }
+  }, { signal: this._controller.signal });
+  this._container.addEventListener('touchmove', (event) => {
+    if (event.touches.length === 2 && pinchStartDistance != null) {
+      event.preventDefault();
+      const ratio = getTouchDistance(event.touches[0], event.touches[1]) / pinchStartDistance;
+      targetPinchScale = initialPinchScale * ratio;
+      applyPinchTransform();
+    }
+  }, { passive: false, signal: this._controller.signal });
+  const resetTouch = () => { pinchStartDistance = null; finalizePinch(); };
+  this._container.addEventListener('touchend', resetTouch, { signal: this._controller.signal });
+  this._container.addEventListener('touchcancel', resetTouch, { signal: this._controller.signal });
+    
+  // Pinch to zoom (Safari trackpad)
+  let gestureActive = false;
+  this._container.addEventListener('gesturestart', (event) => {
+    event.preventDefault();
+    gestureActive = true;
+    initialPinchScale = getCurrentScale();
+  }, { passive: false, signal: this._controller.signal });
+  this._container.addEventListener('gesturechange', (event) => {
+    event.preventDefault();
+    if (initialPinchScale != null) {
+      targetPinchScale = initialPinchScale * event.scale;
+      applyPinchTransform();
+    }
+  }, { passive: false, signal: this._controller.signal });
+  this._container.addEventListener('gestureend', (event) => {
+    event.preventDefault();
+    gestureActive = false;
+    finalizePinch();
+  }, { passive: false, signal: this._controller.signal });
+
+  // Pinch to zoom (Chrome/Firefox trackpad) and ctrl+scroll (all browsers)
+  let wheelPinchFrameId = null;
+  this._container.addEventListener('wheel', (event) => {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    if (gestureActive) return; // Safari gesture is handling the zoom
+    if (initialPinchScale == null) initialPinchScale = getCurrentScale();
+    if (targetPinchScale == null) targetPinchScale = getCurrentScale();
+    targetPinchScale += -event.deltaY * 0.3; // Decimal can be adjusted to tune sensitivity
+    targetPinchScale = clampScale(targetPinchScale);
+    applyPinchTransform();
+    // Finalize after a pause in wheel events
+    clearTimeout(wheelPinchFrameId);
+    wheelPinchFrameId = setTimeout(finalizePinch, 200);
+  }, { passive: false, signal: this._controller.signal });
   
   // Score container resize
   this._resizeObserver = new ResizeObserver(this._debounce((entries) => {
@@ -296,11 +388,15 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
   for (const key of Object.keys(this._defaultOptions)) {
     this._currentOptions[key] = this._currentOptions[key] ?? this._defaultOptions[key];
     // Normalize scale option
-    if (key === 'scale' && Array.isArray(this._currentOptions.scale)) {
-      let scale = this._currentOptions.scale;
-      scale = [parseInt(scale.at(0)), parseInt(scale.at(-1))];
-      if (scale[0] === scale[1]) scale = scale[0] ?? this._defaultOptions.scale;
-      this._currentOptions.scale = scale;
+    if (key === 'scale') {
+      if (Array.isArray(this._currentOptions.scale)) {
+        let scale = this._currentOptions.scale;
+        scale = [parseInt(scale.at(0)), parseInt(scale.at(-1))];
+        if (scale[0] === scale[1]) scale = scale[0] ?? this._defaultOptions.scale;
+        this._currentOptions.scale = scale;
+      } else {
+        this._currentOptions.scale = Math.round(parseFloat(this._currentOptions.scale)) || this._defaultOptions.scale;
+      }
     }
   }
   const updatedOptionKeys = [];
@@ -2461,6 +2557,9 @@ ChScore.prototype._drawScore = function () {
   if (this._currentOptions.customEvents.includes('ch:scoredraw')) {
     this._container.dispatchEvent(new CustomEvent('ch:scoredraw', { detail: {
       pageState: this.getPageState(),
+      width: this._container.offsetWidth,
+      height: this._container.offsetHeight,
+      scale: this._currentOptions.scale,
     } }));
   }
 }

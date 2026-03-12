@@ -284,10 +284,29 @@
       let chScore, scoreData;
       let scoreId = (new URLSearchParams(window.location.search).get('scoreId')) ?? 'how-great-the-wisdom-and-the-love';
       const demoScores = getDemoScores();
+      let scaleControlsActive = false;
+      
+      // Elements
+      const dynamicStylesheet = document.getElementById('dynamic-stylesheet');
       const scoreContainer = document.getElementById('score-container');
+      const controlsArea = document.getElementById('controls');
       const titleArea = document.getElementById('title');
       const pageNumbersArea = document.getElementById('page-numbers');
       const tapDetailsArea = document.getElementById('tap-details');
+      const scaleToFitToggle = controlsArea.querySelector('[name="scaleToFit"]');
+      const scaleSlider = controlsArea.querySelector('[name="scale"]');
+      const minScaleSlider = controlsArea.querySelector('[name="minScale"]');
+      const maxScaleSlider = controlsArea.querySelector('[name="maxScale"]');
+      const transposePicker = controlsArea.querySelector('[name="keySignatureId"]');
+      const layoutPicker = controlsArea.querySelector('[name="layout"]');
+      const expandScorePicker = controlsArea.querySelector('[name="expandScore"]');
+      const chordSetPicker = controlsArea.querySelector('[name="showChordSet"]');
+      const chordSetImagesToggle = controlsArea.querySelector('[name="showChordSetImages"]');
+      const fingeringMarksToggle = controlsArea.querySelector('[name="showFingeringMarks"]');
+      const measureNumbersToggle = controlsArea.querySelector('[name="showMeasureNumbers"]');
+      const melodyOnlyToggle = controlsArea.querySelector('[name="showMelodyOnly"]');
+      const sectionTogglesDiv = controlsArea.querySelector('.section-toggles');
+      const shapesAndLabelsControls = controlsArea.querySelectorAll('[name="drawForegroundShapes"]');
       
       // Get scoreId from URL and load score or custom score form
       if (demoScores[scoreId]?.scoreUrl || demoScores[scoreId]?.scoreContent) {
@@ -327,6 +346,21 @@
           pageNumberButtons += `<button class="page-number" onclick="chScore.jumpToPage(${pageNumber}, false)">${pageNumber}</button>`;
         }
         pageNumbersArea.innerHTML = pageNumberButtons;
+        
+        // Update scale controls if needed (skip if the scale change was triggered by the controls)
+        const scale = event.detail.scale;
+        if (!scaleControlsActive) {
+          if (Array.isArray(scale)) {
+            scaleToFitToggle.checked = true;
+            minScaleSlider.value = scale[0];
+            maxScaleSlider.value = scale[1];
+          } else {
+            scaleToFitToggle.checked = false;
+            scaleSlider.value = scale;
+            minScaleSlider.value = scale;
+            maxScaleSlider.value = scale;
+          }
+        }
       });
       
       // Listen for Chorister.js score load
@@ -359,31 +393,15 @@
       }
       
       function loadControls(chScore, scoreData) {
-        const dynamicStylesheet = document.getElementById('dynamic-stylesheet');
-        const controlsArea = document.getElementById('controls');
-        const scaleToFitToggle = controlsArea.querySelector('[name="scaleToFit"]');
-        const scaleSlider = controlsArea.querySelector('[name="scale"]');
-        const minScaleSlider = controlsArea.querySelector('[name="minScale"]');
-        const maxScaleSlider = controlsArea.querySelector('[name="maxScale"]');
-        const transposePicker = controlsArea.querySelector('[name="keySignatureId"]');
-        const layoutPicker = controlsArea.querySelector('[name="layout"]');
-        const expandScorePicker = controlsArea.querySelector('[name="expandScore"]');
-        const chordSetPicker = controlsArea.querySelector('[name="showChordSet"]');
-        const chordSetImagesToggle = controlsArea.querySelector('[name="showChordSetImages"]');
-        const fingeringMarksToggle = controlsArea.querySelector('[name="showFingeringMarks"]');
-        const measureNumbersToggle = controlsArea.querySelector('[name="showMeasureNumbers"]');
-        const melodyOnlyToggle = controlsArea.querySelector('[name="showMelodyOnly"]');
-        const sectionTogglesDiv = controlsArea.querySelector('.section-toggles');
-        const shapesAndLabelsControls = controlsArea.querySelectorAll('[name="drawForegroundShapes"]');
-        
         // Set scale
         const setScale = (event) => {
+          scaleControlsActive = event?.target != null;
           let minScale, maxScale;
           if (scaleToFitToggle.checked) {
             minScale = parseInt(minScaleSlider.value);
             maxScale = parseInt(maxScaleSlider.value);
             if (minScale > maxScale) {
-              event.target === minScaleSlider ? maxScale = minScale : minScale = maxScale
+              event?.target === minScaleSlider ? maxScale = minScale : minScale = maxScale;
             }
           } else {
             minScale = maxScale = parseInt(scaleSlider.value);
@@ -396,6 +414,7 @@
           } else {
             chScore.setOptions({ scale: [minScale, maxScale] });
           }
+          scaleControlsActive = false;
         }
         scaleToFitToggle.addEventListener('change', setScale);
         scaleSlider.addEventListener('input', setScale);
