@@ -25,7 +25,8 @@ Chorister.js powers the interactive sheet music at [SingPraises.net](https://sin
 ### Sheet music rendering
 
 - SVG sheet music rendered by Verovio (supports MusicXML, MEI, ABC notation, and other formats).
-- Responsive layout that adapts to various screen sizes.
+- Responsive layout options that adapt to various screen sizes.
+– Adjust sheet music size with pinch to zoom or scale to fit.
 - Support for expanding/unrolling piano introductions, verses, jumps, and repeats.
 - Melody-only view (when part information is provided).
 - Support for switching between multiple “chord sets” (guitar chords, ukulele chords, analytical marks, etc.).
