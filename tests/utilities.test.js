@@ -878,12 +878,12 @@ describe('_getQpmAtTime()', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   it('should return QPM from tempo array when time is found', () => {
     const tempos = [{ time: 0, qpm: 120 }, { time: 5, qpm: 100 }];
@@ -911,7 +911,7 @@ describe('_getQpmAtTime()', () => {
 describe('_normalizeChordSets()', () => {
   it('should create a default chord set from <harm> elements in MEI (integration)', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
 
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
@@ -925,7 +925,7 @@ describe('_normalizeChordSets()', () => {
         },
       }],
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.chordSetsById).toBeDefined();
     expect(score._scoreData.chordSetsById['user-chords']).toBeDefined();
@@ -933,7 +933,7 @@ describe('_normalizeChordSets()', () => {
 
   it('should populate chordSetsById lookup (integration)', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       chordSets: [{
@@ -944,7 +944,7 @@ describe('_normalizeChordSets()', () => {
         chordPositionRefs: {},
       }],
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.chordSetsById['test-normalize']).toBeDefined();
   });
@@ -1100,9 +1100,9 @@ describe('_normalizeChordSets()', () => {
 describe('_markSingleLineChordPositions()', () => {
   it('should mark chord positions as single line when only one lyric line exists (integration)', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml2 });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     let hasSingleLine = false;
     for (const cpInfo of score._scoreData.chordPositions) {
@@ -1405,9 +1405,9 @@ describe('_getInlineVerseNumbers()', () => {
 
   it('should extract verse numbers from label elements (integration)', async () => {
     const integrationScore = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await integrationScore.load('musicxml', { scoreContent: sampleMusicXml });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const verseNumbers = integrationScore._getInlineVerseNumbers(integrationScore._scoreData.meiParsed);
     expect(verseNumbers.length).toBe(4);
@@ -1417,9 +1417,9 @@ describe('_getInlineVerseNumbers()', () => {
   it('should return [1] for single-verse songs without labels (integration)', async () => {
     const abcContent = `X:1\nT:Test\nL:1/4\nM:4/4\nK:C\nw:la la\nCDEF|`;
     const integrationScore = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await integrationScore.load('abc', { scoreContent: abcContent });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const verseNumbers = integrationScore._getInlineVerseNumbers(integrationScore._scoreData.meiParsed);
     expect(verseNumbers).toEqual([1]);

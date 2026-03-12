@@ -2,7 +2,7 @@
  * Tests: Public API methods and load-related functionality.
  *
  * Covers: load(), setOptions(), getOptions(), getScoreData(), getScoreContainer(),
- * getMidi(), removeScore(), drawScore(), Custom Events, Options Effects,
+ * getMidi(), removeScore(), _drawScore(), Custom Events, Options Effects,
  * Input Data Structures, Score Types, Edge Cases,
  * _extractLyricStanzas, _normalizeSections, _updateExpansionMap, _getPointData,
  * _generateSectionsFromSimpleScore, _extractPianoIntroduction,
@@ -168,31 +168,31 @@ describe('setOptions() and getOptions()', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
   it('should return a deep clone of current options from getOptions()', () => {
     const options = score.getOptions();
-    expect(options.zoomPercent).toBe(40);
-    options.zoomPercent = 999;
-    expect(score.getOptions().zoomPercent).toBe(40);
+    expect(options.scale).toBe(40);
+    options.scale = 999;
+    expect(score.getOptions().scale).toBe(40);
   });
 
   it('should update options via setOptions()', () => {
-    score.setOptions({ zoomPercent: 60 });
-    expect(score.getOptions().zoomPercent).toBe(60);
+    score.setOptions({ scale: 60 });
+    expect(score.getOptions().scale).toBe(60);
   });
 
   it('should merge partial options without overwriting others', () => {
     score.setOptions({ showMeasureNumbers: true });
     const options = score.getOptions();
     expect(options.showMeasureNumbers).toBe(true);
-    expect(options.zoomPercent).toBe(40);
+    expect(options.scale).toBe(40);
   });
 
   it('should accept showChordSet option values', () => {
@@ -224,29 +224,29 @@ describe('setOptions() and getOptions()', () => {
 
   it('should apply multiple options simultaneously in a single setOptions call', () => {
     score.setOptions({
-      zoomPercent: 75,
+      scale: 75,
       showMeasureNumbers: true,
       showMelodyOnly: false,
       drawBackgroundShapes: ['ch-system-rect'],
     });
     const opts = score.getOptions();
-    expect(opts.zoomPercent).toBe(75);
+    expect(opts.scale).toBe(75);
     expect(opts.showMeasureNumbers).toBe(true);
     expect(opts.showMelodyOnly).toBe(false);
     expect(opts.drawBackgroundShapes).toEqual(['ch-system-rect']);
   });
 
   it('should not overwrite unrelated options when applying compound setOptions', () => {
-    score.setOptions({ zoomPercent: 55 });
+    score.setOptions({ scale: 55 });
     score.setOptions({ showMeasureNumbers: true });
     const opts = score.getOptions();
-    expect(opts.zoomPercent).toBe(55);
+    expect(opts.scale).toBe(55);
     expect(opts.showMeasureNumbers).toBe(true);
   });
 
   it('should round-trip all option values through setOptions → getOptions', () => {
     const testOpts = {
-      zoomPercent: 65,
+      scale: 65,
       showMeasureNumbers: true,
       showMelodyOnly: false,
       showChordSet: 'guitar',
@@ -275,9 +275,9 @@ describe('setOptions() and getOptions()', () => {
   });
 
   // Options Effects (shares the same loaded score)
-  it('should pass zoom percent as scale to Verovio', () => {
+  it('should pass scale option to Verovio', () => {
     const spy = vi.spyOn(score._vrvToolkit, 'setOptions');
-    score.setOptions({ zoomPercent: 60 });
+    score.setOptions({ scale: 60 });
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });
@@ -308,12 +308,12 @@ describe('getMidi()', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   it('should return note-sequence by default', () => {
     const midi = score.getMidi();
@@ -370,14 +370,17 @@ describe('removeScore()', () => {
     expect(container.innerHTML).toBe('');
   });
 
-  it('should clear data attributes on the container', async () => {
+  it('should clear data-ch-* attributes on the container', async () => {
     const score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
     const container = document.getElementById('score-container');
 
     score.removeScore();
-    expect(container.getAttribute('data-status')).toBeNull();
-    expect(container.getAttribute('data-width')).toBeNull();
+    expect(container.getAttribute('data-ch-status')).toBeNull();
+    expect(container.getAttribute('data-ch-layout')).toBeNull();
+    expect(container.getAttribute('data-ch-scale-to-fit')).toBeNull();
+    expect(container.getAttribute('data-ch-width')).toBeNull();
+    expect(container.getAttribute('data-ch-height')).toBeNull();
   });
 
   it('should set container.score to undefined', async () => {
@@ -405,7 +408,7 @@ describe('Custom Events', () => {
     expect(options.customEvents).toContain('ch:hover');
   });
 
-  it('should dispatch ch:tap event on click when enabled', async () => {
+  it('should dispatch ch:tap event on pointerdown/pointerup when enabled', async () => {
     const score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
@@ -415,14 +418,38 @@ describe('Custom Events', () => {
     const tapHandler = vi.fn();
     container.addEventListener('ch:tap', tapHandler);
 
-    const clickEvent = new MouseEvent('click', { clientX: 50, clientY: 50, bubbles: true });
-    container.dispatchEvent(clickEvent);
+    container.dispatchEvent(new MouseEvent('pointerdown', { clientX: 50, clientY: 50, bubbles: true }));
+    container.dispatchEvent(new MouseEvent('pointerup', { clientX: 50, clientY: 50, bubbles: true }));
 
     expect(tapHandler).toHaveBeenCalled();
     const detail = tapHandler.mock.calls[0][0].detail;
-    expect(detail).toHaveProperty('chordPosition');
-    expect(detail).toHaveProperty('noteIds');
-    expect(detail).toHaveProperty('sectionIds');
+    expect(detail).toHaveProperty('pointData');
+    expect(detail.pointData).toHaveProperty('chordPosition');
+    expect(detail.pointData).toHaveProperty('noteIds');
+    expect(detail.pointData).toHaveProperty('sectionIds');
+    expect(detail).toHaveProperty('pointerEvent');
+    expect(detail).toHaveProperty('isLongPress');
+    expect(detail.isLongPress).toBe(false);
+  });
+
+  it('should dispatch ch:tap with isLongPress=true after 500ms hold', async () => {
+    vi.useFakeTimers();
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', {
+      scoreContent: sampleMusicXml,
+    }, { ...ChScore.prototype._defaultOptions, customEvents: ['ch:tap'] });
+
+    const container = document.getElementById('score-container');
+    const tapHandler = vi.fn();
+    container.addEventListener('ch:tap', tapHandler);
+
+    container.dispatchEvent(new MouseEvent('pointerdown', { clientX: 50, clientY: 50, bubbles: true }));
+    vi.advanceTimersByTime(500);
+
+    expect(tapHandler).toHaveBeenCalled();
+    const detail = tapHandler.mock.calls[0][0].detail;
+    expect(detail.isLongPress).toBe(true);
+    vi.useRealTimers();
   });
 
   it('should dispatch ch:tap without enabling ch:hover', async () => {
@@ -437,7 +464,8 @@ describe('Custom Events', () => {
     container.addEventListener('ch:tap', tapHandler);
     container.addEventListener('ch:hover', hoverHandler);
 
-    container.dispatchEvent(new MouseEvent('click', { clientX: 50, clientY: 50, bubbles: true }));
+    container.dispatchEvent(new MouseEvent('pointerdown', { clientX: 50, clientY: 50, bubbles: true }));
+    container.dispatchEvent(new MouseEvent('pointerup', { clientX: 50, clientY: 50, bubbles: true }));
     container.dispatchEvent(new MouseEvent('mousemove', { clientX: 50, clientY: 50, bubbles: true }));
 
     expect(tapHandler).toHaveBeenCalled();
@@ -447,16 +475,150 @@ describe('Custom Events', () => {
 });
 
 // ============================================================
-// drawScore()
+// getPageState()
 // ============================================================
-describe('drawScore()', () => {
+describe('getPageState()', () => {
+  it('should return an object with currentPageNumber and pageNumbers', async () => {
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXml });
+    const pageState = score.getPageState();
+    expect(pageState).toHaveProperty('currentPageNumber');
+    expect(pageState).toHaveProperty('pageNumbers');
+    expect(Array.isArray(pageState.pageNumbers)).toBe(true);
+    expect(pageState.pageNumbers.length).toBeGreaterThan(0);
+  });
+
+  it('should return integer page numbers', async () => {
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXml });
+    const pageState = score.getPageState();
+    for (const pn of pageState.pageNumbers) {
+      expect(Number.isInteger(pn)).toBe(true);
+    }
+  });
+});
+
+// ============================================================
+// jumpToPage()
+// ============================================================
+describe('jumpToPage()', () => {
+  it('should scroll to the given page number', async () => {
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXml });
+    const pageState = score.getPageState();
+    const firstPage = pageState.pageNumbers[0];
+    const pageEl = score._container.querySelector(`[data-ch-page="${firstPage}"]`);
+    pageEl.scrollIntoView = vi.fn();
+
+    score.jumpToPage(firstPage);
+    expect(pageEl.scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'instant' }));
+  });
+
+  it('should support smooth animation', async () => {
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXml });
+    const pageState = score.getPageState();
+    const firstPage = pageState.pageNumbers[0];
+    const pageEl = score._container.querySelector(`[data-ch-page="${firstPage}"]`);
+    pageEl.scrollIntoView = vi.fn();
+
+    score.jumpToPage(firstPage, true);
+    expect(pageEl.scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'smooth' }));
+  });
+
+  it('should support next and previous keywords', async () => {
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXml });
+    const pageState = score.getPageState();
+    if (pageState.pageNumbers.length < 2) return; // Need at least 2 pages
+
+    // Mock scrollIntoView on all pages
+    const spies = [];
+    for (const pn of pageState.pageNumbers) {
+      const el = score._container.querySelector(`[data-ch-page="${pn}"]`);
+      el.scrollIntoView = vi.fn();
+      spies.push(el.scrollIntoView);
+    }
+
+    score.jumpToPage('next');
+    const anyCalled = spies.some(s => s.mock.calls.length > 0);
+    expect(anyCalled).toBe(true);
+  });
+});
+
+// ============================================================
+// ch:pagechange event
+// ============================================================
+describe('ch:pagechange event', () => {
+  it('should fire ch:pagechange with pageState detail when IntersectionObserver triggers', async () => {
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXml });
+
+    const container = document.getElementById('score-container');
+    const handler = vi.fn();
+    container.addEventListener('ch:pagechange', handler);
+
+    // Simulate IntersectionObserver callback on the first page
+    const pageEl = score._pages[0];
+    score._pageObserver._cb([{ target: pageEl, isIntersecting: true }]);
+
+    expect(handler).toHaveBeenCalled();
+    const detail = handler.mock.calls[0][0].detail;
+    expect(detail).toHaveProperty('pageState');
+    expect(detail.pageState).toHaveProperty('currentPageNumber');
+    expect(detail.pageState).toHaveProperty('pageNumbers');
+  });
+});
+
+// ============================================================
+// headerContent / footerContent
+// ============================================================
+describe('headerContent / footerContent', () => {
+  it('should render headerContent HTML in the container', async () => {
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', {
+      scoreContent: sampleMusicXml,
+    }, { ...ChScore.prototype._defaultOptions, headerContent: '<p class="test-header">My Header</p>' });
+
+    const container = document.getElementById('score-container');
+    const header = container.querySelector('[data-ch-header]');
+    expect(header).not.toBeNull();
+    expect(header.textContent).toContain('My Header');
+  });
+
+  it('should render footerContent HTML in the container', async () => {
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', {
+      scoreContent: sampleMusicXml,
+    }, { ...ChScore.prototype._defaultOptions, footerContent: '<p class="test-footer">My Footer</p>' });
+
+    const container = document.getElementById('score-container');
+    const footer = container.querySelector('[data-ch-footer]');
+    expect(footer).not.toBeNull();
+    expect(footer.textContent).toContain('My Footer');
+  });
+
+  it('should render empty header/footer containers by default', async () => {
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXml });
+
+    const container = document.getElementById('score-container');
+    expect(container.querySelector('[data-ch-header]')).not.toBeNull();
+    expect(container.querySelector('[data-ch-footer]')).not.toBeNull();
+  });
+});
+
+// ============================================================
+// _drawScore()
+// ============================================================
+describe('_drawScore()', () => {
   it('should render SVG into the container', async () => {
     const score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
 
     const container = document.getElementById('score-container');
     expect(container.querySelector('svg')).not.toBeNull();
-    expect(container.querySelector('#lyrics-below')).not.toBeNull();
+    expect(container.querySelector('[data-ch-lyrics-below]')).not.toBeNull();
   });
 });
 
@@ -707,12 +869,12 @@ describe('Edge Cases', () => {
 describe('_extractLyricStanzas() / alignSyllablesToLyrics()', () => {
   it('should handle missing lyricsText gracefully (returns empty stanzas)', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       lyricsText: null,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData).toBeDefined();
     expect(score._scoreData.sections.length).toBeGreaterThan(0);
@@ -720,12 +882,12 @@ describe('_extractLyricStanzas() / alignSyllablesToLyrics()', () => {
 
   it('should handle empty lyricsText string', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       lyricsText: '',
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData).toBeDefined();
   });
@@ -738,9 +900,9 @@ describe('_extractLyricStanzas() / alignSyllablesToLyrics()', () => {
 describe('_normalizeSections() — Section generation', () => {
   it('should generate sections for a simple hymn (How Great the Wisdom)', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.sections.length).toBe(5);
     for (const section of score._scoreData.sections) {
@@ -754,9 +916,9 @@ describe('_normalizeSections() — Section generation', () => {
 
   it('should generate verse sections based on inline verse numbers', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const verseSections = score._scoreData.sections.filter(s => s.type === 'verse');
     expect(verseSections.length).toBe(4);
@@ -764,9 +926,9 @@ describe('_normalizeSections() — Section generation', () => {
 
   it('should generate sections with expansion for repeated score (This Little Light)', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml2 });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.sections.length).toBe(1);
     expect(score._scoreData.hasRepeatOrJump).toBeDefined();
@@ -774,9 +936,9 @@ describe('_normalizeSections() — Section generation', () => {
 
   it('should generate an introduction section when score has intro brackets', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const introSections = score._scoreData.sections.filter(s => s.type === 'introduction');
     if (score._scoreData.hasIntroBrackets) {
@@ -797,12 +959,12 @@ describe('_normalizeSections() — Section generation', () => {
       },
     ];
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       sections: customSections,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.sections.length).toBeGreaterThanOrEqual(1);
     const customSection = score._scoreData.sections.find(s => s.sectionId === 'custom-verse-1');
@@ -811,9 +973,9 @@ describe('_normalizeSections() — Section generation', () => {
 
   it('should populate sectionsById lookup', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.sectionsById).toBeDefined();
     for (const section of score._scoreData.sections) {
@@ -826,9 +988,9 @@ describe('_normalizeSections() — Section generation', () => {
     // Load HGW MusicXML without lyrics text → no lyric stanzas extracted
     // and without pre-built sections → triggers generateDefaultSection
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     // HGW has inline verse labels → generates sections from simple score
     // But a score with no lyrics at all would get 'unknown'
@@ -840,12 +1002,12 @@ describe('_normalizeSections() — Section generation', () => {
   // ── below section IDs use sequential below-N format ──
   it('below sections should have sequential below-N sectionIds (HGW with lyrics)', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       lyricsText: sampleLyrics,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const belowSections = score._scoreData.sections.filter(s => s.placement === 'below');
     expect(belowSections.length).toBe(2);
@@ -856,12 +1018,12 @@ describe('_normalizeSections() — Section generation', () => {
   // ── annotatedLyrics attached to inline verse sections ──
   it('inline verse sections should have annotatedLyrics from lyric stanzas (HGW with lyrics)', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       lyricsText: sampleLyrics,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const inlineVerses = score._scoreData.sections.filter(
       s => s.type === 'verse' && s.placement === 'inline'
@@ -875,12 +1037,12 @@ describe('_normalizeSections() — Section generation', () => {
   // ── below sections have annotatedLyrics ──
   it('below sections should carry annotatedLyrics from extra lyric stanzas', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       lyricsText: sampleLyrics,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const belowSections = score._scoreData.sections.filter(s => s.placement === 'below');
     for (const section of belowSections) {
@@ -892,12 +1054,12 @@ describe('_normalizeSections() — Section generation', () => {
   // ── below sections have correct type and marker from lyric stanzas ──
   it('below sections should inherit type and marker from lyric stanzas', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       lyricsText: sampleLyrics,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const belowSections = score._scoreData.sections.filter(s => s.placement === 'below');
     expect(belowSections[0].type).toBe('verse');
@@ -909,12 +1071,12 @@ describe('_normalizeSections() — Section generation', () => {
   // ── below sections should have pauseAfter=false ──
   it('below sections should have pauseAfter=false', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       lyricsText: sampleLyrics,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const belowSections = score._scoreData.sections.filter(s => s.placement === 'below');
     for (const section of belowSections) {
@@ -925,12 +1087,12 @@ describe('_normalizeSections() — Section generation', () => {
   // ── sectionsById includes below sections ──
   it('sectionsById should include below sections', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       lyricsText: sampleLyrics,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.sectionsById['below-0']).toBeDefined();
     expect(score._scoreData.sectionsById['below-1']).toBeDefined();
@@ -957,12 +1119,12 @@ describe('_normalizeSections() — Section generation', () => {
       chordPositionRanges: [{ start: 5, end: 37, staffNumbers: [1, 2], lyricLineIds: ['1.1'] }],
     };
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       sections: [introSection, verseSection],
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.sections[0].type).toBe('introduction');
     expect(score._scoreData.sections[0].sectionId).toBe('intro-custom');
@@ -978,27 +1140,27 @@ describe('_updateExpansionMap()', () => {
 
   it('should detect expansion in scores with repeats', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml2 });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.hasExpansion).toBe(true);
   });
 
   it('should detect hasRepeatOrJump for scores with repeat barlines', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml2 });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.hasRepeatOrJump).toBe(true);
   });
 
   it('should not detect hasRepeatOrJump for simple hymns', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.hasRepeatOrJump).toBe(false);
   });
@@ -1525,12 +1687,12 @@ describe('ch:hover — deduplication', () => {
   it('should dispatch ch:hover event on mousemove when enabled', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
     });
     score._currentOptions.customEvents = ['ch:hover'];
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const container = document.getElementById('score-container');
     const hoverHandler = vi.fn();
@@ -1542,19 +1704,20 @@ describe('ch:hover — deduplication', () => {
     expect(hoverHandler).toHaveBeenCalled();
     if (hoverHandler.mock.calls.length > 0) {
       const detail = hoverHandler.mock.calls[0][0].detail;
-      expect(detail).toHaveProperty('chordPosition');
+      expect(detail).toHaveProperty('pointData');
+      expect(detail.pointData).toHaveProperty('chordPosition');
     }
   });
 
   it('should handle mouseleave without error after hover events', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
     });
     score._currentOptions.customEvents = ['ch:hover'];
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const container = document.getElementById('score-container');
     const hoverHandler = vi.fn();
@@ -1582,10 +1745,10 @@ describe('ch:hover — detail properties', () => {
   it('should include all expected properties in event detail', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml });
     score._currentOptions.customEvents = ['ch:hover'];
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const container = document.getElementById('score-container');
     const hoverHandler = vi.fn();
@@ -1596,53 +1759,56 @@ describe('ch:hover — detail properties', () => {
     expect(hoverHandler).toHaveBeenCalled();
     const detail = hoverHandler.mock.calls[0][0].detail;
 
-    expect(detail).toHaveProperty('systemId');
-    expect(detail).toHaveProperty('measureId');
-    expect(detail).toHaveProperty('noteIds');
-    expect(detail).toHaveProperty('partIds');
-    expect(detail).toHaveProperty('lyricId');
-    expect(detail).toHaveProperty('chordPosition');
-    expect(detail).toHaveProperty('expandedChordPositions');
-    expect(detail).toHaveProperty('staffNumber');
-    expect(detail).toHaveProperty('sectionIds');
-    expect(detail).toHaveProperty('lyricLineId');
+    expect(detail).toHaveProperty('pointData');
+    expect(detail.pointData).toHaveProperty('systemId');
+    expect(detail.pointData).toHaveProperty('measureId');
+    expect(detail.pointData).toHaveProperty('noteIds');
+    expect(detail.pointData).toHaveProperty('partIds');
+    expect(detail.pointData).toHaveProperty('lyricId');
+    expect(detail.pointData).toHaveProperty('chordPosition');
+    expect(detail.pointData).toHaveProperty('expandedChordPositions');
+    expect(detail.pointData).toHaveProperty('staffNumber');
+    expect(detail.pointData).toHaveProperty('sectionIds');
+    expect(detail.pointData).toHaveProperty('lyricLineId');
   });
 
   it('ch:tap detail should also include all expected properties', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml });
     score._currentOptions.customEvents = ['ch:tap'];
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const container = document.getElementById('score-container');
     const tapHandler = vi.fn();
     container.addEventListener('ch:tap', tapHandler);
 
-    container.dispatchEvent(new MouseEvent('click', { clientX: 50, clientY: 50, bubbles: true }));
+    container.dispatchEvent(new MouseEvent('pointerdown', { clientX: 50, clientY: 50, bubbles: true }));
+    container.dispatchEvent(new MouseEvent('pointerup', { clientX: 50, clientY: 50, bubbles: true }));
 
     expect(tapHandler).toHaveBeenCalled();
     const detail = tapHandler.mock.calls[0][0].detail;
 
-    expect(detail).toHaveProperty('systemId');
-    expect(detail).toHaveProperty('measureId');
-    expect(detail).toHaveProperty('noteIds');
-    expect(detail).toHaveProperty('partIds');
-    expect(detail).toHaveProperty('lyricId');
-    expect(detail).toHaveProperty('chordPosition');
-    expect(detail).toHaveProperty('expandedChordPositions');
-    expect(detail).toHaveProperty('staffNumber');
-    expect(detail).toHaveProperty('sectionIds');
-    expect(detail).toHaveProperty('lyricLineId');
+    expect(detail).toHaveProperty('pointData');
+    expect(detail.pointData).toHaveProperty('systemId');
+    expect(detail.pointData).toHaveProperty('measureId');
+    expect(detail.pointData).toHaveProperty('noteIds');
+    expect(detail.pointData).toHaveProperty('partIds');
+    expect(detail.pointData).toHaveProperty('lyricId');
+    expect(detail.pointData).toHaveProperty('chordPosition');
+    expect(detail.pointData).toHaveProperty('expandedChordPositions');
+    expect(detail.pointData).toHaveProperty('staffNumber');
+    expect(detail.pointData).toHaveProperty('sectionIds');
+    expect(detail.pointData).toHaveProperty('lyricLineId');
   });
 });
 
 
 // ============================================================
-// drawScore — lyrics-below
+// _drawScore — lyrics-below
 // ============================================================
-describe('drawScore() — lyrics-below', () => {
+describe('_drawScore() — lyrics-below', () => {
   it('should render lyrics-below div with section content', async () => {
     const score = new ChScore('#score-container');
     await score.load('musicxml', {
@@ -1650,7 +1816,7 @@ describe('drawScore() — lyrics-below', () => {
       lyricsText: sampleLyrics,
     });
 
-    const lyricsBelow = document.getElementById('lyrics-below');
+    const lyricsBelow = document.querySelector('[data-ch-lyrics-below]');
     expect(lyricsBelow).not.toBeNull();
   });
 
@@ -1664,7 +1830,7 @@ describe('drawScore() — lyrics-below', () => {
     const belowSections = score._scoreData.sections.filter(s => s.placement === 'below');
     expect(belowSections.length).toBeGreaterThan(0);
     score.setOptions({ hideSectionIds: [belowSections[0].sectionId] });
-    const lyricsBelow = document.getElementById('lyrics-below');
+    const lyricsBelow = document.querySelector('[data-ch-lyrics-below]');
     const hiddenP = lyricsBelow.querySelector(`[data-ch-section-id="${belowSections[0].sectionId}"]`);
     expect(hiddenP).toBeNull();
   });
@@ -1677,7 +1843,7 @@ describe('drawScore() — lyrics-below', () => {
 describe('load() — MXL ArrayBuffer path', () => {
   it('should call loadZipDataBuffer when scoreContent is an ArrayBuffer', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
 
     const loadZipSpy = vi.fn();
     const origSetOptions = score.setOptions.bind(score);
@@ -1696,7 +1862,7 @@ describe('load() — MXL ArrayBuffer path', () => {
 
     expect(loadZipSpy).toHaveBeenCalledWith(expect.any(ArrayBuffer));
 
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
   });
 });
 
@@ -1721,7 +1887,7 @@ describe('load() — ABC content cleanup', () => {
 describe('load() — section types: bridge, interlude, unknown', () => {
   it('should accept sections with type=bridge', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const sectionsInput = [{
@@ -1737,7 +1903,7 @@ describe('load() — section types: bridge, interlude, unknown', () => {
       scoreContent: sampleMusicXml,
       sections: sectionsInput,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const bridge = scoreData.sections.find(s => s.sectionId === 'bridge-1');
     expect(bridge).toBeDefined();
@@ -1747,7 +1913,7 @@ describe('load() — section types: bridge, interlude, unknown', () => {
 
   it('should accept sections with type=interlude', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const sectionsInput = [{
@@ -1763,7 +1929,7 @@ describe('load() — section types: bridge, interlude, unknown', () => {
       scoreContent: sampleMusicXml,
       sections: sectionsInput,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const interlude = scoreData.sections.find(s => s.sectionId === 'interlude-1');
     expect(interlude).toBeDefined();
@@ -1773,7 +1939,7 @@ describe('load() — section types: bridge, interlude, unknown', () => {
 
   it('should accept sections with type=unknown', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const sectionsInput = [{
@@ -1789,7 +1955,7 @@ describe('load() — section types: bridge, interlude, unknown', () => {
       scoreContent: sampleMusicXml,
       sections: sectionsInput,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const unknown = scoreData.sections.find(s => s.sectionId === 'unknown-1');
     expect(unknown).toBeDefined();
@@ -1806,7 +1972,7 @@ describe('load() — humdrum score type', () => {
     document.body.innerHTML = '<div id="score-container"></div>';
     const origParse = ChScore.prototype._parseAndAnnotateMei;
     const origLoadMidi = ChScore.prototype._loadMidi;
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     ChScore.prototype._parseAndAnnotateMei = function() {};
     ChScore.prototype._loadMidi = function() {};
     const score = new ChScore('#score-container');
@@ -1819,7 +1985,7 @@ describe('load() — humdrum score type', () => {
 
     ChScore.prototype._parseAndAnnotateMei = origParse;
     ChScore.prototype._loadMidi = origLoadMidi;
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
   });
 });
 
@@ -1830,7 +1996,7 @@ describe('load() — humdrum score type', () => {
 describe('load() — parts with numeric and "full" placement', () => {
   it('should accept parts with numeric placement values', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const partsInput = [
@@ -1868,7 +2034,7 @@ describe('load() — parts with numeric and "full" placement', () => {
       scoreContent: sampleMusicXml,
       parts: partsInput,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(scoreData.parts.length).toBe(4);
     expect(scoreData.parts[0].placement).toBe(1);
@@ -1879,7 +2045,7 @@ describe('load() — parts with numeric and "full" placement', () => {
 
   it('should accept parts with "full" placement', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const partsInput = [
@@ -1896,7 +2062,7 @@ describe('load() — parts with numeric and "full" placement', () => {
       scoreContent: sampleMusicXml,
       parts: partsInput,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(scoreData.parts[0].placement).toBe('full');
     expect(scoreData.parts[0].chordPositionRefs[0].staffNumbers).toEqual([1, 2]);
@@ -1910,7 +2076,7 @@ describe('load() — parts with numeric and "full" placement', () => {
 describe('load() — parts with lyricLineIds', () => {
   it('should accept and store parts with lyricLineIds', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const partsInput = [
@@ -1948,7 +2114,7 @@ describe('load() — parts with lyricLineIds', () => {
       scoreContent: sampleMusicXml,
       parts: partsInput,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(scoreData.parts[0].chordPositionRefs[0].lyricLineIds).toEqual(['1.1']);
     expect(scoreData.parts[1].chordPositionRefs[0].lyricLineIds).toEqual(['1.2']);
@@ -1964,7 +2130,7 @@ describe('load() — parts with lyricLineIds', () => {
 describe('load() — section with placement "none"', () => {
   it('should accept and store a section with placement=none', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const sectionsInput = [
@@ -1983,7 +2149,7 @@ describe('load() — section with placement "none"', () => {
       scoreContent: sampleMusicXml,
       sections: sectionsInput,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const hiddenSection = scoreData.sections.find(s => s.sectionId === 'hidden-verse');
     expect(hiddenSection).toBeDefined();
@@ -1992,7 +2158,7 @@ describe('load() — section with placement "none"', () => {
 
   it('should not display section with placement=none in lyrics-below', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const sectionsInput = [
@@ -2022,7 +2188,7 @@ describe('load() — section with placement "none"', () => {
       scoreContent: sampleMusicXml,
       sections: sectionsInput,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const belowSections = score._scoreData.sections.filter(s => s.placement === 'below');
     const noneSections = score._scoreData.sections.filter(s => s.placement === 'none');
@@ -2040,7 +2206,7 @@ describe('load() — section with placement "none"', () => {
 describe('load() — chorus section type', () => {
   it('should accept sections with type=chorus', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const sectionsInput = [
@@ -2068,7 +2234,7 @@ describe('load() — chorus section type', () => {
       scoreContent: sampleMusicXml,
       sections: sectionsInput,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const chorus = scoreData.sections.find(s => s.type === 'chorus');
     expect(chorus).toBeDefined();
@@ -2078,7 +2244,7 @@ describe('load() — chorus section type', () => {
 
   it('should store both verse and chorus sections in order', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const sectionsInput = [
@@ -2098,7 +2264,7 @@ describe('load() — chorus section type', () => {
       scoreContent: sampleMusicXml,
       sections: sectionsInput,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(scoreData.sections.length).toBe(2);
     expect(scoreData.sections[0].type).toBe('verse');

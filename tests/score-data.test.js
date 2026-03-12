@@ -27,13 +27,13 @@ describe('scoreData — structural invariants', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
 
     score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   // ── measures ──
   describe('scoreData.measures', () => {
@@ -258,7 +258,7 @@ describe('data-ch-expanded-chord-position — SVG shapes', () => {
   afterEach(() => {
     score._currentOptions = structuredClone(ChScore.prototype._defaultOptions);
     score._updateMei();
-    score.drawScore();
+    score._drawScore();
   });
 
   it('should set data-ch-expanded-chord-position on note circles', () => {

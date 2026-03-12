@@ -29,7 +29,7 @@ describe('_loadMidi() — MIDI alignment', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
 
     score = new ChScore('#score-container');
     await score.load('musicxml', {
@@ -45,7 +45,7 @@ describe('_loadMidi() — MIDI alignment', () => {
   });
 
   afterAll(() => {
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
     restoreDefaultMagentaMock();
   });
 
@@ -162,14 +162,14 @@ describe('_loadMidi() — MIDI alignment', () => {
 describe('_loadMidi() — Fermata handling', () => {
   it('should adjust MIDI duration for fermatas when durationFactor > 1', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const fermatas = [{ chordPosition: 31, durationFactor: 2.0 }];
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       partsTemplate: 'SA+TB',
       fermatas: fermatas,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const cpInfo = score._scoreData.chordPositions[31];
     expect(cpInfo).toBeDefined();
@@ -186,7 +186,7 @@ describe('_loadMidi() — Fermata handling', () => {
   it('should not adjust fermata when durationFactor is 1 or less', async () => {
     // Load baseline without fermatas
     const baselineScore = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await baselineScore.load('musicxml', {
       scoreContent: sampleMusicXml,
       partsTemplate: 'SA+TB',
@@ -201,7 +201,7 @@ describe('_loadMidi() — Fermata handling', () => {
       partsTemplate: 'SA+TB',
       fermatas: fermatasLow,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const cpInfo = score._scoreData.chordPositions[31];
     expect(cpInfo.midiDuration).toBe(baselineDuration);
@@ -214,12 +214,12 @@ describe('_loadMidi() — Fermata handling', () => {
 describe('_loadMidi() — Note deduplication', () => {
   it('should remove duplicate MIDI notes with same start, end, and pitch', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       partsTemplate: 'SA+TB',
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const notes = score._scoreData.midiNoteSequence.notes;
     expect(notes.length).toBeGreaterThan(0);
@@ -245,14 +245,14 @@ describe('_loadMidi() — Note deduplication', () => {
 describe('_loadMidi() — Verovio fallback', () => {
   it('should fall back to Verovio MIDI when external MIDI chord positions dont match', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
 
     const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       partsTemplate: 'SA+TB',
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.midiType).toBe('verovio');
     consoleSpy.mockRestore();
@@ -268,7 +268,7 @@ describe('convertQpmToMetronomeBpm — via metronome beats', () => {
   });
 
   it('should produce beats aligned with time signature for 4/4 time (How Great the Wisdom)', async () => {
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml, partsTemplate: 'SA+TB' });
 
@@ -276,7 +276,7 @@ describe('convertQpmToMetronomeBpm — via metronome beats', () => {
     core.midiToSequenceProto.mockImplementation(() => structuredClone(mockData));
     resetMidiFields(score);
     score._loadMidi();
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const beats = score._scoreData.metronomeBeats;
     expect(beats.length).toBe(177);
@@ -287,7 +287,7 @@ describe('convertQpmToMetronomeBpm — via metronome beats', () => {
   });
 
   it('should produce beats for score with repeats (This Little Light)', async () => {
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml2 });
 
@@ -295,7 +295,7 @@ describe('convertQpmToMetronomeBpm — via metronome beats', () => {
     core.midiToSequenceProto.mockImplementation(() => structuredClone(mockData));
     resetMidiFields(score);
     score._loadMidi();
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const beats = score._scoreData.metronomeBeats;
     expect(beats.length).toBe(88);
@@ -324,7 +324,7 @@ describe('load() — midiNoteSequence as direct input', () => {
 
   it('should use provided midiNoteSequence instead of generating from Verovio', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const customNoteSequence = buildHgwMatchingSequence(90);
@@ -333,7 +333,7 @@ describe('load() — midiNoteSequence as direct input', () => {
       scoreContent: sampleMusicXml,
       midiNoteSequence: customNoteSequence,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const stored = score._scoreData.midiNoteSequence;
     expect(stored).toBeDefined();
@@ -342,14 +342,14 @@ describe('load() — midiNoteSequence as direct input', () => {
 
   it('should set midiType to minimal when midiNoteSequence matches audibleChordPositions', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       midiNoteSequence: buildHgwMatchingSequence(120),
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     expect(score._scoreData.midiType).toBe('minimal');
   });
@@ -362,7 +362,7 @@ describe('load() — midiNoteSequence as direct input', () => {
 describe('MIDI channel assignment per part', () => {
   it('should assign different channels to different parts with SA+TB template', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
@@ -373,7 +373,7 @@ describe('MIDI channel assignment per part', () => {
     core.midiToSequenceProto.mockImplementation(() => structuredClone(mockData));
     resetMidiFields(score);
     score._loadMidi();
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
     restoreDefaultMagentaMock();
 
     // With SA+TB, there are 4 parts; channel should be derived from part index
@@ -393,7 +393,7 @@ describe('MIDI channel assignment per part', () => {
 
   it('should assign channel 0 as default for single-part scores', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
@@ -403,7 +403,7 @@ describe('MIDI channel assignment per part', () => {
     core.midiToSequenceProto.mockImplementation(() => structuredClone(mockData));
     resetMidiFields(score);
     score._loadMidi();
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
     restoreDefaultMagentaMock();
 
     const notes = score._scoreData.midiNoteSequence.notes;
@@ -414,7 +414,7 @@ describe('MIDI channel assignment per part', () => {
 
   it('should have meiNotes array on each MIDI note in the sequence', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
@@ -425,7 +425,7 @@ describe('MIDI channel assignment per part', () => {
     core.midiToSequenceProto.mockImplementation(() => structuredClone(mockData));
     resetMidiFields(score);
     score._loadMidi();
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
     restoreDefaultMagentaMock();
 
     const notes = score._scoreData.midiNoteSequence.notes;
@@ -443,7 +443,7 @@ describe('MIDI channel assignment per part', () => {
 describe('Fermata durationFactor — before/after comparison', () => {
   it('should increase midiDuration for chord position with durationFactor > 1', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
 
     // Load without fermata first
     const scoreWithout = new ChScore('#score-container');
@@ -472,7 +472,7 @@ describe('Fermata durationFactor — before/after comparison', () => {
     scoreWith._loadMidi();
     const durationWith = scoreWith._scoreData.chordPositions[31].midiDuration;
 
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
     restoreDefaultMagentaMock();
 
     expect(durationWith).toBeGreaterThan(durationWithout);
@@ -480,7 +480,7 @@ describe('Fermata durationFactor — before/after comparison', () => {
 
   it('should also increase midiEndTime for the fermata chord position', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
 
     const scoreWithout = new ChScore('#score-container');
     await scoreWithout.load('musicxml', {
@@ -507,7 +507,7 @@ describe('Fermata durationFactor — before/after comparison', () => {
     scoreWith._loadMidi();
     const endTimeWith = scoreWith._scoreData.chordPositions[31].midiEndTime;
 
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
     restoreDefaultMagentaMock();
 
     expect(endTimeWith).toBeGreaterThan(endTimeWithout);
@@ -521,10 +521,10 @@ describe('Fermata durationFactor — before/after comparison', () => {
 describe('hideSectionIds — MIDI data unchanged', () => {
   it('should not change midiNoteSequence when sections are hidden', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const noteCountBefore = score._scoreData.midiNoteSequence.notes.length;
     const totalTimeBefore = score._scoreData.midiNoteSequence.totalTime;
@@ -538,10 +538,10 @@ describe('hideSectionIds — MIDI data unchanged', () => {
 
   it('should not change chordPosition MIDI timings when sections are hidden', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const cp0TimeBefore = score._scoreData.chordPositions[0].midiStartTime;
     const cp0DurationBefore = score._scoreData.chordPositions[0].midiDuration;

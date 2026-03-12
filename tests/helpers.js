@@ -42,7 +42,7 @@ export async function initChScore() {
   indirectEval(scriptContent);
 
   const ChScore = window.ChScore;
-  const origDrawScore = ChScore.prototype.drawScore;
+  const origDrawScore = ChScore.prototype._drawScore;
   return { ChScore, origDrawScore };
 }
 
@@ -57,6 +57,7 @@ export function setupStandardHooks() {
     document.body.innerHTML = '<div id="score-container"></div>';
     document.adoptedStyleSheets = [];
     if (window.ChScore) {
+      for (const s of window.ChScore.prototype._chScores) s._controller?.abort();
       window.ChScore.prototype._chScores = [];
       window.ChScore.prototype._throttleStatus = {};
     }
@@ -96,7 +97,7 @@ export function resetScoreStateWithRender(score) {
   if (!score?._scoreData) return;
   score._currentOptions = structuredClone(window.ChScore.prototype._defaultOptions);
   score._updateMei();
-  score.drawScore();
+  score._drawScore();
 }
 
 // ── MIDI helpers ─────────────────────────────────────────────

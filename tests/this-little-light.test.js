@@ -42,7 +42,7 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml2,
@@ -52,7 +52,7 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   // ── Basic score structure ──
   describe('Basic score structure', () => {
@@ -555,14 +555,14 @@ describe('This Little Light — plain load (no partsTemplate)', { timeout: 30000
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml2,
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
   it('should still have 2 staves', () => {
@@ -595,7 +595,7 @@ describe('This Little Light — lyrics extraction from text file', { timeout: 30
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml2,
@@ -603,7 +603,7 @@ describe('This Little Light — lyrics extraction from text file', { timeout: 30
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
   it('should store the lyrics text', () => {

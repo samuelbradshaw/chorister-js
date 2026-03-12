@@ -65,7 +65,7 @@ describe('ChScore Construction', () => {
 describe('Default Options', () => {
   it('should have correct default option values', () => {
     const defaults = ChScore.prototype._defaultOptions;
-    expect(defaults.zoomPercent).toBe(40);
+    expect(defaults.scale).toBe(40);
     expect(defaults.keySignatureId).toBeNull();
     expect(defaults.expandScore).toBe(false);
     expect(defaults.showChordSet).toBe(false);
@@ -74,9 +74,12 @@ describe('Default Options', () => {
     expect(defaults.showMeasureNumbers).toBe(false);
     expect(defaults.showMelodyOnly).toBe(false);
     expect(defaults.hideSectionIds).toEqual([]);
+    expect(defaults.layout).toBe('vertical-scroll');
+    expect(defaults.headerContent).toBe('');
+    expect(defaults.footerContent).toBe('');
     expect(defaults.drawBackgroundShapes).toEqual([]);
     expect(defaults.drawForegroundShapes).toEqual([]);
-    expect(defaults.customEvents).toEqual([]);
+    expect(defaults.customEvents).toEqual(['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw', 'ch:pagechange']);
   });
 });
 
@@ -102,7 +105,7 @@ describe('Default Verovio Options', () => {
     expect(vrvOpts.footer).toBe('none');
     expect(vrvOpts.breaks).toBe('smart');
     expect(vrvOpts.adjustPageHeight).toBe(true);
-    expect(vrvOpts.pageHeight).toBe(10000);
+    expect(vrvOpts.pageHeight).toBe(60000);
     expect(vrvOpts.mmOutput).toBe(false);
   });
 

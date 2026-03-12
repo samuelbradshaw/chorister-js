@@ -50,7 +50,7 @@ describe('_extractLyricStanzas — How Great the Wisdom', { timeout: 30000 }, ()
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXmlHGW,
@@ -60,7 +60,7 @@ describe('_extractLyricStanzas — How Great the Wisdom', { timeout: 30000 }, ()
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   // ── Stanza count and types ──
   describe('Stanza structure', () => {
@@ -265,7 +265,7 @@ describe('_extractLyricStanzas — It Is Well', { timeout: 30000 }, () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXmlIIW,
@@ -276,7 +276,7 @@ describe('_extractLyricStanzas — It Is Well', { timeout: 30000 }, () => {
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   // ── Stanza count and types ──
   describe('Stanza structure (pre-built sections)', () => {
@@ -466,7 +466,7 @@ describe('_extractLyricStanzas — This Little Light', { timeout: 30000 }, () =>
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXmlTLL,
@@ -476,7 +476,7 @@ describe('_extractLyricStanzas — This Little Light', { timeout: 30000 }, () =>
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   // ── Stanza count ──
   describe('Stanza structure', () => {
@@ -578,7 +578,7 @@ describe('_extractLyricStanzas — no lyrics text', { timeout: 30000 }, () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXmlHGW,
@@ -587,7 +587,7 @@ describe('_extractLyricStanzas — no lyrics text', { timeout: 30000 }, () => {
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   it('should still produce sections even without lyrics text', () => {
     expect(score._scoreData.sections).toBeDefined();
@@ -611,7 +611,7 @@ describe('_extractLyricStanzas — empty lyrics text', { timeout: 30000 }, () =>
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXmlHGW,
@@ -620,7 +620,7 @@ describe('_extractLyricStanzas — empty lyrics text', { timeout: 30000 }, () =>
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   it('should still produce sections even with empty lyrics text', () => {
     expect(score._scoreData.sections).toBeDefined();
@@ -643,7 +643,7 @@ describe('_extractLyricStanzas — span marker counts', { timeout: 30000 }, () =
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
 
     scoreHGW = new ChScore('#score-container');
     await scoreHGW.load('musicxml', {
@@ -671,7 +671,7 @@ describe('_extractLyricStanzas — span marker counts', { timeout: 30000 }, () =
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   function countSpans(scoreData) {
     let total = 0;

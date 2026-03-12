@@ -635,13 +635,13 @@ describe('alignSyllablesToLyrics — integration with How Great the Wisdom', () 
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       lyricsText: sampleLyrics,
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
   });
 
   it('should produce sections with annotatedLyrics', () => {

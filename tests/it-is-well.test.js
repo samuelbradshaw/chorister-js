@@ -41,7 +41,7 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: iiwMusicXml,
@@ -52,7 +52,7 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   // ── Basic score structure ──
   describe('Basic score structure', () => {
@@ -675,14 +675,14 @@ describe('It Is Well — default load (no parts/sections)', { timeout: 30000 }, 
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: iiwMusicXml,
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
   it('should still have 3 staves without custom parts', () => {
@@ -714,7 +714,7 @@ describe('It Is Well — lyrics extraction from text file', { timeout: 30000 }, 
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: iiwMusicXml,
@@ -722,7 +722,7 @@ describe('It Is Well — lyrics extraction from text file', { timeout: 30000 }, 
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   it('should store the lyrics text', () => {
     expect(score._scoreData.lyricsText).toBe(iiwLyrics);

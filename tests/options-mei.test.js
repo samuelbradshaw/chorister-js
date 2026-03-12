@@ -1,7 +1,7 @@
 /**
  * Tests: Options that modify MEI or SVG output.
  *
- * Covers: showMeasureNumbers, keySignatureId, zoomPercent, shapes,
+ * Covers: showMeasureNumbers, keySignatureId, scale, shapes,
  * showMelodyOnly, expandScore, hideSectionIds, showChordSet,
  * showFingeringMarks, print media, shape margins, chord set prefix,
  * _updateSvg SVG post-processing, _updateSvg chord symbols
@@ -21,20 +21,20 @@ beforeAll(async () => {
 setupStandardHooks();
 
 // ============================================================
-// Shared fixture: sampleMusicXml, drawScore mocked
-// Groups: showMeasureNumbers, zoomPercent, hideSectionIds, print media, shape margins
+// Shared fixture: sampleMusicXml, _drawScore mocked
+// Groups: showMeasureNumbers, scale, hideSectionIds, print media, shape margins
 // ============================================================
 describe('Options — shared plain sampleMusicXml load', () => {
   let score;
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
   // ── showMeasureNumbers ──
@@ -60,30 +60,29 @@ describe('Options — shared plain sampleMusicXml load', () => {
     });
   });
 
-  // ── zoomPercent ──
-  describe('zoomPercent — Verovio options verification', () => {
-    it('should pass zoomPercent as scale to Verovio', () => {
+  // ── scale ──
+  describe('scale — Verovio options verification', () => {
+    it('should pass scale option to Verovio', () => {
       const spy = vi.spyOn(score._vrvToolkit, 'setOptions');
-      score.setOptions({ zoomPercent: 80 });
+      score.setOptions({ scale: 80 });
       const lastCall = spy.mock.calls[spy.mock.calls.length - 1][0];
       expect(lastCall.scale).toBe(80);
       spy.mockRestore();
     });
 
-    it('should compute different pageWidth values for different zoom levels', () => {
+    it('should set pageWidth to container width regardless of scale', () => {
       Object.defineProperty(score._container, 'offsetWidth', { value: 800, configurable: true });
 
       const spy = vi.spyOn(score._vrvToolkit, 'setOptions');
 
-      score.setOptions({ zoomPercent: 40 });
+      score.setOptions({ scale: 40 });
       const callAt40 = spy.mock.calls[spy.mock.calls.length - 1][0];
 
-      score.setOptions({ zoomPercent: 80 });
+      score.setOptions({ scale: 80 });
       const callAt80 = spy.mock.calls[spy.mock.calls.length - 1][0];
 
-      expect(callAt40.pageWidth).toBe(800 * 100 / 40);
-      expect(callAt80.pageWidth).toBe(800 * 100 / 80);
-      expect(callAt40.pageWidth).toBeGreaterThan(callAt80.pageWidth);
+      expect(callAt40.pageWidth).toBe(800);
+      expect(callAt80.pageWidth).toBe(800);
       spy.mockRestore();
     });
   });
@@ -128,31 +127,102 @@ describe('Options — shared plain sampleMusicXml load', () => {
 
   // ── print media ──
   describe('setOptions() — print media type', () => {
-    it('should set mmOutput to true for print media type', () => {
+    it('should set mmOutput to true for print layout', () => {
       const spy = vi.spyOn(score._vrvToolkit, 'setOptions');
-      score.setOptions(score._currentOptions, false, 'print');
+      score.setOptions({ layout: 'print' });
       const calls = spy.mock.calls;
       const lastCall = calls[calls.length - 1][0];
       expect(lastCall.mmOutput).toBe(true);
       spy.mockRestore();
     });
 
-    it('should set scale to 100 for print media type', () => {
+    it('should set scale to 100 for print layout', () => {
       const spy = vi.spyOn(score._vrvToolkit, 'setOptions');
-      score.setOptions(score._currentOptions, false, 'print');
+      score.setOptions({ layout: 'print' });
       const calls = spy.mock.calls;
       const lastCall = calls[calls.length - 1][0];
       expect(lastCall.scale).toBe(100);
       spy.mockRestore();
     });
 
-    it('should set mmOutput to false for screen media type', () => {
+    it('should set mmOutput to false for default layout', () => {
       const spy = vi.spyOn(score._vrvToolkit, 'setOptions');
-      score.setOptions(score._currentOptions, false, 'screen');
+      score.setOptions({ layout: 'vertical-scroll' });
       const calls = spy.mock.calls;
       const lastCall = calls[calls.length - 1][0];
-      expect(lastCall.mmOutput).toBe(false);
+      expect(lastCall.mmOutput).toBeFalsy();
       spy.mockRestore();
+    });
+  });
+
+  // ── layout: horizontal-scroll ──
+  describe('setOptions() — horizontal-scroll layout', () => {
+    it('should set breaks to none for horizontal-scroll layout', () => {
+      const spy = vi.spyOn(score._vrvToolkit, 'setOptions');
+      score.setOptions({ layout: 'horizontal-scroll' });
+      const lastCall = spy.mock.calls[spy.mock.calls.length - 1][0];
+      expect(lastCall.breaks).toBe('none');
+      spy.mockRestore();
+    });
+
+    it('should set data-ch-layout to horizontal-scroll on container', () => {
+      score.setOptions({ layout: 'horizontal-scroll' });
+      expect(score._container.dataset.chLayout).toBe('horizontal-scroll');
+    });
+  });
+
+  // ── layout: paginated ──
+  describe('setOptions() — paginated layout', () => {
+    it('should set systemMaxPerPage to 1 for paginated layout', () => {
+      const spy = vi.spyOn(score._vrvToolkit, 'setOptions');
+      score.setOptions({ layout: 'paginated' });
+      const lastCall = spy.mock.calls[spy.mock.calls.length - 1][0];
+      expect(lastCall.systemMaxPerPage).toBe(1);
+      spy.mockRestore();
+    });
+
+    it('should set pageHeight based on container height for paginated layout', () => {
+      Object.defineProperty(score._container, 'offsetHeight', { value: 600, configurable: true });
+      const spy = vi.spyOn(score._vrvToolkit, 'setOptions');
+      score.setOptions({ layout: 'paginated' });
+      const lastCall = spy.mock.calls[spy.mock.calls.length - 1][0];
+      expect(lastCall.pageHeight).toBe(600);
+      spy.mockRestore();
+    });
+
+    it('should use minimum pageHeight of 100 for paginated layout', () => {
+      Object.defineProperty(score._container, 'offsetHeight', { value: 0, configurable: true });
+      const spy = vi.spyOn(score._vrvToolkit, 'setOptions');
+      score.setOptions({ layout: 'paginated' });
+      const lastCall = spy.mock.calls[spy.mock.calls.length - 1][0];
+      expect(lastCall.pageHeight).toBe(100);
+      spy.mockRestore();
+    });
+
+    it('should set data-ch-layout to paginated on container', () => {
+      score.setOptions({ layout: 'paginated' });
+      expect(score._container.dataset.chLayout).toBe('paginated');
+    });
+  });
+
+  // ── scale as array [min, max] ──
+  describe('setOptions() — scale as array', () => {
+    it('should pass null scale to Verovio when scale is an array', () => {
+      const spy = vi.spyOn(score._vrvToolkit, 'setOptions');
+      score.setOptions({ scale: [30, 100] });
+      const lastCall = spy.mock.calls[spy.mock.calls.length - 1][0];
+      expect(lastCall.scale).toBeNull();
+      spy.mockRestore();
+    });
+
+    it('should set data-ch-scale-to-fit to true when scale is an array', () => {
+      score.setOptions({ scale: [30, 100] });
+      expect(score._container.dataset.chScaleToFit).toBe('true');
+    });
+
+    it('should set data-ch-scale-to-fit to false when scale is a number', () => {
+      score.setOptions({ scale: 40 });
+      expect(score._container.dataset.chScaleToFit).toBe('false');
     });
   });
 
@@ -193,12 +263,12 @@ describe('keySignatureId — MEI verification', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => {
     resetScoreState(score);
     score._vrvToolkit.resetOptions();
@@ -288,7 +358,7 @@ describe('drawBackgroundShapes / drawForegroundShapes — SVG verification', () 
   afterEach(() => {
     score._currentOptions = structuredClone(ChScore.prototype._defaultOptions);
     score._updateMei();
-    score.drawScore();
+    score._drawScore();
   });
 
   it('should create background shape group in SVG', () => {
@@ -393,6 +463,7 @@ describe('showMelodyOnly — MEI verification', () => {
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
     score = new ChScore('#score-container');
+    Object.defineProperty(score._container, 'offsetWidth', { value: 800, configurable: true });
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       partsTemplate: 'SA+TB',
@@ -402,7 +473,7 @@ describe('showMelodyOnly — MEI verification', () => {
   afterEach(() => {
     score._currentOptions = structuredClone(ChScore.prototype._defaultOptions);
     score._updateMei();
-    score.drawScore();
+    score._drawScore();
   });
 
   it('should have melody info after loading with partsTemplate', () => {
@@ -459,7 +530,7 @@ describe('showChordSet — MEI verification', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
@@ -477,7 +548,7 @@ describe('showChordSet — MEI verification', () => {
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
   it('should detect chordSets after loading', () => {
@@ -574,12 +645,12 @@ describe('showFingeringMarks — MEI verification', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: fingeringMusicXml });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
   it('should detect fingering marks after loading MusicXML with fingering', () => {
@@ -630,7 +701,7 @@ describe('Shape types — smoke tests for all shape classes', () => {
   afterEach(() => {
     score._currentOptions = structuredClone(ChScore.prototype._defaultOptions);
     score._updateMei();
-    score.drawScore();
+    score._drawScore();
   });
 
   it.each([
@@ -661,7 +732,7 @@ describe('Shape types — smoke tests for all shape classes', () => {
 describe('setOptions() — chord set images spacing', () => {
   it('should adjust spacing for chord set images', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score2 = new ChScore('#score-container');
     await score2.load('musicxml', {
       scoreContent: sampleMusicXml,
@@ -683,7 +754,7 @@ describe('setOptions() — chord set images spacing', () => {
     expect(lastCall.spacingNonLinear).toBe(0.5);
     expect(lastCall.pageMarginTop).toBe(220);
     spy.mockRestore();
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
   });
 });
 
@@ -695,7 +766,7 @@ describe('showChordSet — prefix in harm elements', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
@@ -712,7 +783,7 @@ describe('showChordSet — prefix in harm elements', () => {
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
   it('should include prefix text in harm element content', () => {
@@ -754,7 +825,7 @@ describe('_updateSvg() — SVG post-processing', () => {
   afterEach(() => {
     score._currentOptions = structuredClone(ChScore.prototype._defaultOptions);
     score._updateMei();
-    score.drawScore();
+    score._drawScore();
   });
 
   it('should set currentColor on the definition-scale element', () => {
@@ -882,7 +953,7 @@ describe('_updateSvg() — Chord symbols', () => {
   afterEach(() => {
     score._currentOptions = structuredClone(ChScore.prototype._defaultOptions);
     score._updateMei();
-    score.drawScore();
+    score._drawScore();
   });
 
   it('should render harm elements in SVG when showChordSet is enabled', () => {

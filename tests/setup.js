@@ -72,6 +72,16 @@ if (!globalThis.ResizeObserver) {
   };
 }
 
+// IntersectionObserver mock
+if (!globalThis.IntersectionObserver) {
+  globalThis.IntersectionObserver = class {
+    constructor(cb) { this._cb = cb; }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
+
 // structuredClone polyfill (available in Node 17+, but just in case)
 if (!globalThis.structuredClone) {
   globalThis.structuredClone = (val) => JSON.parse(JSON.stringify(val));

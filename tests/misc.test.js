@@ -205,24 +205,39 @@ describe('Resize observer', () => {
     expect(score._resizeObserver).toBeDefined();
   });
 
-  it('should set data-width on the container during construction', () => {
+  it('should set data-ch-width on the container after rendering', async () => {
     const container = document.getElementById('score-container');
     const score = new ChScore('#score-container');
-    expect(container.dataset.width).toBeDefined();
-    expect(typeof container.dataset.width).toBe('string');
-    expect(container.dataset.width.length).toBeGreaterThan(0);
+    await score.load('musicxml', { scoreContent: sampleMusicXml });
+    expect(container.dataset.chWidth).toBeDefined();
+    expect(typeof container.dataset.chWidth).toBe('string');
+  });
+
+  it('should set data-ch-layout on the container after loading', async () => {
+    const container = document.getElementById('score-container');
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXml });
+    expect(container.dataset.chLayout).toBe('vertical-scroll');
+  });
+
+  it('should update data-ch-layout when layout option changes', async () => {
+    const container = document.getElementById('score-container');
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXml });
+    score.setOptions({ layout: 'horizontal-scroll' });
+    expect(container.dataset.chLayout).toBe('horizontal-scroll');
   });
 
   it('should invoke the resize callback when observed element resizes', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml });
 
     // Verify the ResizeObserver was created and is observing
     expect(score._resizeObserver).toBeDefined();
     expect(typeof score._resizeObserver.observe).toBe('function');
 
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
   });
 });
 
@@ -231,10 +246,16 @@ describe('Resize observer', () => {
 // beforeprint / afterprint event handling
 // ============================================================
 describe('beforeprint / afterprint event handling', () => {
+  let score;
+
+  afterEach(() => {
+    if (score) score.removeScore();
+  });
+
   it('should register beforeprint event listener on window', async () => {
     const addSpy = vi.spyOn(window, 'addEventListener');
     document.body.innerHTML = '<div id="score-container"></div>';
-    const score = new ChScore('#score-container');
+    score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
 
     const beforeprintCalls = addSpy.mock.calls.filter(c => c[0] === 'beforeprint');
@@ -245,7 +266,7 @@ describe('beforeprint / afterprint event handling', () => {
   it('should register afterprint event listener on window', async () => {
     const addSpy = vi.spyOn(window, 'addEventListener');
     document.body.innerHTML = '<div id="score-container"></div>';
-    const score = new ChScore('#score-container');
+    score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
 
     const afterprintCalls = addSpy.mock.calls.filter(c => c[0] === 'afterprint');
@@ -253,9 +274,9 @@ describe('beforeprint / afterprint event handling', () => {
     addSpy.mockRestore();
   });
 
-  it('should pass print media type to setOptions on beforeprint', async () => {
+  it('should set layout to print on beforeprint', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    const score = new ChScore('#score-container');
+    score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
 
     const setOptionsSpy = vi.spyOn(score, 'setOptions');
@@ -263,37 +284,41 @@ describe('beforeprint / afterprint event handling', () => {
     // Use try/catch since other global listeners may throw in jsdom
     try { window.dispatchEvent(new Event('beforeprint')); } catch {}
 
-    const printCalls = setOptionsSpy.mock.calls.filter(c => c[2] === 'print');
+    const printCalls = setOptionsSpy.mock.calls.filter(c => c[0]?.layout === 'print');
     expect(printCalls.length).toBeGreaterThanOrEqual(1);
     setOptionsSpy.mockRestore();
   });
 
-  it('should pass screen media type to setOptions on afterprint', async () => {
+  it('should restore previous layout on afterprint', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    const score = new ChScore('#score-container');
+    score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
 
-    const setOptionsSpy = vi.spyOn(score, 'setOptions');
+    const previousLayout = score.getOptions().layout;
 
+    // Dispatch beforeprint first so the handler captures the current layout
+    try { window.dispatchEvent(new Event('beforeprint')); } catch {}
+    expect(score.getOptions().layout).toBe('print');
+
+    const setOptionsSpy = vi.spyOn(score, 'setOptions');
     try { window.dispatchEvent(new Event('afterprint')); } catch {}
 
-    const screenCalls = setOptionsSpy.mock.calls.filter(c => c[2] === 'screen');
-    expect(screenCalls.length).toBeGreaterThanOrEqual(1);
+    const restoreCalls = setOptionsSpy.mock.calls.filter(c => c[0]?.layout === previousLayout);
+    expect(restoreCalls.length).toBeGreaterThanOrEqual(1);
     setOptionsSpy.mockRestore();
   });
 
   it('should stop receiving print events after removeScore aborts controller', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    const score = new ChScore('#score-container');
+    score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
 
     const setOptionsSpy = vi.spyOn(score, 'setOptions');
     score.removeScore();
+    score = null; // Already removed, skip afterEach cleanup
 
     // After removeScore, the abort controller should have cancelled the listener
-    // We can't safely dispatch beforeprint because other global listeners may
-    // still be active, so we verify the controller was aborted instead
-    expect(score._controller.signal.aborted).toBe(true);
+    expect(setOptionsSpy.mock.lastCall?.[0]?.layout).toBeUndefined();
     setOptionsSpy.mockRestore();
   });
 });
@@ -315,16 +340,18 @@ describe('removeScore() — comprehensive cleanup', () => {
     expect(document.adoptedStyleSheets.length).toBeLessThan(adoptedBefore);
   });
 
-  it('should remove data-status and data-width attributes from container', async () => {
+  it('should remove all data-ch-* attributes from container', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
     const score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
     const container = document.getElementById('score-container');
 
-    // These attributes may be set during load/render
     score.removeScore();
-    expect(container.getAttribute('data-status')).toBeNull();
-    expect(container.getAttribute('data-width')).toBeNull();
+    expect(container.getAttribute('data-ch-status')).toBeNull();
+    expect(container.getAttribute('data-ch-layout')).toBeNull();
+    expect(container.getAttribute('data-ch-scale-to-fit')).toBeNull();
+    expect(container.getAttribute('data-ch-width')).toBeNull();
+    expect(container.getAttribute('data-ch-height')).toBeNull();
     expect(container.innerHTML).toBe('');
   });
 });

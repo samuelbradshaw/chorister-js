@@ -20,7 +20,7 @@ beforeAll(async () => {
 setupStandardHooks();
 
 // ============================================================
-// Shared fixture: sampleMusicXml + SA+TB, drawScore mocked
+// Shared fixture: sampleMusicXml + SA+TB, _drawScore mocked
 // Groups: ch-chord-position, ch-part-id (SA+TB), ch-secondary (SA+TB)
 // ============================================================
 describe('MEI annotations — SA+TB shared load', () => {
@@ -28,7 +28,7 @@ describe('MEI annotations — SA+TB shared load', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
@@ -36,7 +36,7 @@ describe('MEI annotations — SA+TB shared load', () => {
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
   // ── ch-chord-position ──
@@ -219,7 +219,7 @@ describe('MEI annotations — SA+TB shared load', () => {
 });
 
 // ============================================================
-// Shared fixture: sampleMusicXml, drawScore mocked
+// Shared fixture: sampleMusicXml, _drawScore mocked
 // Groups: ch-lyric-line-id, ch-section-id, ch-intro-bracket
 // ============================================================
 describe('MEI annotations — plain sampleMusicXml shared load', () => {
@@ -227,12 +227,12 @@ describe('MEI annotations — plain sampleMusicXml shared load', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
   // ── ch-lyric-line-id ──
@@ -358,12 +358,12 @@ describe('ch-part-id — without partsTemplate or parts', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   it('should still have hasPartInfo true (default melody part is generated)', () => {
     expect(score._scoreData.hasPartInfo).toBe(true);
@@ -415,7 +415,7 @@ describe('ch-superscript — MEI verification', () => {
 
     beforeAll(async () => {
       document.body.innerHTML = '<div id="score-container"></div>';
-      ChScore.prototype.drawScore = function() {};
+      ChScore.prototype._drawScore = function() {};
       score = new ChScore('#score-container');
       const freshChordSets = chordSetsWithNumbers.map(cs => ({
         ...cs,
@@ -428,7 +428,7 @@ describe('ch-superscript — MEI verification', () => {
       });
     });
 
-    afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+    afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
     afterEach(() => { resetScoreState(score); });
 
     it('should create rend elements with ch-superscript when showChordSet is enabled', () => {
@@ -504,7 +504,7 @@ describe('ch-superscript — MEI verification', () => {
 describe('_parseAndAnnotateMei() — error handling', () => {
   it('should handle empty timemap gracefully', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -516,7 +516,7 @@ describe('_parseAndAnnotateMei() — error handling', () => {
     expect(timemapErrors.length).toBe(0);
 
     consoleSpy.mockRestore();
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
   });
 });
 
@@ -529,7 +529,7 @@ describe('ch-melody — MEI annotation', () => {
 
   beforeAll(async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
@@ -537,7 +537,7 @@ describe('ch-melody — MEI annotation', () => {
     });
   });
 
-  afterAll(() => { ChScore.prototype.drawScore = origDrawScore; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
   it('should set ch-melody on exactly one note per chord position (37 melody notes)', () => {
@@ -570,7 +570,7 @@ describe('ch-melody — MEI annotation', () => {
 describe('ch-expanded-chord-position — MEI annotation', () => {
   it('should set ch-expanded-chord-position on notes in expanded intro mode', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
     score.setOptions({ expandScore: 'intro' });
@@ -581,12 +581,12 @@ describe('ch-expanded-chord-position — MEI annotation', () => {
       const val = note.getAttribute('ch-expanded-chord-position');
       expect(val).toMatch(/^[\d\s]+$/);
     }
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
   });
 
   it('should set ch-expanded-chord-position on notes in full-score expansion (TLL)', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml2 });
     score.setOptions({ expandScore: 'full-score' });
@@ -597,7 +597,7 @@ describe('ch-expanded-chord-position — MEI annotation', () => {
       const val = note.getAttribute('ch-expanded-chord-position');
       expect(val).toMatch(/^[\d\s]+$/);
     }
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
   });
 });
 
@@ -608,13 +608,13 @@ describe('ch-expanded-chord-position — MEI annotation', () => {
 describe('Annotation count consistency', () => {
   it('ch-chord-position note count should match notesAndRestsById note count', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
     await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       partsTemplate: 'SA+TB',
     });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const meiNotes = score._scoreData.meiParsed.querySelectorAll('note[ch-chord-position]');
     const dataNotes = Object.values(score._scoreData.notesAndRestsById).filter(nr => !nr.isRest);
@@ -623,10 +623,10 @@ describe('Annotation count consistency', () => {
 
   it('ch-lyric-line-id verse count should match across MEI and scoreData', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
     await score.load('musicxml', { scoreContent: sampleMusicXml });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const meiVerses = score._scoreData.meiParsed.querySelectorAll('verse[ch-lyric-line-id]');
     const lyricLineIds = new Set(Array.from(meiVerses).map(v => v.getAttribute('ch-lyric-line-id')));
@@ -641,9 +641,9 @@ describe('Annotation count consistency', () => {
 describe('_parseAndAnnotateMei() — layer normalization', () => {
   it('should handle scores with layers numbered starting at values other than 1', async () => {
     const score = new ChScore('#score-container');
-    ChScore.prototype.drawScore = function() {};
+    ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', { scoreContent: sampleMusicXml });
-    ChScore.prototype.drawScore = origDrawScore;
+    ChScore.prototype._drawScore = origDrawScore;
 
     const layers = score._scoreData.meiParsed.querySelectorAll('layer');
     for (const layer of layers) {
