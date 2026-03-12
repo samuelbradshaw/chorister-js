@@ -161,7 +161,7 @@ ChScore.prototype._loadEventListeners = function () {
       this._container.dataset.chWidth = width;
       this._container.dataset.chHeight = height;
     }
-  }, 200));
+  }, 100));
   this._resizeObserver.observe(this._container, { box: 'border-box' });
   
   // Score container page change
