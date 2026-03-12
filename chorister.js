@@ -155,16 +155,17 @@ ChScore.prototype._loadEventListeners = function () {
   // Pinch to zoom (general)
   let initialPinchScale = null;
   let targetPinchScale = null;
-  const clampScale = (scale) => Math.min(100, Math.max(10, scale));
+  const clampScale = (scale) => Math.min(100, Math.max(15, scale));
   const getTouchDistance = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
   const getCurrentScale = () => {
     if (Array.isArray(this._currentOptions.scale)) {
-      return parseFloat(this._container.style.getPropertyValue('--ch-scale'));
+      return parseInt(this._container.dataset.chScale);
     } else {
       return this._currentOptions.scale;
     }
   };
   const applyPinchTransform = () => {
+    this._container.dataset.chPinch = '';
     if (initialPinchScale != null && targetPinchScale != null) {
       const cssRatio = clampScale(targetPinchScale) / initialPinchScale;
       this._pages[0].style.transformOrigin = 'top left';
@@ -184,6 +185,7 @@ ChScore.prototype._loadEventListeners = function () {
         this.setOptions({ scale: clamped });
       }
     }
+    this._container.removeAttribute('data-ch-pinch');
   };
   
   // Pinch to zoom (touch screens)
@@ -432,7 +434,8 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
     verovioOptions.systemMaxPerPage = 1;
     verovioOptions.pageHeight = Math.max(this._container.offsetHeight, 100);
   }
-  this._container.style.setProperty('--ch-scale', verovioOptions.scale);
+  this._container.dataset.chScale = parseInt(verovioOptions.scale);
+  this._container.style.setProperty('--ch-scale', parseInt(verovioOptions.scale));
   
   // Set spacing
   const shapeClassNames = (this._currentOptions.drawBackgroundShapes || []).concat(this._currentOptions.drawForegroundShapes || []);
@@ -2497,7 +2500,8 @@ ChScore.prototype._drawScore = function () {
   // If scale option is an array (min and max values), attempt to find an optimal scale that fits on a single page, without getting too small
   if (Array.isArray(this._currentOptions.scale) && this._currentOptions.layout !== 'print') {
     const getPageCountAtScale = (scale) => {
-      this._container.style.setProperty('--ch-scale', scale);
+      this._container.dataset.chScale = parseInt(scale);
+      this._container.style.setProperty('--ch-scale', parseInt(scale));
       const availableHeight = Math.max(this._container.offsetHeight - this._pages[0].scrollHeight, 100);
       this._vrvToolkit.setOptions({ scale: scale, pageHeight: availableHeight });
       this._vrvToolkit.redoLayout();

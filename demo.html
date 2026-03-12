@@ -53,6 +53,9 @@
           cursor: pointer;
         }
       }
+      [data-ch-pinch] g.ch-shapes > *:not(.ch-staff-label, .ch-chord-position-label, .ch-lyric-line-label) {
+        display: none !important;
+      }
       svg .ch-shapes-foreground .ch-chord-position-line { stroke-width: 300px; }
       #score-container[data-ch-scale-to-fit="true"],
       #score-container[data-ch-layout="paginated"] {
@@ -103,6 +106,7 @@
         align-items: center;
         gap: 0.5em;
       }
+      aside input[type="checkbox"] { flex: 0 0 auto; }
       p:has([name="scaleToFit"]:checked) ~ p:has([name="scale"]),
       p:has([name="scaleToFit"]:not(:checked)) ~ p:has([name="minScale"], [name="maxScale"]) {
         display: none;
@@ -110,9 +114,22 @@
       
       /* Small screen and print styles */
       @media (max-width: 600px) {
-        body { grid-template-columns: none; }
-        body { height: auto; }
-        aside { margin: 0 1.5em 1.5em 1.5em; }
+        body {
+          grid-template-columns: none;
+          height: auto;
+        }
+        main {
+          padding: 1em;
+          margin-bottom: 30vh;
+        }
+        aside {
+          margin: 0; padding: 1em;
+          border-width: 2px 0 0 0;
+          background-color: hsl(0 0% 97%);
+          position: fixed;
+          bottom: 0; left: 0; right: 0;
+          height: 25vh;
+        }
         aside::after { display: none; }
       }
       @media print {
@@ -216,9 +233,9 @@
       <form id="controls">
         <h3>Options</h3>
         <p><label><input type="checkbox" name="scaleToFit" switch> Scale to fit</label></p>
-        <p><label>Scale: <input type="range" name="scale" value="40" min="10" max="100"></label></p>
-        <p><label>Min scale: <input type="range" name="minScale" value="40" min="10" max="100"></label></p>
-        <p><label>Max scale: <input type="range" name="maxScale" value="40" min="10" max="100"></label></p>
+        <p><label>Scale: <input type="range" name="scale" value="40" min="15" max="100"></label></p>
+        <p><label>Min scale: <input type="range" name="minScale" value="40" min="15" max="100"></label></p>
+        <p><label>Max scale: <input type="range" name="maxScale" value="40" min="15" max="100"></label></p>
         <hr>
         <p><label>Transpose:
           <select name="keySignatureId">
@@ -495,8 +512,10 @@
         let sectionStyles = '';
         for (const sectionInfo of scoreData.sections) {
           sectionStyles += `
-            body[data-section-id="${sectionInfo.sectionId}"] [data-ch-section-id~="${sectionInfo.sectionId}"] { font-weight: bold; }
-            body[data-section-id="${sectionInfo.sectionId}"] :is(p, .label, .verse)[data-ch-section-id]:not([data-ch-section-id~="${sectionInfo.sectionId}"]) { opacity: 0.4; }
+            @media (hover: hover) {
+              body[data-section-id="${sectionInfo.sectionId}"] [data-ch-section-id~="${sectionInfo.sectionId}"] { font-weight: bold; }
+              body[data-section-id="${sectionInfo.sectionId}"] :is(p, .label, .verse)[data-ch-section-id]:not([data-ch-section-id~="${sectionInfo.sectionId}"]) { opacity: 0.4; }
+            }
           `;
           sectionTogglesDiv.insertAdjacentHTML('beforeend', `
             <p><label><input type="checkbox" name="sections" value="${sectionInfo.sectionId}" switch checked> ${sectionInfo.name}</label></p>

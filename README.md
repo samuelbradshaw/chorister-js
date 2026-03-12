@@ -598,11 +598,13 @@ Chorister.js adds the following data attributes to elements in Verovio’s SVG o
 
 These data attributes are set on the score container:
 
-- **@data-ch-status** – Attribute on score container that indicates the score loading status (preparing, processing, drawing, or ready).
-- **@data-ch-layout** – Attribute on score container that indicates the current layout type.
-- **@data-ch-scale-to-fit** – Attribute on score container that indicates if scale to fit is enabled (scale option set to an array with different min and max values).
-- **@data-ch-width** – Attribute on score container that indicates the score width.
-- **@data-ch-height** – Attribute on score container that indicates the score height.
+- **@data-ch-status** – Attribute that indicates the score loading status (preparing, processing, drawing, or ready).
+- **@data-ch-layout** – Attribute that indicates the current layout type.
+- **@data-ch-scale-to-fit** – Attribute that indicates if scale to fit is enabled (scale option set to an array with different min and max values).
+- **@data-ch-pinch** – Attribute that indicates if the score is currently being pinched to zoom.
+- **@data-ch-width** – Attribute that indicates the score width.
+- **@data-ch-height** – Attribute that indicates the score height.
+- **@data-ch-scale** – Attribute that indicates the score scale.
 
 The score container has inner containers identified by these data attributes:
 
