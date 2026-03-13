@@ -67,6 +67,7 @@ ChScore.prototype._loadStyles = function () {
       width: 100%;
       height: 100%;
       scroll-snap-align: start;
+      scroll-snap-stop: always;
     }
     
     /* Print styles */
@@ -388,26 +389,30 @@ ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl =
 }
 
 ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
+  const updatedOptionKeys = [];
   this._currentOptions = this._currentOptions ?? {};
   for (const key of Object.keys(this._defaultOptions)) {
+    // Make sure current options has correct signature (based on default options)
     this._currentOptions[key] = this._currentOptions[key] ?? this._defaultOptions[key];
-    // Normalize scale option
-    if (key === 'scale') {
-      if (Array.isArray(this._currentOptions.scale)) {
-        let scale = this._currentOptions.scale;
-        scale = [parseInt(scale.at(0)), parseInt(scale.at(-1))];
-        if (scale[0] === scale[1]) scale = scale[0] ?? this._defaultOptions.scale;
-        this._currentOptions.scale = scale;
-      } else {
-        this._currentOptions.scale = Math.round(parseFloat(this._currentOptions.scale)) || this._defaultOptions.scale;
+    // Update option values
+    if (Object.hasOwn(optionsToUpdate, key)) {
+      // Normalize scale option
+      if (key === 'scale') {
+        let scale = optionsToUpdate.scale;
+        if (Array.isArray(optionsToUpdate.scale)) {
+          scale = [Math.round(parseFloat(scale.at(0))), Math.round(parseFloat(scale.at(-1)))];
+          if (scale[0] === scale[1]) scale = scale[0] ?? optionsToUpdate.scale;
+        } else {
+          scale = Math.round(parseFloat(optionsToUpdate.scale));
+        }
+        optionsToUpdate.scale = scale;
+      }
+      // Track which values changed
+      if ((optionsToUpdate[key] ?? '').toString() !== (this._currentOptions[key] ?? '').toString()) {
+        updatedOptionKeys.push(key);
+        this._currentOptions[key] = optionsToUpdate[key];
       }
     }
-  }
-  const updatedOptionKeys = [];
-  const oldOptions = structuredClone(this._currentOptions);
-  for (const key of Object.keys(optionsToUpdate)) {
-    if ((oldOptions[key] ?? '').toString() !== (optionsToUpdate[key] ?? '').toString()) updatedOptionKeys.push(key);
-    this._currentOptions[key] = optionsToUpdate[key];
   }
   
   // Add attributes: @data-ch-layout, @data-ch-scale-to-fit
@@ -437,12 +442,12 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
   this._container.dataset.chScale = parseInt(verovioOptions.scale);
   this._container.style.setProperty('--ch-scale', parseInt(verovioOptions.scale));
   
-  // Set spacing
+  // Set margin and spacing
   const shapeClassNames = (this._currentOptions.drawBackgroundShapes || []).concat(this._currentOptions.drawForegroundShapes || []);
   if (shapeClassNames.length > 0) {
     if (shapeClassNames.includes('ch-chord-position-label')) {
       verovioOptions.spacingSystem = Math.max(verovioOptions.spacingSystem, 12);
-      verovioOptions.pageMarginBottom = Math.max(verovioOptions.pageMarginBottom, 100);
+      verovioOptions.pageMarginBottom = Math.max(verovioOptions.pageMarginBottom, 20);
     }
     if (shapeClassNames.includes('ch-lyric-line-label')) {
       verovioOptions.pageMarginLeft = Math.max(verovioOptions.pageMarginLeft, 90);
@@ -2540,17 +2545,17 @@ ChScore.prototype._drawScore = function () {
   // Paginated layout: sort inner containers into pages
   if (this._currentOptions.layout === 'paginated' && this._pages[0].scrollHeight > this._container.offsetHeight) {
     const pageHeight = this._container.offsetHeight;
-    let pageStartY = this._pages[0].getBoundingClientRect().top;
-    for (const element of this._pages[0].children) {
-      const innerContainerRect = element.getBoundingClientRect();
-      if (innerContainerRect.bottom - pageStartY > pageHeight) {
+    let pageTop = this._pages[0].getBoundingClientRect().top;
+    for (const innerContainer of this._pages[0].children) {
+      const innerContainerRect = innerContainer.getBoundingClientRect();
+      if (innerContainerRect.bottom - pageTop > pageHeight && innerContainerRect.top !== pageTop) {
         createPage();
-        pageStartY = innerContainerRect.top;
+        pageTop = innerContainerRect.top;
       }
-      element.pageIndex = this._pages.length - 1;
+      innerContainer.pageIndex = this._pages.length - 1;
     }
-    for (const element of Array.from(this._pages[0].children)) {
-      if (element.pageIndex !== 0) this._pages[element.pageIndex].append(element);
+    for (const innerContainer of Array.from(this._pages[0].children)) {
+      if (innerContainer.pageIndex !== 0) this._pages[innerContainer.pageIndex].append(innerContainer);
     }
   }
   
