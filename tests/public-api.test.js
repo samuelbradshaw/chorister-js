@@ -4,7 +4,7 @@
  * Covers: load(), setOptions(), getOptions(), getScoreData(), getScoreContainer(),
  * getMidi(), removeScore(), _drawScore(), Custom Events, Options Effects,
  * Input Data Structures, Score Types, Edge Cases,
- * _extractLyricStanzas, _normalizeSections, _updateExpansionMap, _getPointData,
+ * _extractLyricStanzas, _normalizeSections, _updateExpansionElement, _getPointData,
  * _generateSectionsFromSimpleScore, _extractPianoIntroduction,
  * ch:hover/ch:tap events, lyrics-below, section types, parts, placements
  */
@@ -1133,9 +1133,9 @@ describe('_normalizeSections() — Section generation', () => {
 
 
 // ============================================================
-// _updateExpansionMap
+// _updateExpansionElement
 // ============================================================
-describe('_updateExpansionMap()', () => {
+describe('_updateExpansionElement()', () => {
   // ── Integration tests ──
 
   it('should detect expansion in scores with repeats', async () => {
@@ -1167,9 +1167,9 @@ describe('_updateExpansionMap()', () => {
 });
 
 // ============================================================
-// _updateExpansionMap — unit tests
+// _updateExpansionElement — unit tests
 // ============================================================
-describe('_updateExpansionMap() — unit tests', () => {
+describe('_updateExpansionElement() — unit tests', () => {
   let score;
   const parser = new DOMParser();
 
@@ -1179,7 +1179,7 @@ describe('_updateExpansionMap() — unit tests', () => {
   });
 
   /**
-   * Build a minimal MEI document for _updateExpansionMap testing.
+   * Build a minimal MEI document for _updateExpansionElement testing.
    * @param {Object} opts
    * @param {Array} opts.measures - Array of { right?, left?, hasVerse?, verseN? }
    * @param {Object} opts.expansion - { plist } or null
@@ -1222,7 +1222,7 @@ describe('_updateExpansionMap() — unit tests', () => {
 
   it('should return hasComplexSections=true when hasRepeatOrJump is true', () => {
     const mei = buildMei({ measures: [{ right: 'end', hasVerse: true }] });
-    const [hasComplexSections] = score._updateExpansionMap(mei, 3, false, true);
+    const [hasComplexSections] = score._updateExpansionElement(mei, 3, false, true);
     expect(hasComplexSections).toBe(true);
   });
 
@@ -1231,7 +1231,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       { hasVerse: true },
       { right: 'dbl', hasVerse: true },
     ] });
-    const [hasComplexSections] = score._updateExpansionMap(mei, 3, false, false);
+    const [hasComplexSections] = score._updateExpansionElement(mei, 3, false, false);
     expect(hasComplexSections).toBe(true);
   });
 
@@ -1240,7 +1240,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       { right: 'end', hasVerse: true },
       { right: 'end', hasVerse: true },
     ] });
-    const [hasComplexSections] = score._updateExpansionMap(mei, 3, false, false);
+    const [hasComplexSections] = score._updateExpansionElement(mei, 3, false, false);
     expect(hasComplexSections).toBe(true);
   });
 
@@ -1249,7 +1249,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       { hasVerse: false },
       { right: 'end', hasVerse: true },
     ] });
-    const [hasComplexSections] = score._updateExpansionMap(mei, 3, false, false);
+    const [hasComplexSections] = score._updateExpansionElement(mei, 3, false, false);
     expect(hasComplexSections).toBe(true);
   });
 
@@ -1258,13 +1258,13 @@ describe('_updateExpansionMap() — unit tests', () => {
       measures: [{ right: 'end', hasVerse: true }],
       hasMultipleVerseLines: true,
     });
-    const [hasComplexSections] = score._updateExpansionMap(mei, 0, false, false);
+    const [hasComplexSections] = score._updateExpansionElement(mei, 0, false, false);
     expect(hasComplexSections).toBe(true);
   });
 
   it('should return hasComplexSections=true when numVerses is 0', () => {
     const mei = buildMei({ measures: [{ right: 'end', hasVerse: true }] });
-    const [hasComplexSections] = score._updateExpansionMap(mei, 0, false, false);
+    const [hasComplexSections] = score._updateExpansionElement(mei, 0, false, false);
     expect(hasComplexSections).toBe(true);
   });
 
@@ -1272,7 +1272,7 @@ describe('_updateExpansionMap() — unit tests', () => {
 
   it('should return all false/empty when no expansion and not complex', () => {
     const mei = buildMei({ measures: [{ right: 'end', hasVerse: true }] });
-    const [hasComplexSections, hasInitialChorus, expansionIds] = score._updateExpansionMap(mei, 3, false, false);
+    const [hasComplexSections, hasInitialChorus, expansionIds] = score._updateExpansionElement(mei, 3, false, false);
     expect(hasComplexSections).toBe(false);
     expect(hasInitialChorus).toBe(false);
     expect(expansionIds).toEqual([]);
@@ -1285,7 +1285,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       sections: [{ id: 'sec1', measures: [{ right: 'end', hasVerse: true }] }],
       expansion: { plist: '#sec1' },
     });
-    score._updateExpansionMap(mei, 3, false, false);
+    score._updateExpansionElement(mei, 3, false, false);
     const expansion = mei.querySelector('expansion');
     expect(expansion.getAttribute('type')).toBe('verse-chorus');
   });
@@ -1295,7 +1295,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       sections: [{ id: 'sec1', measures: [{ right: 'end', hasVerse: true }] }],
       expansion: { plist: '#sec1' },
     });
-    score._updateExpansionMap(mei, 4, false, false);
+    score._updateExpansionElement(mei, 4, false, false);
     const expansion = mei.querySelector('expansion');
     expect(expansion.getAttribute('plist')).toBe('#sec1 #sec1 #sec1 #sec1');
   });
@@ -1305,7 +1305,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       sections: [{ id: 'sec1', measures: [{ right: 'end', hasVerse: true }] }],
       expansion: { plist: '#sec1' },
     });
-    score._updateExpansionMap(mei, 2, false, false);
+    score._updateExpansionElement(mei, 2, false, false);
     const section = mei.querySelector('[*|id="sec1"]');
     expect(section.getAttribute('type')).toBe('verse');
   });
@@ -1315,7 +1315,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       sections: [{ id: 'sec1', measures: [{ right: 'end', hasVerse: true }] }],
       expansion: { plist: '#sec1' },
     });
-    const [,, expansionIds] = score._updateExpansionMap(mei, 2, false, false);
+    const [,, expansionIds] = score._updateExpansionElement(mei, 2, false, false);
     expect(expansionIds).toEqual(['#sec1']);
   });
 
@@ -1332,7 +1332,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       ],
       expansion: { plist: '#chorus #verse' },
     });
-    score._updateExpansionMap(mei, 3, false, false);
+    score._updateExpansionElement(mei, 3, false, false);
     const expansion = mei.querySelector('expansion');
     expect(expansion.getAttribute('type')).toBe('chorus-verse-chorus');
   });
@@ -1345,7 +1345,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       ],
       expansion: { plist: '#chorus #verse' },
     });
-    score._updateExpansionMap(mei, 3, false, false);
+    score._updateExpansionElement(mei, 3, false, false);
     const chorusSection = mei.querySelector('[*|id="chorus"]');
     const verseSection = mei.querySelector('[*|id="verse"]');
     expect(chorusSection.getAttribute('type')).toBe('chorus');
@@ -1360,7 +1360,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       ],
       expansion: { plist: '#chorus #verse' },
     });
-    const [, hasInitialChorus] = score._updateExpansionMap(mei, 3, false, false);
+    const [, hasInitialChorus] = score._updateExpansionElement(mei, 3, false, false);
     expect(hasInitialChorus).toBe(true);
   });
 
@@ -1372,7 +1372,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       ],
       expansion: { plist: '#chorus #verse' },
     });
-    score._updateExpansionMap(mei, 2, false, false);
+    score._updateExpansionElement(mei, 2, false, false);
     const expansion = mei.querySelector('expansion');
     // 2 verses: [chorus, verse, chorus, verse, chorus]
     expect(expansion.getAttribute('plist')).toBe('#chorus #verse #chorus #verse #chorus');
@@ -1386,7 +1386,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       ],
       expansion: { plist: '#chorus #verse' },
     });
-    const [, hasInitialChorus] = score._updateExpansionMap(mei, 3, false, false);
+    const [, hasInitialChorus] = score._updateExpansionElement(mei, 3, false, false);
     expect(hasInitialChorus).toBe(false);
   });
 
@@ -1400,7 +1400,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       ],
       expansion: { plist: '#chorus #verse #chorus' },
     });
-    score._updateExpansionMap(mei, 3, false, false);
+    score._updateExpansionElement(mei, 3, false, false);
     const expansion = mei.querySelector('expansion');
     expect(expansion.getAttribute('type')).toBe('chorus-verse-chorus');
   });
@@ -1417,7 +1417,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       ],
       expansion: { plist: '#a #b #c #d' },
     });
-    const [hasComplexSections] = score._updateExpansionMap(mei, 3, false, false);
+    const [hasComplexSections] = score._updateExpansionElement(mei, 3, false, false);
     expect(hasComplexSections).toBe(true);
     expect(mei.querySelector('expansion').getAttribute('type')).toBe('complex');
   });
@@ -1431,7 +1431,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       ],
       expansion: { plist: '#a #b #c' },
     });
-    const [hasComplexSections] = score._updateExpansionMap(mei, 3, false, false);
+    const [hasComplexSections] = score._updateExpansionElement(mei, 3, false, false);
     expect(hasComplexSections).toBe(true);
     expect(mei.querySelector('expansion').getAttribute('type')).toBe('complex');
   });
@@ -1450,7 +1450,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       ],
       expansion: { plist: '#intro #verse' },
     });
-    score._updateExpansionMap(mei, 3, false, false);
+    score._updateExpansionElement(mei, 3, false, false);
     const introSection = mei.querySelector('[*|id="intro"]');
     expect(introSection.getAttribute('type')).toBe('introduction');
   });
@@ -1463,7 +1463,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       ],
       expansion: { plist: '#intro #verse' },
     });
-    score._updateExpansionMap(mei, 3, true, false);
+    score._updateExpansionElement(mei, 3, true, false);
     const introSection = mei.querySelector('[*|id="intro"]');
     expect(introSection.getAttribute('type')).not.toBe('introduction');
   });
@@ -1476,7 +1476,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       ],
       expansion: { plist: '#sec1 #sec2' },
     });
-    score._updateExpansionMap(mei, 3, false, false);
+    score._updateExpansionElement(mei, 3, false, false);
     const sec1 = mei.querySelector('[*|id="sec1"]');
     expect(sec1.getAttribute('type')).not.toBe('introduction');
   });
@@ -1486,7 +1486,7 @@ describe('_updateExpansionMap() — unit tests', () => {
       sections: [{ id: 'sec1', measures: [{ right: 'end', hasVerse: true }] }],
       expansion: { plist: '#sec1' },
     });
-    score._updateExpansionMap(mei, 3, false, false);
+    score._updateExpansionElement(mei, 3, false, false);
     const sec1 = mei.querySelector('[*|id="sec1"]');
     expect(sec1.getAttribute('type')).toBe('verse');
   });

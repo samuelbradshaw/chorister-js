@@ -3075,7 +3075,7 @@ ChScore.prototype._chLoadDependencies = async function () {
     // https://github.com/magenta/magenta-js/issues/684
     // import('https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1/es6/core.min.js'),
     import('https://cdn.jsdelivr.net/gh/samuelbradshaw/magenta-js@master/music/es6/core.js'),
-    import('https://cdn.jsdelivr.net/npm/verovio@6.0.1/dist/verovio-toolkit-wasm.min.js'),
+    import('https://cdn.jsdelivr.net/npm/verovio@6.1.0/dist/verovio-toolkit-wasm.min.js'),
     verovioInitialized(),
   ]);
   return true;
@@ -3460,7 +3460,7 @@ ChScore.prototype._normalizeSections = function () {
   let hasPrebuiltSections = this._scoreData.sections.length > 0;
   const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed);
   const introBracketElements = this._scoreData.meiParsed.querySelectorAll('[ch-intro-bracket]');
-  const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionMap(this._scoreData.meiParsed, verseNumbers.length, introBracketElements.length > 0, this._scoreData.hasRepeatOrJump);
+  const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionElement(this._scoreData.meiParsed, verseNumbers.length, introBracketElements.length > 0, this._scoreData.hasRepeatOrJump);
   
   let introSection;
   let otherSections = [];
@@ -3836,7 +3836,7 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
     return stanzas;
   };
 
-ChScore.prototype._updateExpansionMap = function (meiParsed, numVerses, hasIntroBrackets, hasRepeatOrJump) {  
+ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasIntroBrackets, hasRepeatOrJump) {  
   // Check for complex sections and update expansion map
   // TODO: If expansion map doesn't exist, add it
   let hasComplexSections = false;
