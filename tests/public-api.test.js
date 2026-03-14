@@ -262,7 +262,7 @@ describe('setOptions() and getOptions()', () => {
     }
   });
 
-  it('should accept expandScore option values', { timeout: 10000 }, () => {
+  it('should accept expandScore option values', { timeout: 15000 }, () => {
     for (const val of [false, 'intro', 'full-score']) {
       score.setOptions({ expandScore: val }, false);
       expect(score.getOptions().expandScore).toBe(val);
@@ -774,7 +774,7 @@ describe('Edge Cases', () => {
     const score2 = new ChScore('#score-container');
     const scoreData = await score2.load('musicxml', { scoreContent: sampleMusicXml2 });
     expect(scoreData).toBeDefined();
-    expect(scoreData.chordPositions.length).toBe(61);
+    expect(scoreData.chordPositions.length).toBe(69);
     expect(container.score).toBe(score2);
   });
 

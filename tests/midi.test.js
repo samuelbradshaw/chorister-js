@@ -298,7 +298,7 @@ describe('convertQpmToMetronomeBpm — via metronome beats', () => {
     ChScore.prototype._drawScore = origDrawScore;
 
     const beats = score._scoreData.metronomeBeats;
-    expect(beats.length).toBe(88);
+    expect(beats.length).toBe(136);
     for (const beat of beats) {
       expect(beat.midiBpm).toBeGreaterThan(0);
     }

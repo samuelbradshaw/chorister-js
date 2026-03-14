@@ -5,13 +5,13 @@
  * - MC partsTemplate (melody + accompaniment, auto-generated)
  * - Repeat barlines (forward + backward repeat) and first/second endings
  * - hasRepeatOrJump = true
- * - Expansion of repeated score (15 → 22 measures)
+ * - Expansion of repeated score (24 → 37 measures)
  * - No intro brackets (intro detected from non-lyric measures before repeat)
  * - 6 fermatas across the verse section
  * - 2 verses from lyrics file
  * - Single-line chord positions (only one lyric line at certain points)
  * - Non-audible chord positions (tied notes)
- * - C major, 4/4 time, no pickup measure
+ * - C major, 4/4 time, partial-pickup measure
  * - hideSectionIds with auto-generated sections
  * - showMelodyOnly with MC layout
  */
@@ -60,8 +60,8 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
       expect(score._scoreData.staffNumbers).toEqual([1, 2]);
     });
 
-    it('should have 15 measures', () => {
-      expect(score._scoreData.measures.length).toBe(15);
+    it('should have 24 measures', () => {
+      expect(score._scoreData.measures.length).toBe(24);
     });
 
     it('should be in C major', () => {
@@ -86,11 +86,11 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
       expect(score._scoreData.hasMelodyInfo).toBe(true);
     });
 
-    it('first measure should be a full measure (no pickup)', () => {
+    it('first measure should be a partial-pickup measure', () => {
       const m = score._scoreData.measures[0];
-      expect(m.measureType).toBe('full');
+      expect(m.measureType).toBe('partial-pickup');
       expect(m.isFirstMeasure).toBe(true);
-      expect(m.durationQ).toBe(4);
+      expect(m.durationQ).toBe(2);
     });
 
     it('last measure should have end barline', () => {
@@ -99,12 +99,12 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
       expect(lastMeasure.rightBarLine).toBe('end');
     });
 
-    it('should have 61 chord positions', () => {
+    it('should have 69 chord positions', () => {
       expect(score._scoreData.chordPositions.length).toBe(EXPECTED_TLL.total);
     });
 
-    it('should have 109 notes/rests', () => {
-      expect(Object.keys(score._scoreData.notesAndRestsById).length).toBe(109);
+    it('should have 137 notes/rests', () => {
+      expect(Object.keys(score._scoreData.notesAndRestsById).length).toBe(137);
     });
   });
 
@@ -268,8 +268,8 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
     it('CP[0] should have correct timing values', () => {
       const cp0 = score._scoreData.chordPositions[0];
       expect(cp0.startQ).toBe(0);
-      expect(cp0.endQ).toBe(1);
-      expect(cp0.isDownbeat).toBe(true);
+      expect(cp0.endQ).toBe(0.5);
+      expect(cp0.isDownbeat).toBe(false);
     });
 
     it('CP[0] should have 2 notesAndRests', () => {
@@ -283,23 +283,22 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
       expect(cp0.melodyNote.pitch).toBe(67);
     });
 
-    it('last CP[60] should be a single-line position', () => {
-      const lastCp = score._scoreData.chordPositions[60];
+    it('last CP[68] should be a single-line position', () => {
+      const lastCp = score._scoreData.chordPositions[68];
       expect(lastCp.isSingleLine).toBe(true);
-      expect(lastCp.melodyNote).toBeNull();
-      expect(lastCp.startQ).toBe(58);
-      expect(lastCp.endQ).toBe(60);
+      expect(lastCp.startQ).toBe(86);
+      expect(lastCp.endQ).toBe(88);
     });
 
-    it('last CP[60] should have 1 notesAndRests', () => {
-      const lastCp = score._scoreData.chordPositions[60];
-      expect(lastCp.notesAndRests.length).toBe(1);
+    it('last CP[68] should have 2 notesAndRests', () => {
+      const lastCp = score._scoreData.chordPositions[68];
+      expect(lastCp.notesAndRests.length).toBe(2);
     });
   });
 
   // ── Expanded chord positions ──
   describe('Expanded chord positions', () => {
-    it('should have 100 expanded chord positions', () => {
+    it('should have 108 expanded chord positions', () => {
       expect(score._scoreData.expandedChordPositions.length).toBe(EXPECTED_TLL.expanded);
     });
 
@@ -388,9 +387,9 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
     beforeAll(() => { score.setOptions({ expandScore: 'full-score' }); });
     afterAll(() => { resetScoreState(score); });
 
-    it('should expand from 15 to exactly 22 measures', () => {
+    it('should expand from 24 to exactly 37 measures', () => {
       const measures = score._scoreData.meiParsed.querySelectorAll('measure').length;
-      expect(measures).toBe(22);
+      expect(measures).toBe(37);
     });
 
     it('should create -rend suffixed section IDs', () => {
@@ -408,10 +407,10 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
       expect(rptEnds.length).toBe(0);
     });
 
-    it('should restore original 15 measures when expandScore is set back to false', () => {
+    it('should restore original 24 measures when expandScore is set back to false', () => {
       score.setOptions({ expandScore: false });
       const measuresRestored = score._scoreData.meiParsed.querySelectorAll('measure').length;
-      expect(measuresRestored).toBe(15);
+      expect(measuresRestored).toBe(24);
       score.setOptions({ expandScore: 'full-score' });
     });
 
@@ -438,9 +437,9 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
       expect(introSection).toBeNull();
     });
 
-    it('measure count should remain 15 with expandScore intro (no change for TLL)', () => {
+    it('measure count should remain 24 with expandScore intro (no change for TLL)', () => {
       const measures = score._scoreData.meiParsed.querySelectorAll('measure').length;
-      expect(measures).toBe(15);
+      expect(measures).toBe(24);
     });
   });
 

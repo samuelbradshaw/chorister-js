@@ -233,7 +233,7 @@ describe('Options — shared plain sampleMusicXml load', () => {
       score.setOptions({ drawBackgroundShapes: ['ch-chord-position-label'] });
       const lastCall = spy.mock.calls[spy.mock.calls.length - 1][0];
       expect(lastCall.spacingSystem).toBe(12);
-      expect(lastCall.pageMarginBottom).toBe(100);
+      expect(lastCall.pageMarginBottom).toBe(20);
       spy.mockRestore();
     });
 

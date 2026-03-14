@@ -45,7 +45,7 @@ export const sampleLyricsTLL = readFileSync(
 
 export const EXPECTED_HGW = { total: 37, audible: 37, expanded: 156, audibleExpanded: 156 };
 export const EXPECTED_IIW = { total: 64, audible: 64, expanded: 278, audibleExpanded: 278 };
-export const EXPECTED_TLL = { total: 61, audible: 58, expanded: 100, audibleExpanded: 94 };
+export const EXPECTED_TLL = { total: 69, audible: 59, expanded: 108, audibleExpanded: 94 };
 
 // ── partsTemplate strings ────────────────────────────────────
 
