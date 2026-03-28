@@ -38,7 +38,7 @@ describe('load()', () => {
     expect(score._scoreData).toBe(scoreData);
   });
 
-  it('should fall back to default score when scoreType is missing', async () => {
+  it('should fall back to default score when format is missing', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const score = new ChScore('#score-container');
     const scoreData = await score.load(null, { scoreContent: 'test' });

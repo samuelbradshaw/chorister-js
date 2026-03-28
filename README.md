@@ -97,7 +97,7 @@ You can also install it using [npm](https://www.npmjs.com/package/@samuelbradsha
 
 <script>
   // Gather input data
-  const scoreType = 'musicxml';
+  const format = 'musicxml';
   const inputData = {
     scoreUrl: 'https://cdn.jsdelivr.net/gh/samuelbradshaw/chorister-js@main/resources/how-great-the-wisdom-and-the-love.musicxml',
     partsTemplate: 'SATB',
@@ -113,7 +113,7 @@ You can also install it using [npm](https://www.npmjs.com/package/@samuelbradsha
   async function loadScore() {
     // Pass in a CSS selector that selects the score container
     chScore = new ChScore('#score-container');
-    scoreData = await chScore.load(scoreType, inputData, options);
+    scoreData = await chScore.load(format, inputData, options);
   }
   loadScore();
   
@@ -122,8 +122,8 @@ You can also install it using [npm](https://www.npmjs.com/package/@samuelbradsha
 
 ### <a name="public-methods"></a>Public methods
 
-- **load(scoreType, inputData, options)** – Load a score. Parameters:
-- * **scoreType** – `mxl` (compressed MusicXML), `musicxml`, `mei`, `abc`, `humdrum`, `plaine-and-easie`, or `cmme`. Required. See [Verovio input formats](https://book.verovio.org/toolkit-reference/input-formats.html).
+- **load(format, inputData, options)** – Load a score. Parameters:
+- * **format** – `mxl` (compressed MusicXML), `musicxml`, `mei`, `abc`, `humdrum`, `plaine-and-easie`, or `cmme`. Required. See [Verovio input formats](https://book.verovio.org/toolkit-reference/input-formats.html).
 - * **inputData** – Score content and information about the score. Required. See “Input data” below.
 - * **options** – Settings to control how the score is rendered. Optional. See “Options” below.
 - **setOptions(optionsToUpdate)** – Set one or more options after the score is rendered.

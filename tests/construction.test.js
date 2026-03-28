@@ -89,7 +89,7 @@ describe('Default Options', () => {
 describe('Default Input Data', () => {
   it('should have a default ABC score (Westminster Chimes)', () => {
     const defaultInput = ChScore.prototype._defaultInputData;
-    expect(defaultInput.scoreType).toBe('abc');
+    expect(defaultInput.format).toBe('abc');
     expect(defaultInput.scoreContent).toContain('Westminster Chimes');
   });
 });

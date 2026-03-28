@@ -284,11 +284,11 @@ ChScore.prototype._loadEventListeners = function () {
 
 /********************** Public methods **********************/
 
-ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl = null, midiUrl = null, lyricsUrl = null, scoreContent = null, midiNoteSequence = null, lyricsText = null, parts = null, partsTemplate = null, sections = null, chordSets = null, fermatas = null }, options = this._defaultOptions) {
+ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = null, midiUrl = null, lyricsUrl = null, scoreContent = null, midiNoteSequence = null, lyricsText = null, parts = null, partsTemplate = null, sections = null, chordSets = null, fermatas = null }, options = this._defaultOptions) {
   this._container.dataset.chStatus = 'preparing';
-  if (!scoreType || !(scoreUrl || scoreContent)) {
-    console.error(`Score data is incomplete: scoreType and scoreUrl (or scoreContent) are required. Loading default score.`);
-    scoreType = this._defaultInputData.scoreType;
+  if (!format || !(scoreUrl || scoreContent)) {
+    console.error(`Score data is incomplete: format and scoreUrl (or scoreContent) are required. Loading default score.`);
+    format = this._defaultInputData.format;
     scoreContent = this._defaultInputData.scoreContent;
   }
   
@@ -316,7 +316,7 @@ ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl =
     (async () => {
       if (scoreUrl && !scoreContent) {
         const response = await safeFetch(scoreUrl);
-        scoreContent = await (scoreType === 'mxl' ? response.arrayBuffer() : response.text());
+        scoreContent = await (format === 'mxl' ? response.arrayBuffer() : response.text());
       }
     })(),
     (async () => {
@@ -342,7 +342,7 @@ ChScore.prototype.load = async function (scoreType, { scoreId = null, scoreUrl =
     this._vrvToolkit.loadZipDataBuffer(scoreContent);
   } else {
     // MusicXML, MEI, ABC, Humdrum, or PAE string
-    if (scoreType === 'abc') {
+    if (format === 'abc') {
       // Clean up leading spaces on each line
       scoreContent = scoreContent.replace(/^\s+/gm, '');
     }
@@ -3090,7 +3090,7 @@ ChScore.prototype._supportsCssStylesheetApi = CSSStyleSheet?.prototype?.replaceS
 
 // Default score data
 ChScore.prototype._defaultInputData = {
-  scoreType: 'abc',
+  format: 'abc',
   scoreContent: `X:1
     T:Westminster Chimes
     L:1/4

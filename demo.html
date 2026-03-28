@@ -180,8 +180,8 @@
         <p>See <a href="https://github.com/samuelbradshaw/chorister-js?tab=readme-ov-file#input-data">Input data</a> for examples of how input data should be formatted.</p>
         <div>
           <label>
-            <h3>Score type</h3>
-            <select name="scoreType">
+            <h3>Score format</h3>
+            <select name="format">
               <option value="musicxml">MusicXML</option>
               <option value="mei">MEI</option>
               <option value="abc">ABC</option>
@@ -342,7 +342,7 @@
       
       async function loadScore(scoreId) {
         // Initialize and load score
-        const scoreType = demoScores[scoreId].scoreType;
+        const format = demoScores[scoreId].format;
         const inputData = demoScores[scoreId];
         const options = {
           footerContent: demoScores[scoreId].credits,
@@ -350,7 +350,7 @@
           drawForegroundShapes: ['ch-chord-position-rect'],
         }
         chScore = new ChScore('#score-container');
-        scoreData = await chScore.load(scoreType, inputData, options);
+        scoreData = await chScore.load(format, inputData, options);
         
         // Load controls
         loadControls(chScore, scoreData)        
@@ -392,7 +392,7 @@
       
       function loadCustomScoreForm() {
         const customScoreForm = document.getElementById('custom-score-form');
-        const scoreTypeInput = customScoreForm.querySelector('[name="scoreType"]');
+        const formatInput = customScoreForm.querySelector('[name="format"]');
         const scoreContentInput = customScoreForm.querySelector('[name="scoreContent"]');
         const lyricsTextInput = customScoreForm.querySelector('[name="lyricsText"]');
         const partsTemplateInput = customScoreForm.querySelector('[name="partsTemplate"]');
@@ -401,7 +401,7 @@
         
         const loadScoreButton = document.getElementById('load-score-btn');
         loadScoreButton.addEventListener('click', (event) => {
-          demoScores['custom-score'].scoreType = scoreTypeInput.value;
+          demoScores['custom-score'].format = formatInput.value;
           demoScores['custom-score'].scoreContent = scoreContentInput.value;
           demoScores['custom-score'].lyricsText = lyricsTextInput.value;
           demoScores['custom-score'].partsTemplate = partsTemplateInput.value;
@@ -578,7 +578,7 @@
           'how-great-the-wisdom-and-the-love': {
             title: 'How Great the Wisdom and the Love',
             credits: '<p><i>Text:</i> Eliza R. Snow (1804–1887).<br><i>Music:</i> Thomas McIntyre (1832–1914).<br>Adapted from <i>Latter-day Saint Hymns</i> (1927).</p>',
-            scoreType: 'musicxml',
+            format: 'musicxml',
             scoreId: 'how-great-the-wisdom-and-the-love',
             scoreUrl: 'resources/how-great-the-wisdom-and-the-love.musicxml',
             lyricsUrl: 'resources/how-great-the-wisdom-and-the-love.txt',
@@ -591,7 +591,7 @@
           'it-is-well-with-my-soul': {
             title: 'It Is Well with My Soul',
             credits: '<p><i>Text:</i> Horatio G. Spafford (1828–1888).<br><i>Music:</i> Philip Paul Bliss (1838–1876).<br>Adapted from <i>Gospel Hymns, No. 2</i> (1876). Descant by Samuel H. Bradshaw (1990–).</p>',
-            scoreType: 'musicxml',
+            format: 'musicxml',
             scoreId: 'it-is-well-with-my-soul',
             scoreUrl: 'resources/it-is-well-with-my-soul.musicxml',
             lyricsUrl: 'resources/it-is-well-with-my-soul.txt',
@@ -834,7 +834,7 @@
           'this-little-light-of-mine': {
             title: 'This Little Light of Mine',
             credits: '<p>African American spiritual.</p>',
-            scoreType: 'musicxml',
+            format: 'musicxml',
             scoreId: 'this-little-light-of-mine',
             scoreUrl: 'resources/this-little-light-of-mine.musicxml',
             lyricsUrl: 'resources/this-little-light-of-mine.txt',
@@ -845,7 +845,7 @@
           'custom-score': {
             title: 'Custom Score',
             credits: 'Credits here.',
-            scoreType: null,
+            format: null,
             scoreId: 'custom-score',
             scoreContent: null,
             lyricsText: null,
