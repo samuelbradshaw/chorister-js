@@ -123,21 +123,21 @@ You can also install it using [npm](https://www.npmjs.com/package/@samuelbradsha
 ### <a name="public-methods"></a>Public methods
 
 - **load(format, inputData, options)** – Load a score. Parameters:
-- * **format** – `mxl` (compressed MusicXML), `musicxml`, `mei`, `abc`, `humdrum`, `plaine-and-easie`, or `cmme`. Required. See [Verovio input formats](https://book.verovio.org/toolkit-reference/input-formats.html).
-- * **inputData** – Score content and information about the score. Required. See “Input data” below.
-- * **options** – Settings to control how the score is rendered. Optional. See “Options” below.
+    - **format** – `mxl` (compressed MusicXML), `musicxml`, `mei`, `abc`, `humdrum`, `plaine-and-easie`, or `cmme`. Required. See [Verovio input formats](https://book.verovio.org/toolkit-reference/input-formats.html).
+    - **inputData** – Score content and information about the score. Required. See “Input data” below.
+    - **options** – Settings to control how the score is rendered. Optional. See “Options” below.
 - **setOptions(optionsToUpdate)** – Set one or more options after the score is rendered.
-- * **optionsToUpdate** – Object with the options to be changed. Required.
+    - **optionsToUpdate** – Object with the options to be changed. Required.
 - **getOptions()** – Get the currently-set options.
 - **getScoreData()** – Get information about the loaded score. Some of the provided data can be helpful for loading controls (for users to adjust options).
 - **getScoreContainer()** – Get a reference to the element that holds the rendered score.
 - **getKeySignatureInfo()** – Get key signature information for the loaded score.
 - **getPageState()** – Get information about the current page state (for paginated layout).
 - **jumpToPage(pageNumber, animate = false)** – Jump to the specified page (for paginated layout).
-- * **pageNumber** – Which page to jump to. Required. Valid values: page number integer (starting at 1), `previous`, or `next`. Required.
-- * **animate** – Whether the transition between pages should animate. Optional boolean. Default: `false`.
+    - **pageNumber** – Which page to jump to. Required. Valid values: page number integer (starting at 1), `previous`, or `next`. Required.
+    - **animate** – Whether the transition between pages should animate. Optional boolean. Default: `false`.
 - **getMidi(format = 'note-sequence')** – Get processed MIDI content.
-- * **format** – Preferred format. Optional. Valid values: `note-sequence` (Magenta note sequence), `blob` ([Blob](https://developer.mozilla.org/en-US/docs/Web/API/Blob) object), `array-buffer` ([ArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer) object). Default: `note-sequence`.
+    - **format** – Preferred format. Optional. Valid values: `note-sequence` (Magenta note sequence), `blob` ([Blob](https://developer.mozilla.org/en-US/docs/Web/API/Blob) object), `array-buffer` ([ArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer) object). Default: `note-sequence`.
 - **removeScore()** – Remove the current score from the page and clear stored data.
 
 Most of these methods will only work after the score is loaded.
@@ -348,9 +348,9 @@ Properties:
 - **isVocal** – Whether the part is sung or instrumental. Boolean.
 - **placement** – Placement of the part on its staff/staves. Valid values: 1, 2, 3, 4 (relative position among other parts on the staff), "full" (fills the specified staves), "auto" (automatically placed).
 - **chordPositionRefs** – Chord position where the part starts or where part metadata changes. Integer.
-- * **isMelody** – Whether the part includes the melody (starting at the given chord position). Boolean.
-- * **staffNumbers** – Numbers of the staves where the part is to be placed. List of integers.
-- * **lyricLineIds** – References to lyrics that are sung in the part. List of lyricLineIds (combination of staff and lyric line number – for example, a lyric syllable on the second staff, line number 1, has lyricLineId "2.1"). Optional.
+    - **isMelody** – Whether the part includes the melody (starting at the given chord position). Boolean.
+    - **staffNumbers** – Numbers of the staves where the part is to be placed. List of integers.
+    - **lyricLineIds** – References to lyrics that are sung in the part. List of lyricLineIds (combination of staff and lyric line number – for example, a lyric syllable on the second staff, line number 1, has lyricLineId "2.1"). Optional.
 </details>
 
 <details>
@@ -411,10 +411,10 @@ Properties:
 - **placement** – Placement of the section in the score. Valid values: "inline" (inline with the music), "below" (below the music), "none" (not placed in the score).
 - **pauseAfter** – Whether a short pause should be added in the MIDI after the section is played. Boolean.
 - **chordPositionRanges** – Chord position ranges that are part of the verse.
-- * **start** – Chord position where the range starts. Integer.
-- * **end** – Chord position where the range ends (exclusive range). Integer.
-- * **staffNumbers** – Numbers of the staves that are relevant to the section. For example, if the first staff is a descant only sung on the third verse, only the third verse should include that staff number. List of integers. Optional.
-- * **lyricLineIds** – References to lyrics that are relevant to the section. List of lyricLineIds (combination of staff and lyric line number – for example, a lyric syllable on the second staff, line number 1, has lyricLineId "2.1"). Optional.
+    - **start** – Chord position where the range starts. Integer.
+    - **end** – Chord position where the range ends (exclusive range). Integer.
+    - **staffNumbers** – Numbers of the staves that are relevant to the section. For example, if the first staff is a descant only sung on the third verse, only the third verse should include that staff number. List of integers. Optional.
+    - **lyricLineIds** – References to lyrics that are relevant to the section. List of lyricLineIds (combination of staff and lyric line number – for example, a lyric syllable on the second staff, line number 1, has lyricLineId "2.1"). Optional.
 </details>
 
 <details>
@@ -499,9 +499,9 @@ Properties:
 - **name** – Chord set name that may be visible to users. String.
 - **svgSymbolsUrl** – Relative or absolute URL to an SVG file with SVG symbols. String. Optional.
 - **chordPositionRefs** – Chord position where an item should be added. Integer.
-- * **text** – Text to be added. String.
-- * **prefix** – Prefix to be added, such as `Capo 5:`. String. Optional.
-- * **svgSymbolId** – ID of the SVG symbol to be drawn above (when enabled in options). String. Optional.
+    - **text** – Text to be added. String.
+    - **prefix** – Prefix to be added, such as `Capo 5:`. String. Optional.
+    - **svgSymbolId** – ID of the SVG symbol to be drawn above (when enabled in options). String. Optional.
 </details>
 
 <details>

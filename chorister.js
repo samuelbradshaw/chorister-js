@@ -12,22 +12,21 @@ function ChScore(containerSelector) {
   this._scoreData = null;
   this._currentOptions = null;
   this._vrvToolkit = null;
-  
+
   this._container = document.querySelector(this._containerSelector);
   if (!this._container) {
     console.error(`Couldn't find a valid score container that matches "${this._containerSelector}".`);
     return false;
   }
-  
+
   // Remove the previous score if the container already has one
   if (this._container.score) this._container.score.removeScore();
-  
+
   // Load CSS styles and event listeners
   this._loadStyles();
   this._loadEventListeners();
-  
+
   // Register ChScore instance
-  this._chScores.push(this);
   this._container.score = this;
 }
 
@@ -44,7 +43,7 @@ ChScore.prototype._loadStyles = function () {
     .ch-note-circle, .ch-lyric-rect {
       opacity: 0;
     }
-    
+
     /* Layout styles */
     [data-ch-layout] {
       /* Disable default pinch to zoom on the score container so it can be handled by JavaScript */
@@ -69,7 +68,7 @@ ChScore.prototype._loadStyles = function () {
       scroll-snap-align: start;
       scroll-snap-stop: always;
     }
-    
+
     /* Print styles */
     [data-ch-layout="print"] [data-ch-page] {
       display: block;
@@ -91,18 +90,18 @@ ChScore.prototype._loadStyles = function () {
 ChScore.prototype._loadEventListeners = function () {
   // Abort controller can be used to cancel event listeners if the score is removed
   this._controller = new AbortController;
-  
+
   // Print
   let previousLayout = null;
-  window.addEventListener('beforeprint', (event) => {
+  globalThis.addEventListener('beforeprint', (event) => {
     // TODO: Add blank space at the top of each page (except for the first page), so that systems on subsequent pages aren't higher than the title when viewing them side-by-side
     previousLayout = this._currentOptions.layout;
     this.setOptions({ layout: 'print' });
   }, { signal: this._controller.signal })
-  window.addEventListener('afterprint', (event) => {
+  globalThis.addEventListener('afterprint', (event) => {
     this.setOptions({ layout: previousLayout });
   }, { signal: this._controller.signal })
-  
+
   // Score tap
   const respondToTap = (event, isLongPress = false) => {
     if (!this._currentOptions?.customEvents?.includes('ch:tap')) return;
@@ -112,7 +111,7 @@ ChScore.prototype._loadEventListeners = function () {
       isLongPress: isLongPress,
     } }));
   }
-  
+
   // Score pointer down
   let downTarget = null;
   let tapTimeoutId = null;
@@ -124,7 +123,7 @@ ChScore.prototype._loadEventListeners = function () {
     }, 500);
   }
   this._container.addEventListener('pointerdown', respondToPointerDown, { signal: this._controller.signal });
-  
+
   // Score pointer up
   const respondToPointerUp = (event) => {
     clearTimeout(tapTimeoutId);
@@ -135,7 +134,7 @@ ChScore.prototype._loadEventListeners = function () {
   }
   this._container.addEventListener('pointerup', respondToPointerUp, { signal: this._controller.signal });
   this._container.addEventListener('pointerleave', respondToPointerUp, { signal: this._controller.signal });
-  
+
   // Score hover
   let hoverState = {};
   const respondToMouseMove = (event, ignoreThrottle = false) => {
@@ -152,7 +151,7 @@ ChScore.prototype._loadEventListeners = function () {
   }
   this._container.addEventListener('mousemove', (event) => respondToMouseMove(event), { signal: this._controller.signal });
   this._container.addEventListener('mouseleave', (event) => respondToMouseMove(event, true), { signal: this._controller.signal });
-  
+
   // Pinch to zoom (general)
   let initialPinchScale = null;
   let targetPinchScale = null;
@@ -160,7 +159,7 @@ ChScore.prototype._loadEventListeners = function () {
   const getTouchDistance = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
   const getCurrentScale = () => {
     if (Array.isArray(this._currentOptions.scale)) {
-      return parseInt(this._container.dataset.chScale);
+      return Number.parseInt(this._container.dataset.chScale);
     } else {
       return this._currentOptions.scale;
     }
@@ -188,7 +187,7 @@ ChScore.prototype._loadEventListeners = function () {
     }
     this._container.removeAttribute('data-ch-pinch');
   };
-  
+
   // Pinch to zoom (touch screens)
   let pinchStartDistance = null;
   this._container.addEventListener('touchstart', (event) => {
@@ -208,7 +207,7 @@ ChScore.prototype._loadEventListeners = function () {
   const resetTouch = () => { pinchStartDistance = null; finalizePinch(); };
   this._container.addEventListener('touchend', resetTouch, { signal: this._controller.signal });
   this._container.addEventListener('touchcancel', resetTouch, { signal: this._controller.signal });
-    
+
   // Pinch to zoom (Safari trackpad)
   let gestureActive = false;
   this._container.addEventListener('gesturestart', (event) => {
@@ -244,7 +243,7 @@ ChScore.prototype._loadEventListeners = function () {
     clearTimeout(wheelPinchFrameId);
     wheelPinchFrameId = setTimeout(finalizePinch, 200);
   }, { passive: false, signal: this._controller.signal });
-  
+
   // Score container resize
   this._resizeObserver = new ResizeObserver(this._debounce((entries) => {
     if (!this._scoreData) return;
@@ -252,7 +251,7 @@ ChScore.prototype._loadEventListeners = function () {
       const width = Math.round(entry.borderBoxSize[0].inlineSize);
       const height = Math.round(entry.borderBoxSize[0].blockSize);
       const fixedHeight = (Array.isArray(this._currentOptions.scale) || this._currentOptions.layout === 'paginated');
-      if (width !== parseInt(this._container.dataset.chWidth) || (fixedHeight && height !== parseInt(this._container.dataset.chHeight))) {
+      if (width !== Number.parseInt(this._container.dataset.chWidth) || (fixedHeight && height !== Number.parseInt(this._container.dataset.chHeight))) {
         this.setOptions(this._currentOptions);
       }
       this._container.dataset.chWidth = width;
@@ -260,7 +259,7 @@ ChScore.prototype._loadEventListeners = function () {
     }
   }, 100));
   this._resizeObserver.observe(this._container, { box: 'border-box' });
-  
+
   // Score container page change
   this._pageObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
@@ -291,7 +290,7 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
     format = this._defaultInputData.format;
     scoreContent = this._defaultInputData.scoreContent;
   }
-  
+
   const safeFetch = async (...args) => {
     try {
       const response = await fetch(...args);
@@ -308,7 +307,7 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
       }
     }
   }
-  
+
   // Wait for dependencies and fetch remote resources
   let midiArray;
   await Promise.all([
@@ -332,7 +331,7 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
       }
     })(),
   ]);
-  
+
   // Load score into Verovio
   this._container.dataset.chStatus = 'processing';
   this._vrvToolkit = new verovio.toolkit();
@@ -348,14 +347,14 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
     }
     this._vrvToolkit.loadData(scoreContent);
   }
-  
+
   // Get MIDI from Verovio if needed
   let midiType;
   if (!midiNoteSequence && !midiArray) {
     midiArray = Uint8Array.from(atob(this._vrvToolkit.renderToMIDI()), c => c.charCodeAt(0));
     midiType = 'verovio';
   }
-  
+
   // Create scoreData object
   this._scoreData = {
     scoreId: scoreId,
@@ -372,14 +371,14 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
     chordSetsById: null,
     fermatas: fermatas ?? [],
   };
-  
+
   // Process and render MEI and MIDI
   this._parseAndAnnotateMei();
   this._loadMidi();
-  
+
   // Draw score
   this._drawScore();
-  
+
   if (this._currentOptions.customEvents.includes('ch:scoreload')) {
     this._container.dispatchEvent(new CustomEvent('ch:scoreload', { detail: {
       scoreData: this._scoreData,
@@ -400,10 +399,10 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
       if (key === 'scale') {
         let scale = optionsToUpdate.scale;
         if (Array.isArray(optionsToUpdate.scale)) {
-          scale = [Math.round(parseFloat(scale.at(0))), Math.round(parseFloat(scale.at(-1)))];
+          scale = [Math.round(Number.parseFloat(scale.at(0))), Math.round(Number.parseFloat(scale.at(-1)))];
           if (scale[0] === scale[1]) scale = scale[0] ?? optionsToUpdate.scale;
         } else {
-          scale = Math.round(parseFloat(optionsToUpdate.scale));
+          scale = Math.round(Number.parseFloat(optionsToUpdate.scale));
         }
         optionsToUpdate.scale = scale;
       }
@@ -414,17 +413,17 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
       }
     }
   }
-  
+
   // Add attributes: @data-ch-layout, @data-ch-scale-to-fit
   this._container.dataset.chLayout = this._currentOptions.layout;
   this._container.dataset.chScaleToFit = Array.isArray(this._currentOptions.scale);
-  
+
   // Get default Verovio options
   // If scale option is an array (min and max values), final scale is calculated when drawing the SVG
   const verovioOptions = structuredClone(this._defaultVerovioOptions);
   verovioOptions.scale = Array.isArray(this._currentOptions.scale) ? null : this._currentOptions.scale;
   verovioOptions.pageWidth = Math.max(this._container.offsetWidth, 100);
-  
+
   // Set page size and scale
   if (this._currentOptions.layout === 'print') {
     verovioOptions.mmOutput = true;
@@ -439,9 +438,9 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
     verovioOptions.systemMaxPerPage = 1;
     verovioOptions.pageHeight = Math.max(this._container.offsetHeight, 100);
   }
-  this._container.dataset.chScale = parseInt(verovioOptions.scale);
-  this._container.style.setProperty('--ch-scale', parseInt(verovioOptions.scale));
-  
+  this._container.dataset.chScale = Number.parseInt(verovioOptions.scale);
+  this._container.style.setProperty('--ch-scale', Number.parseInt(verovioOptions.scale));
+
   // Set margin and spacing
   const shapeClassNames = (this._currentOptions.drawBackgroundShapes || []).concat(this._currentOptions.drawForegroundShapes || []);
   if (shapeClassNames.length > 0) {
@@ -470,7 +469,7 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
     verovioOptions.spacingSystem += 5;
     verovioOptions.pageMarginBottom += 20;
   }
-  
+
   // Transpose
   if (this._currentOptions.keySignatureId) {
     const keySignatureInfo = this.getKeySignatureInfo();
@@ -479,16 +478,16 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
     const directionOperator = nearbyKeyIndex < 7 ? '-' : nearbyKeyIndex > 7 ? '+' : '';
     verovioOptions.transpose = directionOperator + nearbyKeyInfo.meiPnameAccid;
   }
-  
+
   this._vrvToolkit.resetOptions();
   this._vrvToolkit.setOptions(verovioOptions);
-  
+
   // Reload score, if it was loaded previously
   if (this._vrvToolkit.getPageCount() > 0) {
     if (updatedOptionKeys.some(key => ['showMelodyOnly', 'showChordSet', 'showChordSetImages', 'showFingeringMarks', 'showMeasureNumbers', 'hideSectionIds', 'expandScore'].includes(key))) {
       this._updateMei();
     }
-    
+
     // Some options require loading the data into Verovio again
     // See https://github.com/rism-digital/verovio/discussions/4142
     if (verovioOptions.transpose !== this._previousVerovioOptions.transpose || verovioOptions.expand !== this._previousVerovioOptions.expand || verovioOptions.expandNever !== this._previousVerovioOptions.expandNever || verovioOptions.expandAlways !== this._previousVerovioOptions.expandAlways) {
@@ -496,10 +495,10 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
     } else {
       this._vrvToolkit.redoLayout();
     }
-    
+
     if (redraw) this._drawScore();
   }
-  
+
   this._previousVerovioOptions = verovioOptions;
 }
 
@@ -523,7 +522,7 @@ ChScore.prototype.getPageState = function () {
   let currentPageNumber;
   const pageNumbers = [];
   for (const page of this._pages) {
-    const pageNumber = parseInt(page.dataset.chPage);
+    const pageNumber = Number.parseInt(page.dataset.chPage);
     if (page.classList.contains('active')) currentPageNumber = pageNumber;
     pageNumbers.push(pageNumber);
   }
@@ -574,7 +573,6 @@ ChScore.prototype.removeScore = function () {
   }
   this._container.style.removeProperty('--ch-scale');
   this._container.score = undefined;
-  this._chScores = this._chScores.filter(chScore => chScore._container !== this._container);
 }
 
 
@@ -589,10 +587,10 @@ ChScore.prototype._loadMidi = function () {
     this._scoreData.midiType = 'verovio';
     return this._loadMidi();
   }
-  
+
   let midiNoteStartTimes;
   let midiNoteSequence = this._scoreData.midiNoteSequence;
-  
+
   // Sort MIDI notes for easier alignment with score notes
   // Also remove duplicate notes (example: songs in 1985 Hymns have both piano notes and SATB notes)
   const filteredNotes = [];
@@ -608,7 +606,7 @@ ChScore.prototype._loadMidi = function () {
   }
   midiNoteSequence.notes = filteredNotes.sort((a, b) => a.startTime - b.startTime || a.pitch - b.pitch || (a.endTime - a.startTime) - (b.endTime - b.startTime));
   midiNoteStartTimes = [...uniqueStartTimes].sort((a, b) => a - b);
-  
+
   // Check MIDI for errors
   if (midiNoteStartTimes.length === this._scoreData.audibleExpandedChordPositions.length) {
     this._scoreData.midiType = 'complete';
@@ -624,7 +622,7 @@ ChScore.prototype._loadMidi = function () {
       return this._loadMidi();
     }
   }
-  
+
   // Sort notes into chord positions
   let previousAudibleChordPositionInfo;
   for (const midiNote of midiNoteSequence.notes) {
@@ -641,7 +639,7 @@ ChScore.prototype._loadMidi = function () {
     if (chordPositionInfo.chordPosition !== previousAudibleChordPositionInfo?.chordPosition) {
       chordPositionInfo.midiStartTime = midiNote.startTime;
       chordPositionInfo.midiQpm = this._getQpmAtTime(chordPositionInfo.midiStartTime, midiNoteSequence.tempos);
-      
+
       // Update previous chord positions
       if (previousAudibleChordPositionInfo) {
         previousAudibleChordPositionInfo.midiEndTime = midiNote.startTime;
@@ -669,7 +667,7 @@ ChScore.prototype._loadMidi = function () {
   }
   previousAudibleChordPositionInfo.midiEndTime = midiNoteSequence.totalTime;
   previousAudibleChordPositionInfo.midiDuration = previousAudibleChordPositionInfo.midiEndTime - previousAudibleChordPositionInfo.midiStartTime;
-  
+
   // Adjust duration of notes with fermatas
   const fermataAdjustedChordPositions = [];
   for (const fermata of this._scoreData.fermatas) {
@@ -678,7 +676,7 @@ ChScore.prototype._loadMidi = function () {
     if (fermataElement) {
       fermataAdjustedChordPositions.push(fermata.chordPosition);
       const chordPositionInfo = this._scoreData.chordPositions[fermata.chordPosition];
-      
+
       // Get the previous chord position without a fermata to compare tempos. Example song with two fermata'ed chord positions in a row: Love at Home (1985 Hymns).
       let previousCpWithoutFermata = fermata.chordPosition - 1;
       while (fermataAdjustedChordPositions.includes(previousCpWithoutFermata) && previousCpWithoutFermata >= 0) {
@@ -699,7 +697,7 @@ ChScore.prototype._loadMidi = function () {
       }
     }
   }
-  
+
   // Expand MIDI based on expanded chord positions, and align MIDI notes to MEI notes
   const allPartIds = Object.keys(this._scoreData.partsById);
   let startTimeCounter = 0;
@@ -709,11 +707,11 @@ ChScore.prototype._loadMidi = function () {
     const sectionInfo = this._scoreData.sectionsById[sectionId];
     const chordPositionInfo = expandedChordPositionInfo.chordPositionInfo;
     expandedChordPositionInfo.midiStartTime = startTimeCounter;
-    
+
     const createMidiNote = (referenceMidiNotes, meiNotes, startTime, duration) => {
       const referenceNoteVelocities = referenceMidiNotes.map(mn => mn.velocity);
       const averageVelocity = Math.round(referenceNoteVelocities.reduce((accumulator, v) => accumulator + v, 0) / referenceNoteVelocities.length);
-      
+
       const channels = [];
       const allPartIds = Array.from(Object.keys(this._scoreData.partsById));
       for (const partId of meiNotes[0].partIds) {
@@ -733,31 +731,31 @@ ChScore.prototype._loadMidi = function () {
         meiNotes: meiNotes,
       }
     }
-    
+
     const notesAndRests = expandedChordPositionInfo.chordPositionInfo.notesAndRests;
     const chordPosition = expandedChordPositionInfo.chordPositionInfo.chordPosition;
     for (const note of notesAndRests) {
       // Skip notes on staves that don't apply to the current verse.
       // Example: "I Am a Child of God" (1989 Children’s Songbook), staff 1 (descant) should only be used with verse 3.
       if (!expandedChordPositionInfo.staffNumbers.includes(note.staffNumber)) continue;
-      
+
       // Skip notes with a dash for lyrics in the current verse
       // Examples: "The Morning Breaks" (1985 Hymns, 1); "For All the Saints" (1985 Hymns, 82); "Oh, Come, All Ye Faithful" (1985 Hymns, 202); "Carry On" (1985 Hymns, 255)
       if (expandedChordPositionInfo.lyricIsSkipSymbol) continue;
-      
+
       // Skip silent notes and rests
       // Examples: Tied notes in chorus of "It Is Well with My Soul"; mid-verse rests in "The Morning Breaks" (1985 Hymns) and "True to the Faith" (1985 Hymns)
       if (!note.isAudible) continue;
-      
+
       // TODO: If multiple notes have the same pitch, align based on duration and pitch. Example: "hand," at the end of True to the Faith (1985 Hymns), there's a quarter note and half note with the same pitch. This causes an issue when animating the notes (both notes are held for the longer duration). Potential issue to figure out: MIDI notes generated by a MIDI keyboard aren't always an exact length (could be a fermata, or the pianist wasn't exact about when they lifted their finger).
       if (!Object.hasOwn(chordPositionInfo.midiNotesByPitch, note.pitch)) {
         console.warn(`Warning: Failed to align note #${note.elementId}`);
         continue;
       }
-              
+
       const referenceMidiNotes = chordPositionInfo.midiNotesByPitch[note.pitch].filter(mn => mn.expandedChordPosition === expandedChordPosition || mn.expandedChordPosition == null);
       const referenceDuration = Math.max(...referenceMidiNotes.map(mn => mn.endTime - mn.startTime));
-      
+
       // Check if note has tied note with lyrics
       if (note.tiedNoteId != null) {
         const tiedNote = this._scoreData.notesAndRestsById[note.tiedNoteId];
@@ -790,7 +788,7 @@ ChScore.prototype._loadMidi = function () {
         if (!note.expandedChordPositions.includes(expandedChordPosition)) note.expandedChordPositions.push(expandedChordPosition);
       }
     }
-    
+
     expandedMidiNotes.push(...expandedChordPositionInfo.midiNotes);
     const pauseAfter = (expandedChordPosition === sectionInfo.expandedChordPositionEnd && sectionInfo.pauseAfter) ? 0.25 : 0;
     startTimeCounter += chordPositionInfo.midiDuration + pauseAfter;
@@ -798,13 +796,13 @@ ChScore.prototype._loadMidi = function () {
   }
   midiNoteSequence.notes = expandedMidiNotes;
   midiNoteSequence.totalTime = startTimeCounter;
-  
-  
+
+
   // Convert MIDI QPM (quarter notes per minute) to metronome BPM
   function convertQpmToMetronomeBpm(qpm, timeSignatureArray) {
     let metronomeBpm = qpm;
     const timeSignature = timeSignatureArray.join('/');
-    
+
     // Convert MIDI BPM to metronome BPM based on the time signature
     if (['1/1', '2/1', '3/1', '4/1', '5/1'].includes(timeSignature)) {
       // Simple meter (beat every whole note)
@@ -837,10 +835,10 @@ ChScore.prototype._loadMidi = function () {
       // Beat every quarter note
       metronomeBpm = qpm;
     }
-    
+
     return metronomeBpm;
   }
-  
+
   this._scoreData.metronomeBeats = [];
   let beatNumber;
   let startQ = this._scoreData.expandedChordPositions[0].startQ;
@@ -853,13 +851,13 @@ ChScore.prototype._loadMidi = function () {
     const timeSignature = measureInfo.timeSignature;
     const beatsPerMinute = convertQpmToMetronomeBpm(quartersPerMinute, timeSignature);
     const durationQToNextBeat = quartersPerMinute / beatsPerMinute;
-    
+
     // Handle pickup measures that start mid-beat (example: It Is Well with My Soul)
     if (measureInfo.measureType === 'partial-pickup' && measureInfo.durationQ % durationQToNextBeat !== 0) {
       startQ += measureInfo.durationQ;
       continue;
     }
-    
+
     let isDownbeat;
     let startSeconds;
     let beatStartQ;
@@ -872,7 +870,7 @@ ChScore.prototype._loadMidi = function () {
       startSeconds = expandedChordPositionInfo.midiStartTime + this._getMidiDuration(startQDifference, quartersPerMinute);
       beatStartQ = expandedChordPositionInfo.startQ + startQDifference;
     }
-    
+
     if (isDownbeat) {
       beatNumber = 1;
     }
@@ -883,11 +881,11 @@ ChScore.prototype._loadMidi = function () {
       midiBpm: Math.round(beatsPerMinute),
       midiStartTime: startSeconds,
     });
-    
+
     startQ += durationQToNextBeat;
     if (beatNumber) beatNumber += 1;
   }
-  
+
   // Fill in missing beat numbers for pickup measure
   // TODO: As Bread Is Broken doesn't have correct beat numbers, and introduction chord positions are wrong
   if (!this._scoreData.metronomeBeats[0].beatNumber) {
@@ -906,10 +904,10 @@ ChScore.prototype._loadMidi = function () {
       previousBeatNumber -= 1;
     }
   }
-  
+
   // Save changes to MIDI note sequence
   this._scoreData.midiNoteSequence = midiNoteSequence;
-  
+
   if (this._currentOptions.customEvents.includes('ch:midiready')) {
     this._container.dispatchEvent(new CustomEvent('ch:midiready', { detail: {
       midiNoteSequence: midiNoteSequence,
@@ -919,12 +917,12 @@ ChScore.prototype._loadMidi = function () {
 
 ChScore.prototype._parseAndAnnotateMei = function () {
   this._scoreData.meiParsed = (new DOMParser()).parseFromString(this._scoreData.meiStringOriginal, 'text/xml');
-  
+
   // Enable collapsing empty staves. Example: "True to the Faith" (1985 Hymns).
   for (const scoreDef of this._scoreData.meiParsed.querySelectorAll('scoreDef')) {
     scoreDef.setAttribute('optimize', 'true');
   }
-  
+
   // Replace page breaks with system breaks
   // When printing, Verovio page height options are set so that each system is drawn as a separate SVG element. This allows the sheet music to flow between pages more cleanly. However, when Verovio is set to respect encoded page and system breaks, page height options are ignored. Replacing page breaks with system breaks allows the page height options for printing to work as expected.
   const pageBreaks = this._scoreData.meiParsed.querySelectorAll('pb');
@@ -933,15 +931,15 @@ ChScore.prototype._parseAndAnnotateMei = function () {
     Array.from(pageBreak.attributes).forEach(attribute => systemBreak.setAttribute(attribute.name, attribute.value));
     pageBreak.parentNode.replaceChild(systemBreak, pageBreak);
   }
-  
+
   // Normalize layers (layers in each staff should be numbered starting at 1). Layer numbers are used when calculating which part a note belongs to. Example of a song that needs normalization: "Our Hearts Are Turning" (SingPraises.net Collection) (MusicXML exported from MuseScore; the second staff has layer numbers 5 and 6).
   const hasSuspiciousLayerNumbers = this._scoreData.meiParsed.querySelector('layer:not([n="1"], [n="2"])');
   if (hasSuspiciousLayerNumbers) {
     for (const staff of this._scoreData.meiParsed.querySelectorAll('staffDef')) {
-      const staffNumber = parseInt(staff.getAttribute('n'));
+      const staffNumber = Number.parseInt(staff.getAttribute('n'));
       const layersByNumber = {}
       for (const layer of this._scoreData.meiParsed.querySelectorAll(`staff[n="${staffNumber}"] layer`)) {
-        const layerNumber = parseInt(layer.getAttribute('n'));
+        const layerNumber = Number.parseInt(layer.getAttribute('n'));
         if (!Object.hasOwn(layersByNumber, layerNumber)) layersByNumber[layerNumber] = [];
         layersByNumber[layerNumber].push(layer);
       }
@@ -953,7 +951,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
       }
     }
   }
-  
+
   // Get tied notes (tied notes are combined to a single note in MIDI)
   const tiedNotes = {}
   for (const tie of this._scoreData.meiParsed.querySelectorAll('tie')) {
@@ -961,14 +959,14 @@ ChScore.prototype._parseAndAnnotateMei = function () {
     const endNoteId = (tie.getAttribute('endid') ?? '').substring(1);
     if (startNoteId && endNoteId) tiedNotes[startNoteId] = endNoteId;
   }
-  
+
   // Change cue notes to regular notes so they appear at regular size
   for (const meiElement of this._scoreData.meiParsed.querySelectorAll('[cue="true"]')) meiElement.removeAttribute('cue');
-  
+
   // Gather information about each note and rest
   this._scoreData.notesAndRestsById = {}
   const notesAndRests = this._scoreData.meiParsed.querySelectorAll('note, rest');
-  for (const meiElement of notesAndRests) {        
+  for (const meiElement of notesAndRests) {
     const elementId = meiElement.getAttribute('xml:id');
     const meiChordElement = meiElement.closest('chord') ?? null;
     const meiBeamElement = meiElement.closest('beam') ?? null;
@@ -976,12 +974,12 @@ ChScore.prototype._parseAndAnnotateMei = function () {
     const meiStaffElement = meiElement.closest('staff');
     const meiMeasureElement = meiElement.closest('measure');
     const isTiedNote = Object.values(tiedNotes).includes(elementId);
-    const isRest = meiElement.tagName.toLowerCase() === 'rest';
+    const isRest = meiElement.matches('rest');
     const isCue = meiElement.getAttribute('cue') === 'true';
     // TODO: This only gets lyric text attached to the current note (or note chord) in the MEI; but the same lyrics might be sung on other simultaneous notes (such as the TB notes in an SATB chord). Lyrics on those notes aren't currently handled.
     const lyricSyllableElements = (meiChordElement ?? meiElement).querySelectorAll('syl') ?? [];
     const lyricSyllables = Array.from(lyricSyllableElements).map(syl => syl.textContent);
-    
+
     this._scoreData.notesAndRestsById[elementId] = {
       elementId: elementId,
       meiElement: meiElement,
@@ -990,8 +988,8 @@ ChScore.prototype._parseAndAnnotateMei = function () {
       meiMeasureElement: meiMeasureElement,
       pitch: this._vrvToolkit.getMIDIValuesForElement(elementId).pitch,
       lyricSyllables: lyricSyllables,
-      staffNumber: parseInt(meiStaffElement.getAttribute('n')),
-      layerNumber: parseInt(meiLayerElement.getAttribute('n')),
+      staffNumber: Number.parseInt(meiStaffElement.getAttribute('n')),
+      layerNumber: Number.parseInt(meiLayerElement.getAttribute('n')),
       tiedNoteId: tiedNotes[elementId] ?? null,
       isTiedNote: isTiedNote,
       isRest: isRest,
@@ -1007,7 +1005,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
       chordPosition: null, // Added later
     }
   }
-  
+
   // Get measure info
   this._scoreData.measures = []
   this._scoreData.measuresById = {}
@@ -1016,7 +1014,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   let timeSignature = [0, 0];
   const numMeasures = this._scoreData.meiParsed.querySelectorAll('measure').length;
   for (const element of this._scoreData.meiParsed.querySelectorAll('scoreDef, staffDef, meterSig, sb, measure')) {
-    if (element.tagName === 'measure') {
+    if (element.matches('measure')) {
       const measure = element;
       const measureId = measure.getAttribute('xml:id');
       this._scoreData.measuresById[measureId] = {
@@ -1033,15 +1031,15 @@ ChScore.prototype._parseAndAnnotateMei = function () {
         firstChordPosition: null, // Added later
       }
       this._scoreData.measures.push(this._scoreData.measuresById[measureId]);
-    } else if (element.tagName === 'sb') {
+    } else if (element.matches('sb')) {
       systemCounter += 1;
     } else {
       // Time signature change
-      timeSignature[0] = parseInt(element.getAttribute('count') ?? element.getAttribute('meter.count') ?? timeSignature[0]);
-      timeSignature[1] = parseInt(element.getAttribute('unit') ?? element.getAttribute('meter.unit') ?? timeSignature[1]);
+      timeSignature[0] = Number.parseInt(element.getAttribute('count') ?? element.getAttribute('meter.count') ?? timeSignature[0]);
+      timeSignature[1] = Number.parseInt(element.getAttribute('unit') ?? element.getAttribute('meter.unit') ?? timeSignature[1]);
     }
   }
-  
+
   // Get measure type: full, partial-pickup, partial-pickdown, partial-start, partial-end
   function getMeasureType(measureInfo) {
     const completeDurationQ = measureInfo.timeSignature[0] * (4 / measureInfo.timeSignature[1]);
@@ -1059,13 +1057,13 @@ ChScore.prototype._parseAndAnnotateMei = function () {
     }
     return measureType;
   }
-      
+
   function getStaffPartIds(staffNumber, chordPosition, parts) {
     const partIdsDict = { 1: [], 2: [], 3: [], 4: [] };
     const fullPartIds = [];
     const melodyPartIds = [];
     let autoPlacementCounter = 1;
-    
+
     for (const part of parts) {
       const partId = part.partId;
       let chordPositionRefInfo = null;
@@ -1079,7 +1077,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
       if (!chordPositionRefInfo || !chordPositionRefInfo.staffNumbers.includes(staffNumber)) {
         continue;
       }
-      
+
       if ([1, 2, 3, 4].includes(part.placement)) {
         partIdsDict[part.placement].push(partId);
       } else if (part.placement === 'full') {
@@ -1091,30 +1089,30 @@ ChScore.prototype._parseAndAnnotateMei = function () {
           partIdsDict[autoPlacementCounter].push(partId);
           autoPlacementCounter += 1;
         }
-      }        
+      }
       if (chordPositionRefInfo.isMelody) melodyPartIds.push(partId);
     }
-    
+
     for (const fullPartId of fullPartIds) {
       for (const key in partIdsDict) partIdsDict[key].push(fullPartId);
     }
-    
+
     // Convert part IDs dict to a list of lists, and remove empty lists at the end
     let partIds = Object.values(partIdsDict);
-    while (partIds.length > 1 && partIds[partIds.length - 1].length === 0) partIds.pop();      
+    while (partIds.length > 1 && partIds.at(-1).length === 0) partIds.pop();
     return [partIds, melodyPartIds];
   }
-  
+
   const vrvTimemap = this._vrvToolkit.renderToTimemap({ includeRests: true, includeMeasures: true, });
   if (!vrvTimemap || vrvTimemap.length === 0) {
     console.error('Error: Verovio returned an empty or invalid timemap. The score data may be malformed.');
     return;
   }
-  this._scoreData.staffNumbers = Array.from(this._scoreData.meiParsed.querySelectorAll('staffDef')).map(sf => parseInt(sf.getAttribute('n')));
+  this._scoreData.staffNumbers = Array.from(this._scoreData.meiParsed.querySelectorAll('staffDef')).map(sf => Number.parseInt(sf.getAttribute('n')));
   this._scoreData.hasLyrics = this._scoreData.meiParsed.querySelector('verse') !== null;
   this._scoreData.numChordPositions = vrvTimemap.filter(entry => (entry.on ?? entry.restsOn ?? []).length > 0).length;
   this._normalizeParts();
-  
+
   // Get chord position, note, rest, and measure info from Verovio timemap
   // Add attributes to chords, notes, and rests: @ch-chord-position, @ch-part-id, @ch-melody
   // Verovio timemap should include regular notes, tied notes, cue notes, and rests (may also include grace notes – need to test)
@@ -1157,12 +1155,12 @@ ChScore.prototype._parseAndAnnotateMei = function () {
         if (elementInfo.isAudible) chordPositionIsAudible = true;
         notesAndRests.push(elementInfo);
       }
-      
+
       // Sort notes to make aligning with MIDI notes easier
       notesAndRests.sort((a, b) => a.pitch - b.pitch
         || (a.durationQ + (a.tiedNoteId ? this._scoreData.notesAndRestsById[a.tiedNoteId].durationQ : 0)) - (b.durationQ + (b.tiedNoteId ? this._scoreData.notesAndRestsById[b.tiedNoteId].durationQ : 0))
       );
-      
+
       // Assign notes to parts
       // Order of notes is reversed to align with parts, which are sorted highest to lowest
       let melodyNote = null;
@@ -1170,9 +1168,9 @@ ChScore.prototype._parseAndAnnotateMei = function () {
       for (const note of notesAndRests.slice().reverse()) {
         let foundMelodyNote = false;
         let positionInChord = null;
-        const layerNumber = parseInt(note.meiElement.closest('layer').getAttribute('n'));
+        const layerNumber = Number.parseInt(note.meiElement.closest('layer').getAttribute('n'));
         const staffNumber = note.staffNumber;
-        
+
         if (note.meiChordElement) {
           const chordId = note.meiChordElement.getAttribute('xml:id');
           if (!(chordId in numNotesByChord)) {
@@ -1181,7 +1179,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
           positionInChord = numNotesByChord[chordId];
           numNotesByChord[chordId] += 1;
         }
-        
+
         // Calculate staff part index
         // TODO: This doesn't work correctly when a lower part temporarily goes above the upper part. Example: last few Tenor 2 notes in "High On the Mountain Top" (Men's Choir, 1985 Hymns #333).
         // TODO: Logic will fail if there are more than two layers on the staff. However, three or four parts can be on a staff if they're chorded and placed into a maximum of two layers. Example: "Love at Home" (Women, 1985 Hymns #318).
@@ -1198,11 +1196,11 @@ ChScore.prototype._parseAndAnnotateMei = function () {
             staffPartIndex = -1;
           }
         }
-        
+
         const [staffPartIds, melodyPartIds] = getStaffPartIds(staffNumber, chordPositionCounter, this._scoreData.parts);
         note.partIds = staffPartIds.length > Math.abs(staffPartIndex) ? staffPartIds.at(staffPartIndex) : [];
         note.meiElement.setAttribute('ch-part-id', note.partIds.join(' '));
-        
+
         if (melodyPartIds.length && note.partIds.some(partId => melodyPartIds.includes(partId)) && !foundMelodyNote) {
           note.meiElement.setAttribute('ch-melody', '');
           note.isMelody = true;
@@ -1212,7 +1210,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
           note.isMelody = false;
         }
       }
-      
+
       if (chordPositionIsAudible) this._scoreData.audibleChordPositions.push(chordPositionCounter);
       const chordPositionInfo = {
         chordPosition: chordPositionCounter,
@@ -1255,7 +1253,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   }
   previousChordPositionInfo.endQ = vrvTimemap.at(-1).qstamp;
   previousChordPositionInfo.durationQ = previousChordPositionInfo.endQ - previousChordPositionInfo.startQ;
-  
+
   // Add attributes to verse elements: @ch-lyric-line-id, @ch-secondary
   for (const verse of this._scoreData.meiParsed.querySelectorAll('verse')) {
     if (verse.textContent.trim() === '') {
@@ -1272,19 +1270,19 @@ ChScore.prototype._parseAndAnnotateMei = function () {
       verse.setAttribute('ch-secondary', '');
     }
   }
-      
+
   // Improve appearance of dir elements
   // Add attributes to intro brackets: @ch-intro-bracket
   // Add attributes to dir, harm, and fermata: @ch-chord-position
   let currentMeasureId = null;
   const chordPositionQstamps = this._scoreData.chordPositions.map(cpInfo => cpInfo.startQ).concat([this._scoreData.chordPositions.at(-1).endQ]);
   for (const element of this._scoreData.meiParsed.querySelectorAll('measure, dir, harm, fermata')) {
-    if (element.tagName === 'measure') {
+    if (element.matches('measure')) {
       currentMeasureId = element.getAttribute('xml:id');
     } else {
       let qstamp;
       let chordPosition;
-      const tstamp = parseFloat(element.getAttribute('tstamp'));
+      const tstamp = Number.parseFloat(element.getAttribute('tstamp'));
       const startid = element.getAttribute('startid')?.substring(1);
       const measureInfo = this._scoreData.measuresById[currentMeasureId];
       if (tstamp) {
@@ -1294,13 +1292,13 @@ ChScore.prototype._parseAndAnnotateMei = function () {
         chordPosition = this._bisectLeft(chordPositionQstamps, qstamp);
       } else if (startid) {
         const refNote = this._scoreData.meiParsed.querySelector(`[*|id="${startid}"]`);
-        chordPosition = parseInt(refNote.getAttribute('ch-chord-position'));
+        chordPosition = Number.parseInt(refNote.getAttribute('ch-chord-position'));
         qstamp = this._scoreData.chordPositions[chordPosition].startQ;
       }
-      
+
       // Set chord position
       element.setAttribute('ch-chord-position', chordPosition);
-      
+
       // Clean up formatted text
       for (const rend of element.querySelectorAll('rend')) {
         const rendText = rend.textContent.trim();
@@ -1310,15 +1308,15 @@ ChScore.prototype._parseAndAnnotateMei = function () {
           rend.setAttribute('glyph.auth', 'smufl');
         }
       }
-      
+
       // Mark intro brackets
       const elementText = element.textContent.trim();
       if (elementText === '⌜') {
         element.setAttribute('ch-intro-bracket', 'start');
       } else if (elementText === '⌝') {
         element.setAttribute('ch-intro-bracket', 'end');
-      }          
-      
+      }
+
       // If qstamp is at the end of the measure, right-align it to prevent it from sticking out too far
       // See https://github.com/rism-digital/verovio/issues/4239
       if (qstamp === measureInfo.endQ) {
@@ -1327,16 +1325,16 @@ ChScore.prototype._parseAndAnnotateMei = function () {
         while (element.firstChild) halignRend.appendChild(element.firstChild);
         element.appendChild(halignRend);
       }
-      
+
     }
   }
-  
+
   this._scoreData.hasPartInfo = this._scoreData.meiParsed.querySelector('[ch-part-id]') !== null;
   this._scoreData.hasMelodyInfo = this._scoreData.meiParsed.querySelector('[ch-melody]') !== null;
   this._scoreData.hasExpansion = this._scoreData.meiParsed.querySelector('expansion[plist]') != null;
   this._normalizeSections(); // After parts and intro brackets are available
   this._normalizeChordSets(); // After <harm> elements have chord positions
-  
+
   // Get key signature info
   // On scores converted from MXL, use <keySig> attributes (sig, pname, accid, mode)
   // On scores converted from ABC, use <scoreDef> attributes (key.sig, key.pname, key.accid, key.mode)
@@ -1349,7 +1347,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   const tonality = keySignatureElement?.getAttribute('mode') ?? scoreDefElement?.getAttribute('key.mode') ?? 'major';
   const keySignatures = this._getKeySignatures(tonality);
   const [defaultKeySignatureId, defaultKeySignatureInfo] = Object.entries(keySignatures).find(ks => (ks[1].meiSig === meiSig || ks[1].meiPnameAccid === meiPnameAccid));
-  
+
   // Get nearby key signatures
   const nearbyKeySignatureIds = Object.keys(keySignatures);
   const midpointIndex = (nearbyKeySignatureIds.length - 1) / 2;
@@ -1382,7 +1380,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
     nearbyKeySignatures: nearbyKeySignatures,
     ...defaultKeySignatureInfo,
   }
-  
+
   // Get expanded chord positions (expand verses, repeats, codas, etc. based on score map)
   // Add attributes to verse elements: @ch-section-id, @ch-chorus
   this._scoreData.expandedChordPositions = [];
@@ -1397,14 +1395,14 @@ ChScore.prototype._parseAndAnnotateMei = function () {
         if (!this._scoreData.chordPositions[chordPosition]) {
           continue;
         }
-        
+
         const lyricSelectors = [];
         if (chordPositionRange.lyricLineIds) {
           for (const lyricLineId of chordPositionRange.lyricLineIds) {
             lyricSelectors.push(`[ch-chord-position="${chordPosition}"] verse[ch-lyric-line-id="${lyricLineId}"]`);
           }
         }
-        
+
         const lyricLabels = [];
         const lyricSyllables = [];
         if (lyricSelectors.length > 0) {
@@ -1414,13 +1412,13 @@ ChScore.prototype._parseAndAnnotateMei = function () {
             const sectionIdsString = lyricElement.getAttribute('ch-section-id') ?? '';
             const newSectionIdsString = `${sectionIdsString} ${sectionInfo.sectionId}`.trim();
             lyricElement.setAttribute('ch-section-id', newSectionIdsString);
-            
+
             // Add attribute: verse@ch-chorus
             if (sectionInfo.type === 'chorus' || lyricElement.getAttribute('label') === 'chorus') {
               lyricElement.setAttribute('ch-chorus', '');
               lyricElement.removeAttribute('label');
             }
-            
+
             for (const label of lyricElement.querySelectorAll('label')) {
               const text = label.textContent.trim();
               if (text) lyricLabels.push(text);
@@ -1431,7 +1429,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
             }
           }
         }
-        
+
         // Get expanded chord position info
         const expandedChordPositionInfo = {
           chordPositionInfo: this._scoreData.chordPositions[chordPosition],
@@ -1450,7 +1448,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
         if (this._scoreData.chordPositions[chordPosition].isAudible) {
           this._scoreData.audibleExpandedChordPositions.push(expandedChordPositionCounter);
         }
-        
+
         // Add expanded chord position info to chord position info
         if (!this._scoreData.chordPositions[chordPosition].expandedChordPositions) {
           this._scoreData.chordPositions[chordPosition].expandedChordPositions = {};
@@ -1459,19 +1457,19 @@ ChScore.prototype._parseAndAnnotateMei = function () {
           this._scoreData.chordPositions[chordPosition].expandedChordPositions[sectionInfo.sectionId] = [];
         }
         this._scoreData.chordPositions[chordPosition].expandedChordPositions[sectionInfo.sectionId].push(expandedChordPositionCounter);
-        
+
         // Add expanded chord positions to section info
         if (sectionInfo.expandedChordPositionStart == null) {
           sectionInfo.expandedChordPositionStart = expandedChordPositionCounter;
         }
         sectionInfo.expandedChordPositionEnd = expandedChordPositionCounter;
-        
+
         expandedChordPositionCounter += 1;
         expandedChordPositionQStartCounter += this._scoreData.chordPositions[chordPosition].durationQ;
       }
     }
   }
-  
+
   // Improve appearance of secondary chorus lines (shift to line 2)
   // Example: "It Is Well with My Soul"
   for (const staffNumber of this._scoreData.staffNumbers) {
@@ -1482,7 +1480,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
       }
     }
   }
-  
+
   // Improve appearance of tempo and mood
   const tempoElements = this._scoreData.meiParsed.querySelectorAll('tempo');
   for (const tempoElement of tempoElements) {
@@ -1497,13 +1495,13 @@ ChScore.prototype._parseAndAnnotateMei = function () {
       }
     }
   }
-  
+
   // Check for various features
   this._scoreData.hasIntroBrackets = this._scoreData.meiParsed.querySelector('[ch-intro-bracket]') !== null;
   this._scoreData.hasChordSets = this._scoreData.chordSets.length > 0;
   this._scoreData.hasFingeringMarks = this._scoreData.meiParsed.querySelector('fing') !== null;
   this._scoreData.hasLyricSectionIds = this._scoreData.meiParsed.querySelector('[ch-section-id]') !== null;
-  
+
   // Normalize slurs by attaching them to chords when possible
   // This allows slurs to remain visible if notes are removed from the chord (such as when showing/hiding parts). This also makes the start and end points more precise (for example, in "The Morning Breaks" (1985 Hymns), without this change, the slur above "shadows" starts at the top of the note stem instead of close to the notehead).
   for (const slur of this._scoreData.meiParsed.querySelectorAll('slur')) {
@@ -1512,14 +1510,14 @@ ChScore.prototype._parseAndAnnotateMei = function () {
     const endId = slur.getAttribute('endid').substring(1);
     const startElement = measure.querySelector(`[*|id="${startId}"]`);
     const endElement = measure.querySelector(`[*|id="${endId}"]`);
-    if (startElement && startElement.parentElement.tagName.toLowerCase() === 'chord') {
+    if (startElement && startElement.parentElement.matches('chord')) {
       slur.setAttribute('startid', '#' + startElement.parentElement.getAttribute('xml:id'));
     }
-    if (endElement && endElement.parentElement.tagName.toLowerCase() === 'chord') {
+    if (endElement && endElement.parentElement.matches('chord')) {
       slur.setAttribute('endid', '#' + endElement.parentElement.getAttribute('xml:id'));
     }
   }
-  
+
   // Remove unneeded elements and attributes
   for (const element of this._scoreData.meiParsed.querySelectorAll('staffGrp label, staffGrp labelAbbr, encodingDesc, workDesc, revisionDesc, pgHead, pgFoot, dir:has(lb)')) {
     element.remove();
@@ -1532,7 +1530,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   for (const element of this._scoreData.meiParsed.querySelectorAll('[dur\\.ppq]')) {
     element.removeAttribute('dur.ppq');
   }
-  
+
   // Save the complete MEI string
   this._scoreData.meiStringComplete = (new XMLSerializer()).serializeToString(this._scoreData.meiParsed);
   this._updateMei();
@@ -1541,7 +1539,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
 // Clean up and add metadata to MEI document based on rendering options
 ChScore.prototype._updateMei = function () {
   this._scoreData.meiParsed = (new DOMParser()).parseFromString(this._scoreData.meiStringComplete, 'text/xml');
-  
+
   // Set chord set visibility
   // Add attributes to chord symbols: @ch-superscript
   if (this._scoreData.hasChordSets) {
@@ -1580,18 +1578,18 @@ ChScore.prototype._updateMei = function () {
       }
     }
   }
-  
+
   // Set fingering mark visibility
   if (this._scoreData.hasFingeringMarks && !this._currentOptions.showFingeringMarks) {
     for (const fingeringMark of this._scoreData.meiParsed.querySelectorAll('fing')) {
       fingeringMark.remove();
     }
   }
-  
+
   // Set measure number visibility
   const scoreDef = this._scoreData.meiParsed.querySelector('scoreDef');
   scoreDef.setAttribute('mnum.visible', !!this._currentOptions.showMeasureNumbers);
-  
+
   // Show melody only
   // Edge cases for testing: "I Am a Child of God" (1989 Children’s Songbook); "The Morning Breaks" (1985 Hymns)
   // TODO: Fix cases where the melody includes a part without lyrics attached. Known cases in 1985 Hymns: "The Lord Is My Shepherd" (#108, #316) (melody starts on Alto, then Soprano); "High on the Mountain Top" (#333) (melody starts on Tenor, then Bass); "I Need Thee Every Hour" (#334) (melody on Tenor 2); "Brightly Beams Our Father’s Mercy" (#335) (melody on Tenor 2); "School Thy Feelings" (#336) (melody starts on Tenor 2, then Tenor 1, then Tenor 2). For now, I marked the part with lyrics as the melody on those hymns.
@@ -1605,7 +1603,7 @@ ChScore.prototype._updateMei = function () {
       element.remove();
     }
     // Move melody notes to a single staff and layer (preferring treble clef staff if any melody notes are on one)
-    const trebleClefStaffNumbers = Array.from(this._scoreData.meiParsed.querySelectorAll('clef[shape="G"]')).map(cf => parseInt(cf.closest('staffDef').getAttribute('n')));
+    const trebleClefStaffNumbers = Array.from(this._scoreData.meiParsed.querySelectorAll('clef[shape="G"]')).map(cf => Number.parseInt(cf.closest('staffDef').getAttribute('n')));
     const trebleClefStaffNumbersSelector = trebleClefStaffNumbers.map(sn => `[n="${sn}"]`).join(',');
     let melodyStaffNumber = this._scoreData.meiParsed.querySelector(`staff:is(${trebleClefStaffNumbersSelector}) [ch-melody]`)?.closest('staff')?.getAttribute('n') ?? null;
     for (const [chordPosition, chordPositionInfo] of this._scoreData.chordPositions.entries()) {
@@ -1639,7 +1637,7 @@ ChScore.prototype._updateMei = function () {
       if ((startId && deletedElementIds.includes(startId)) || (endId && deletedElementIds.includes(endId))) {
         spanningElement.remove();
         continue;
-      } else if (spanningElement.tagName.toLowerCase() === 'slur') {
+      } else if (spanningElement.matches('slur')) {
         const start_end = `${startId}_${endId}`;
         if (uniqueSlurs.has(start_end)) {
           spanningElement.remove();
@@ -1650,7 +1648,7 @@ ChScore.prototype._updateMei = function () {
       spanningElement.removeAttribute('curvedir');
     }
   }
-  
+
   // Identify visible section IDs, chord positions, and staff numbers
   const sectionIdsToKeep = new Set();
   const chordPositionsToKeep = new Set();
@@ -1680,20 +1678,20 @@ ChScore.prototype._updateMei = function () {
       }
     }
   }
-  
+
   // Expand score
   const expansion = this._scoreData.meiParsed.querySelector('expansion[plist]');
   if (this._currentOptions.expandScore) {
-    
+
     // Expand introduction
     this._scoreData.meiParsed = this._extractPianoIntroduction(this._scoreData.meiParsed);
-    
+
     // Expand sections, endings, codas, etc.
     // TODO: Look into using Verovio's built-in expansion option (get expanded MEI, then edit to clean up endings, barlines, lyrics, etc.). Potential benefits would be automatic handling for cross-section ties (potentially – need to test), automatic generation of unique IDs, etc. The downside is less control over the output.
     const sectionIds = expansion.getAttribute('plist').split(' ').map(ref => ref.substring(1));
     if (this._currentOptions.expandScore === 'full-score' && this._scoreData.hasExpansion) {
       const singleLineSectionIds = [];
-      
+
       // Gather section contents
       // TODO: No need to get previous element siblings if this is fixed in Verovio code. Example: "This Is the Christ" (Hymns—For Home and Church)
       // https://github.com/rism-digital/verovio/pull/4250
@@ -1702,23 +1700,23 @@ ChScore.prototype._updateMei = function () {
       const sectionIdCounter = {};
       for (const section of parentSection.querySelectorAll('section, ending')) {
         const sectionId = section.getAttribute('xml:id');
-        
+
         // Check if section element has multiple simultaneous lyric lines
         if (!section.querySelector(':is(note[ch-melody], chord:has([ch-melody])) verse:nth-of-type(2)')) {
           singleLineSectionIds.push(sectionId);
         }
-        
+
         sectionsById[sectionId] = [];
         sectionIdCounter[sectionId] = 0;
         let previousElement = section.previousElementSibling;
-        while (previousElement && !['section', 'ending', 'expansion'].includes(previousElement.tagName)) {
+        while (previousElement && !previousElement.matches('section, ending, expansion')) {
           sectionsById[sectionId].push(previousElement);
           previousElement = previousElement.previousElementSibling;
         }
         sectionsById[sectionId].push(section);
         for (const element of sectionsById[sectionId]) element.remove();
       }
-      
+
       // Create new section elements
       for (const sectionId of sectionIds) {
         sectionIdCounter[sectionId] += 1;
@@ -1740,7 +1738,7 @@ ChScore.prototype._updateMei = function () {
           parentSection.append(newElement);
         }
       }
-      
+
       // Clean up endings
       for (const ending of this._scoreData.meiParsed.querySelectorAll('ending')) {
         const endingSection = this._scoreData.meiParsed.createElement('section');
@@ -1752,12 +1750,12 @@ ChScore.prototype._updateMei = function () {
         }
         ending.remove();
       }
-      
+
       // Clean up directions
       for (const dir of this._scoreData.meiParsed.querySelectorAll('repeatMark, coda, segno, dir[type="coda"], dir[type="tocoda"], dir[type="segno"], dir[type="dalsegno"], dir[type="dacapo"], dir[type="fine"]')) {
         dir.remove();
       }
-      
+
       // Clean up barlines
       for (const measure of this._scoreData.meiParsed.querySelectorAll('section measure:first-of-type')) {
         const leftBarline = measure.getAttribute('left');
@@ -1772,7 +1770,7 @@ ChScore.prototype._updateMei = function () {
 //           if (rightBarline != 'invis') measure.setAttribute('right', 'dbl');
         if (m === endSectionMeasures.length - 1) measure.setAttribute('right', 'end');
       }
-      
+
       // Add expanded chord positions and clean up lyrics
       let ecpCounter = 0;
       let currentSectionIndex = -1;
@@ -1790,14 +1788,14 @@ ChScore.prototype._updateMei = function () {
                 sectionElements[currentSectionIndex].setAttribute('ch-expanded-chord-position', currentExpandedChordPositions.join(' '));
               }
               currentSectionIndex++;
-              currentSectionChordPositions = sectionElements[currentSectionIndex].getAttribute('ch-chord-position').trim().split(' ').map(cp => parseInt(cp));
+              currentSectionChordPositions = sectionElements[currentSectionIndex].getAttribute('ch-chord-position').trim().split(' ').map(cp => Number.parseInt(cp));
               currentExpandedChordPositions = [];
             }
             currentExpandedChordPositions.push(ecpCounter);
-            
+
             // Process chord position elements (add expanded chord positions and remove unneeded lyrics)
             const currentSection = sectionElements[currentSectionIndex];
-            
+
             let originalSectionId, isSingleLine;
             if (sectionInfo.type !== 'introduction') {
               originalSectionId = currentSection.getAttribute('xml:id').split('-rend')[0];
@@ -1808,8 +1806,8 @@ ChScore.prototype._updateMei = function () {
               element.setAttribute('ch-expanded-chord-position', ecpCounter);
               const verseElements = element.querySelectorAll('verse');
               if (verseElements.length > 0 && sectionInfo.type !== 'introduction') {
-                const keptVerseIndex = (isSingleLine || singleLineSectionIds.includes(originalSectionId)) ? 0 
-                  : Array.from(verseElements).findIndex(ve => parseInt(ve.getAttribute('n')) === lyricLineCounters[chordPosition]);
+                const keptVerseIndex = (isSingleLine || singleLineSectionIds.includes(originalSectionId)) ? 0
+                  : Array.from(verseElements).findIndex(ve => Number.parseInt(ve.getAttribute('n')) === lyricLineCounters[chordPosition]);
                 for (let i = 0; i < verseElements.length; i++) {
                   const verseElement = verseElements[i];
                   if (i === keptVerseIndex) {
@@ -1824,7 +1822,7 @@ ChScore.prototype._updateMei = function () {
                 }
               }
             }
-            
+
             ecpCounter++;
           }
         }
@@ -1832,10 +1830,10 @@ ChScore.prototype._updateMei = function () {
       if (sectionElements[currentSectionIndex]) {
         sectionElements[currentSectionIndex].setAttribute('ch-expanded-chord-position', currentExpandedChordPositions.join(' '));
       }
-      
+
     }
   }
-  
+
   // Add expanded chord positions (non-expanded score, or expanded intro only)
   if (this._currentOptions.expandScore !== 'full-score') {
     const introSectionElement = this._scoreData.meiParsed.querySelector('section[type="introduction"]');
@@ -1843,7 +1841,7 @@ ChScore.prototype._updateMei = function () {
     for (const chordPositionElement of chordPositionElements) {
       const sectionElement = chordPositionElement.closest('section');
       const elementExpandedChordPositions = [];
-      const chordPositions = chordPositionElement.getAttribute('ch-chord-position').trim().split(' ').map(cp => parseInt(cp));
+      const chordPositions = chordPositionElement.getAttribute('ch-chord-position').trim().split(' ').map(cp => Number.parseInt(cp));
       for (const chordPosition of chordPositions) {
         const chordPositionInfo = this._scoreData.chordPositions[chordPosition];
         if (!chordPositionInfo) continue;
@@ -1861,13 +1859,13 @@ ChScore.prototype._updateMei = function () {
       }
     }
   }
-  
+
   // Set section lyrics visibility (non-expanded score)
   if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0 && this._currentOptions.expandScore !== 'full-score') {
     const oldToNewLineNumber = {}
     for (const element of this._scoreData.meiParsed.querySelectorAll('label[ch-section-id], verse[ch-section-id]')) {
       const sectionIds = element.getAttribute('ch-section-id').split(' ');
-      const chordPosition = parseInt(element.closest('[ch-chord-position]').getAttribute('ch-chord-position'));
+      const chordPosition = Number.parseInt(element.closest('[ch-chord-position]').getAttribute('ch-chord-position'));
       if (sectionIds.some(sectionId => sectionIdsToKeep.has(sectionId))) {
         const lineNumber = element.getAttribute('n');
         if (!Object.hasOwn(oldToNewLineNumber, lineNumber)) {
@@ -1884,11 +1882,11 @@ ChScore.prototype._updateMei = function () {
       }
     }
   }
-  
+
   if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0) {
     // Remove unneeded section elements
     for (const sectionElement of this._scoreData.meiParsed.querySelectorAll('section[ch-expanded-chord-position], ending[ch-expanded-chord-position]')) {
-      const sectionElementExpandedChordPositions = new Set(sectionElement.getAttribute('ch-expanded-chord-position').trim().split(' ').map(ecp => parseInt(ecp)));
+      const sectionElementExpandedChordPositions = new Set(sectionElement.getAttribute('ch-expanded-chord-position').trim().split(' ').map(ecp => Number.parseInt(ecp)));
       if (sectionElementExpandedChordPositions.isDisjointFrom(expandedChordPositionsToKeep)) sectionElement.remove();
     }
     // Remove unneeded staff elements
@@ -1904,7 +1902,7 @@ ChScore.prototype._updateMei = function () {
       for (const staff of this._scoreData.meiParsed.querySelectorAll(stavesSelector)) staff.remove();
     }
   }
-  
+
   // Save changes
   this._scoreData.meiString = (new XMLSerializer()).serializeToString(this._scoreData.meiParsed);
   this._vrvToolkit.loadData(this._scoreData.meiString);
@@ -1923,13 +1921,13 @@ ChScore.prototype._updateSvg = function (svg) {
   definitionScaleElement.setAttribute('stroke', 'currentColor');
   definitionScaleElement.setAttribute('stroke-width', '0');
   definitionScaleElement.setAttribute('font-family', 'Times, serif');
-  
+
   // Remove unwanted font attribute (for example, on tempo text when mmOutput option is set – when printing)
   for (const textElement of definitionScaleElement.querySelectorAll('text[font-family="Times"]')) {
     textElement.removeAttribute('font-family');
     textElement.removeAttribute('font-weight');
   }
-  
+
   // Improve appearance of tempo
   const tempoElements = svgParsed.querySelectorAll('.tempo text');
   for (const tempoElement of tempoElements) {
@@ -1951,7 +1949,7 @@ ChScore.prototype._updateSvg = function (svg) {
       previousTspanFont = tempoTspan.getAttribute('font-family');
     }
   }
-  
+
   // Improve appearance of codas
   for (const toCoda of svgParsed.querySelectorAll('g.tocoda')) {
     const textElement = toCoda.querySelector('text');
@@ -1959,7 +1957,7 @@ ChScore.prototype._updateSvg = function (svg) {
     const symbolTspan = toCoda.querySelector('tspan[font-family="Leipzig"]');
     if (symbolTspan) symbolTspan.innerHTML = ' ' + symbolTspan.innerHTML;
   }
-  
+
   // Improve appearance of chord symbols
   if (this._scoreData.hasChordSets && this._currentOptions.showChordSet) {
     const chordTexts = svgParsed.querySelectorAll('.harm > text');
@@ -1967,7 +1965,7 @@ ChScore.prototype._updateSvg = function (svg) {
       chordText.setAttribute('text-anchor', 'middle');
       for (const tspan of chordText.querySelectorAll('tspan')) {
         if (tspan.hasAttribute('x')) { // Positioning tspan
-          tspan.setAttribute('x', parseInt(tspan.getAttribute('x')) + (noteheadWidth / 2));
+          tspan.setAttribute('x', Number.parseInt(tspan.getAttribute('x')) + (noteheadWidth / 2));
         } else if (tspan.hasAttribute('data-ch-superscript')) { // Superscript tspan
           tspan.setAttribute('dy', '-50');
           tspan.nextElementSibling?.setAttribute('dy', '50');
@@ -1978,7 +1976,7 @@ ChScore.prototype._updateSvg = function (svg) {
       }
     }
   }
-  
+
   // Improve appearance of intro brackets
   const introBrackets = Array.from(svgParsed.querySelectorAll('[data-ch-intro-bracket] [font-size]:not([font-size="0px"])'))
   for (const introBracket of introBrackets) {
@@ -1993,7 +1991,7 @@ ChScore.prototype._updateSvg = function (svg) {
       introBracket.setAttribute('opacity', '0');
     }
   }
-  
+
   // Add data-related attribute to accidentals, noteheads, ties, stems, etc.
   for (const note of svgParsed.querySelectorAll('g.note')) {
     note.querySelector('g.accid')?.setAttribute('data-related', note.id);
@@ -2016,7 +2014,7 @@ ChScore.prototype._updateSvg = function (svg) {
     if (stem) stem.setAttribute('data-related', noteIds.join(' '));
     if (flag) flag.setAttribute('data-related', noteIds.join(' '));
   }
-  
+
   // Set up background and foreground shape layers
   const pageMarginElement = svgParsed.querySelector('.page-margin');
   const backgroundShapes = svgParsed.createElement('g');
@@ -2025,7 +2023,7 @@ ChScore.prototype._updateSvg = function (svg) {
   const foregroundShapes = svgParsed.createElement('g');
   foregroundShapes.classList.add('ch-shapes', 'ch-shapes-foreground');
   pageMarginElement.append(foregroundShapes);
-  
+
   // Assign class names to layers
   const shapeLayersByClassName = {
     'ch-staff-label': [],
@@ -2045,38 +2043,38 @@ ChScore.prototype._updateSvg = function (svg) {
   for (const className of this._currentOptions.drawForegroundShapes || []) {
     shapeLayersByClassName[className]?.push(foregroundShapes);
   }
-  
+
   // Draw background and foreground shapes (except lyric rects, which are drawn below)
   const measureXsById = {};
   for (const system of systems) {
     const measures = Array.from(system.querySelectorAll('.measure'));
     if (measures.length === 0) continue;
-    
+
     // System, measure, and staff positions are determined based on staff lines drawn as SVG paths.
     // Example staff line path: <path d="M0 20 L500 20" stroke-width="13"></path>
     // The "d" attribute says "[M]ove to coordinates [0, 20]; draw [L]ine to coordinates [500, 20]"
     // Each measure has its own staff lines (so we need to look at the lines in the first and last measures)
-    
+
     let systemX1, systemY1, systemX2, systemY2, lastStaffY2;
-    systemX2 = parseInt(measures.at(-1).querySelector('.staff > path').getAttribute('d').split(' ')[2].replace('L', ''));
-    
+    systemX2 = Number.parseInt(measures.at(-1).querySelector('.staff > path').getAttribute('d').split(' ')[2].replace('L', ''));
+
     const staves = measures[0].querySelectorAll('.staff');
     for (let sf = 0; sf < staves.length; sf++) {
       const staff = staves[sf];
-      const staffNumber = parseInt(staff.dataset.n);
+      const staffNumber = Number.parseInt(staff.dataset.n);
       const staffLines = Array.from(staff.querySelectorAll(':scope > path'));
-      const staffY1 = parseInt(staffLines[0].getAttribute('d').split(' ')[1]);
-      const staffY2 = parseInt(staffLines.at(-1).getAttribute('d').split(' ')[3]);
-      
+      const staffY1 = Number.parseInt(staffLines[0].getAttribute('d').split(' ')[1]);
+      const staffY2 = Number.parseInt(staffLines.at(-1).getAttribute('d').split(' ')[3]);
+
       if (sf === 0) {
-        systemX1 = parseInt(staffLines[0].getAttribute('d').split(' ')[0].replace('M', ''));
+        systemX1 = Number.parseInt(staffLines[0].getAttribute('d').split(' ')[0].replace('M', ''));
         systemY1 = staffY1;
       }
       if (sf === staves.length - 1) {
         systemY2 = staffY2;
         lastStaffY2 = staffY2;
       }
-      
+
       // Draw staff labels
       const staffLabelClassName = 'ch-staff-label';
       for (const shapeLayer of shapeLayersByClassName[staffLabelClassName]) {
@@ -2091,7 +2089,7 @@ ChScore.prototype._updateSvg = function (svg) {
         staffLabel.innerHTML = `Staff ${staffNumber}`;
         shapeLayer.appendChild(staffLabel);
       }
-      
+
       // Draw staff rects
       const staffRectClassName = 'ch-staff-rect';
       const leftExtension = shapeLayersByClassName['ch-chord-position-label'].length > 0 ? 1500 : 0;
@@ -2107,13 +2105,13 @@ ChScore.prototype._updateSvg = function (svg) {
         shapeLayer.appendChild(staffRect);
       }
     }
-    
+
     // If there's only one staff, make sure the system rectangle is tall enough to include the lyrics. This happens when set to melody only.
     if (staves.length < 2) {
-      const systemLyricsBottom = Math.max(0, ...Array.from(system.querySelectorAll('.verse text')).map(lyric => parseInt(lyric.getAttribute('y'))));
+      const systemLyricsBottom = Math.max(0, ...Array.from(system.querySelectorAll('.verse text')).map(lyric => Number.parseInt(lyric.getAttribute('y'))));
       systemY2 = Math.max(systemY2, systemLyricsBottom + 500) ?? 0;
     }
-    
+
     // Draw system rects
     const systemRectClassName = 'ch-system-rect';
     for (const shapeLayer of shapeLayersByClassName[systemRectClassName]) {
@@ -2126,14 +2124,14 @@ ChScore.prototype._updateSvg = function (svg) {
       systemRect.setAttribute('data-related', system.id);
       shapeLayer.appendChild(systemRect);
     }
-    
+
     // Skip systems without measures (sometimes happens when the window is narrow)
     if (measures.length === 0) continue;
     for (const measure of measures) {
       const staffLines = Array.from(measure.querySelectorAll('g.staff > path'));
-      const [measureX1, _y1, measureX2, _y2] = staffLines.at(0).getAttribute('d').replace('M', '').replace('L', '').split(' ').map(coord => parseInt(coord));
+      const [measureX1, _y1, measureX2, _y2] = staffLines.at(0).getAttribute('d').replace('M', '').replace('L', '').split(' ').map(coord => Number.parseInt(coord));
       measureXsById[measure.id] = [measureX1, measureX2];
-      
+
       // Draw measure rects
       const measureRectClassName = 'ch-measure-rect';
       for (const shapeLayer of shapeLayersByClassName[measureRectClassName]) {
@@ -2146,22 +2144,22 @@ ChScore.prototype._updateSvg = function (svg) {
         measureRect.setAttribute('data-related', `${system.id} ${measure.id}`);
         shapeLayer.appendChild(measureRect);
       }
-      
+
       const chordPositionNoteX1s = {};
       const chordPositionToExpandedChordPositions = {}
       const noteSymbols = measure.querySelectorAll('.note[data-ch-chord-position] .notehead use, .rest[data-ch-chord-position] use');
       for (const noteSymbol of noteSymbols) {
         const note = noteSymbol.closest('.note, .rest');
         const staff = noteSymbol.closest('.staff');
-        const chordPosition = parseInt(note.dataset.chChordPosition);
+        const chordPosition = Number.parseInt(note.dataset.chChordPosition);
         const expandedChordPositions = note.dataset.chExpandedChordPosition;
         if (!Object.hasOwn(chordPositionNoteX1s, chordPosition)) {
           chordPositionNoteX1s[chordPosition] = [];
           chordPositionToExpandedChordPositions[chordPosition] = expandedChordPositions;
         }
-        const [noteX1, noteY1] = noteSymbol.getAttribute('transform').split('translate(').at(-1).split(')')[0].split(',').map(coord => parseInt(coord));
+        const [noteX1, noteY1] = noteSymbol.getAttribute('transform').split('translate(').at(-1).split(')')[0].split(',').map(coord => Number.parseInt(coord));
         chordPositionNoteX1s[chordPosition].push(noteX1);
-        
+
         // Draw note circles
         const noteCircleClassName = 'ch-note-circle';
         for (const shapeLayer of shapeLayersByClassName[noteCircleClassName]) {
@@ -2177,7 +2175,7 @@ ChScore.prototype._updateSvg = function (svg) {
           shapeLayer.append(noteCircle);
         }
       }
-      
+
       let previousCpRect = null;
       const chordPositionNoteX1sEntries = Object.entries(chordPositionNoteX1s);
       for (let i = 0; i < chordPositionNoteX1sEntries.length; i++) {
@@ -2186,7 +2184,7 @@ ChScore.prototype._updateSvg = function (svg) {
         const cpLineX1 = Math.min(...noteX1s);
         const cpLineX = cpLineX1 + (noteheadWidth / 2);
         const cpRectX1 = i === 0 ? measureX1 : cpLineX1 - (noteheadWidth / 2);
-        
+
         // Draw chord position labels
         const cpLabelClassName = 'ch-chord-position-label';
         for (const shapeLayer of shapeLayersByClassName[cpLabelClassName]) {
@@ -2202,7 +2200,7 @@ ChScore.prototype._updateSvg = function (svg) {
           cpLabel.innerHTML = chordPosition;
           shapeLayer.append(cpLabel);
         }
-        
+
         // Draw chord position lines
         const cpLineClassName = 'ch-chord-position-line';
         for (const shapeLayer of shapeLayersByClassName[cpLineClassName]) {
@@ -2217,7 +2215,7 @@ ChScore.prototype._updateSvg = function (svg) {
           cpLine.setAttribute('data-ch-expanded-chord-position', expandedChordPositions);
           shapeLayer.appendChild(cpLine);
         }
-        
+
         // Draw chord position rects
         const cpRectClassName = 'ch-chord-position-rect';
         const bottomExtension = shapeLayersByClassName['ch-chord-position-label'].length > 0 ? 1000 : 0;
@@ -2232,18 +2230,18 @@ ChScore.prototype._updateSvg = function (svg) {
           cpRect.setAttribute('data-ch-chord-position', chordPosition);
           cpRect.setAttribute('data-ch-expanded-chord-position', expandedChordPositions);
           shapeLayer.appendChild(cpRect);
-          
+
           // Update width of previous chord position rect
-          if (previousCpRect) previousCpRect.setAttribute('width', cpRectX1 - parseInt(previousCpRect.getAttribute('x')));
+          if (previousCpRect) previousCpRect.setAttribute('width', cpRectX1 - Number.parseInt(previousCpRect.getAttribute('x')));
           previousCpRect = cpRect;
         }
       }
     }
   }
-  
+
   // Loop through lyrics by system and staff
   if (this._scoreData.hasLyrics) {
-    const lyricFontSize = parseInt(svgParsed.querySelector('.verse tspan[font-size]:not([font-size="0px"])')?.getAttribute('font-size'));
+    const lyricFontSize = Number.parseInt(svgParsed.querySelector('.verse tspan[font-size]:not([font-size="0px"])')?.getAttribute('font-size'));
     const lyricPadding = lyricFontSize / 8;
     for (const system of systems) {
       const addedLyricLabels = [];
@@ -2256,7 +2254,7 @@ ChScore.prototype._updateSvg = function (svg) {
         const chorusYPositions = [];
         const staffLyrics = system.querySelectorAll(`.staff[data-n="${staffNumber}"] .label, .staff[data-n="${staffNumber}"] .verse`);
         if (staffLyrics.length === 0) continue;
-        
+
         for (const lyric of staffLyrics) {
           // Add missing attributes to label (in MEI, the label is inside the verse, but in the SVG, it's a sibling)
           if (lyric.classList.contains('label')) {
@@ -2267,22 +2265,22 @@ ChScore.prototype._updateSvg = function (svg) {
           const lyricTextElement = lyric.querySelector('text');
           if (!lyric.dataset.chLyricLineId || !lyricTextElement) continue;
           const noteOrChord = lyric.closest('[data-ch-chord-position]');
-          const chordPosition = parseInt(noteOrChord.dataset.chChordPosition);
-          const expandedChordPositions = parseInt(noteOrChord.dataset.chExpandedChordPosition);
+          const chordPosition = Number.parseInt(noteOrChord.dataset.chChordPosition);
+          const expandedChordPositions = Number.parseInt(noteOrChord.dataset.chExpandedChordPosition);
           const staff = noteOrChord.closest('.staff');
           const measure = staff.closest('.measure');
-          const measureFirstChordPosition = parseInt(measure.querySelector('[data-ch-chord-position]').dataset.chChordPosition);
+          const measureFirstChordPosition = Number.parseInt(measure.querySelector('[data-ch-chord-position]').dataset.chChordPosition);
           const [measureX1, measureX2] = measureXsById[measure.id];
-          let lyricX = parseInt(lyricTextElement.getAttribute('x')) - lyricPadding;
+          let lyricX = Number.parseInt(lyricTextElement.getAttribute('x')) - lyricPadding;
           if (chordPosition === measureFirstChordPosition) lyricX = Math.min(lyricX, measureX1);
-          const lyricY = parseInt(lyricTextElement.getAttribute('y'));
-          
+          const lyricY = Number.parseInt(lyricTextElement.getAttribute('y'));
+
           if (!isChorus && !verseYPositions.includes(lyricY)) {
             verseYPositions.push(lyricY);
           } else if (isChorus && !chorusYPositions.includes(lyricY)) {
             chorusYPositions.push(lyricY);
           }
-          
+
           // Draw lyric line labels
           const lyricLineLabelClassName = 'ch-lyric-line-label';
           if (!addedLyricLabels.includes(lyric.dataset.chLyricLineId)) {
@@ -2301,7 +2299,7 @@ ChScore.prototype._updateSvg = function (svg) {
             }
             addedLyricLabels.push(lyric.dataset.chLyricLineId);
           }
-          
+
           // Draw lyric rectangles
           const lyricRectClassName = 'ch-lyric-rect';
           for (const shapeLayer of shapeLayersByClassName[lyricRectClassName]) {
@@ -2318,27 +2316,27 @@ ChScore.prototype._updateSvg = function (svg) {
             lyricRect.setAttribute('data-ch-chord-position', chordPosition);
             lyricRect.setAttribute('data-ch-expanded-chord-position', expandedChordPositions);
             shapeLayer.appendChild(lyricRect);
-            
+
             // Update width of previous lyric rect
             let lyricIsLeftOfPreviousLyric = false;
             const shapeLayerClass = shapeLayer.classList.contains('ch-shapes-background') ? 'ch-shapes-background' : 'ch-shapes-foreground';
             if (previouslyricRect[shapeLayerClass][lyric.dataset.chLyricLineId]) {
-              const previousLyricX = parseInt(previouslyricRect[shapeLayerClass][lyric.dataset.chLyricLineId].getAttribute('x'));
+              const previousLyricX = Number.parseInt(previouslyricRect[shapeLayerClass][lyric.dataset.chLyricLineId].getAttribute('x'));
               if (lyricX > previousLyricX) {
-                const previousLyricWidth = parseInt(previouslyricRect[shapeLayerClass][lyric.dataset.chLyricLineId].getAttribute('width'));
+                const previousLyricWidth = Number.parseInt(previouslyricRect[shapeLayerClass][lyric.dataset.chLyricLineId].getAttribute('width'));
                 const previousLyricNewWidth = Math.min(lyricX - previousLyricX, previousLyricWidth);
                 previouslyricRect[shapeLayerClass][lyric.dataset.chLyricLineId].setAttribute('width', previousLyricNewWidth);
               } else {
                 lyricIsLeftOfPreviousLyric = true;
               }
             }
-            
+
             // Handle case where the previously-processed lyric is to the right of the current lyric. This can happen when lyrics are in multiple layers, such as in "It Is Well with My Soul", alto part words "well" and "soul" (layer 1 lyrics come before layer 2 lyrics in the DOM).
             if (lyricIsLeftOfPreviousLyric) {
               const nearbyLyrics = staff.querySelectorAll(`.staff[data-n="${staffNumber}"] .verse[data-ch-lyric-line-id="${lyric.dataset.chLyricLineId}"]`);
               let nextLyricRect;
               for (const nearbyLyric of nearbyLyrics) {
-                if (parseInt(nearbyLyric.dataset.chChordPosition) < chordPosition) continue;
+                if (Number.parseInt(nearbyLyric.dataset.chChordPosition) < chordPosition) continue;
                 const nearbyLyricRect = shapeLayer.querySelector(`.ch-lyric-rect[data-related~="${nearbyLyric.id}"]`);
                 if (nearbyLyricRect) {
                   nextLyricRect = nearbyLyricRect;
@@ -2346,14 +2344,14 @@ ChScore.prototype._updateSvg = function (svg) {
                 }
               }
               let newWidth = lyricFontSize * 2;
-              if (nextLyricRect) newWidth = parseInt(nextLyricRect.getAttribute('x')) - lyricX;
+              if (nextLyricRect) newWidth = Number.parseInt(nextLyricRect.getAttribute('x')) - lyricX;
               lyricRect.setAttribute('width', newWidth);
             } else {
               previouslyricRect[shapeLayerClass][lyric.dataset.chLyricLineId] = lyricRect;
             }
           }
         }
-        
+
         // Center chorus and verse lines (works best if the first chorus line is at n=1, otherwise there may be extra space below the lyrics, where the chorus was)
         const numVerses = verseYPositions.length;
         const numChoruses = chorusYPositions.length;
@@ -2369,7 +2367,7 @@ ChScore.prototype._updateSvg = function (svg) {
               for (const element of Array.from(lyric.querySelectorAll('text, rect'))
                 .concat([svgParsed.querySelector(`:is(.ch-shapes) [data-related~="${lyric.id}"]`)])
               ) {
-                element?.setAttribute('y', parseInt(element?.getAttribute('y')) + offset);
+                element?.setAttribute('y', Number.parseInt(element?.getAttribute('y')) + offset);
               }
             }
           } else if (numChoruses > numVerses) {
@@ -2378,7 +2376,7 @@ ChScore.prototype._updateSvg = function (svg) {
               for (const element of Array.from(lyric.querySelectorAll('text, rect'))
                 .concat([svgParsed.querySelector(`:is(.ch-shapes) [data-related~="${lyric.id}"]`)])
               ) {
-                element?.setAttribute('y', parseInt(element?.getAttribute('y')) + offset);
+                element?.setAttribute('y', Number.parseInt(element?.getAttribute('y')) + offset);
               }
             }
           }
@@ -2386,7 +2384,7 @@ ChScore.prototype._updateSvg = function (svg) {
       }
     }
   }
-  
+
   // Set chord set image visibility
   // TODO: Add guitar chord charts: https://github.com/andresmegias/acordia
   if (this._currentOptions.showChordSet && this._currentOptions.showChordSetImages) {
@@ -2405,18 +2403,18 @@ ChScore.prototype._updateSvg = function (svg) {
           if (harmElement && chordPositionRefInfo.svgSymbolId) {
             const imageSize = 1600;
             const harmTspan = harmElement.querySelector('tspan[x]');
-            const firstStaffY = parseInt(harmTspan.closest('g.measure').querySelector('g.staff path').getAttribute('d').split(' ')[1]);
-            const harmTspanY = parseInt(harmTspan.getAttribute('y'));
+            const firstStaffY = Number.parseInt(harmTspan.closest('g.measure').querySelector('g.staff path').getAttribute('d').split(' ')[1]);
+            const harmTspanY = Number.parseInt(harmTspan.getAttribute('y'));
             // Position above the first staff, if there's a staff above the chord symbol (for example, on songs with a descant)
             const y = Math.min(firstStaffY, harmTspanY) - (imageSize * 1.25);
-            const x = parseInt(harmTspan.getAttribute('x')) - (imageSize / 2);
+            const x = Number.parseInt(harmTspan.getAttribute('x')) - (imageSize / 2);
             chordChartsGroup.insertAdjacentHTML('beforeend', `<use x="${x}" y="${y}" href="${currentChordSet.svgSymbolsUrl}?3#${chordPositionRefInfo.svgSymbolId}" width="${imageSize}" height="${imageSize}" />`);
           }
         }
       }
     }
   }
-  
+
   return (new XMLSerializer()).serializeToString(svgParsed);
 }
 
@@ -2424,11 +2422,11 @@ ChScore.prototype._drawScore = function () {
   this._container.dataset.chStatus = 'drawing';
   this._container.innerHTML = '';
   if (this._pages) for (const page of this._pages) this._pageObserver.unobserve(page);
-  
+
   // Add attributes: @data-ch-width, @data-ch-height
   this._container.dataset.chWidth = this._container.offsetWidth;
   this._container.dataset.chHeight = this._container.offsetHeight;
-  
+
   // Create pages
   this._pages = [];
   const createPage = () => {
@@ -2442,7 +2440,7 @@ ChScore.prototype._drawScore = function () {
     this._container.append(page);
   }
   createPage();
-  
+
   // Create inner container
   const addInnerContainer = (name, content) => {
     const innerContainer = document.createElement('div');
@@ -2456,7 +2454,7 @@ ChScore.prototype._drawScore = function () {
     }
     return innerContainer;
   }
-  
+
   // Parse header and footer content
   let headerNodes = [], footerNodes = [];
   if (this._currentOptions.headerContent || this._currentOptions.footerContent) {
@@ -2464,13 +2462,13 @@ ChScore.prototype._drawScore = function () {
     headerNodes = Array.from(parser.parseFromString(this._currentOptions.headerContent ?? '', 'text/html').body.childNodes);
     footerNodes = Array.from(parser.parseFromString(this._currentOptions.footerContent ?? '', 'text/html').body.childNodes);
   }
-  
+
   // Add header content
   if (headerNodes.length === 0) headerNodes.push(document.createTextNode(''));
   for (const headerNode of headerNodes) {
     addInnerContainer('header', headerNode);
   }
-  
+
   // Add lyrics content
   for (const section of this._scoreData.sections) {
     if ((this._currentOptions.hideSectionIds ?? []).includes(section.sectionId) || section.placement !== 'below') {
@@ -2495,18 +2493,18 @@ ChScore.prototype._drawScore = function () {
   if (!lyricsBelowInnerContainer) {
     lyricsBelowInnerContainer = addInnerContainer('lyrics-below', document.createTextNode(''));
   }
-  
+
   // Add footer content
   if (footerNodes.length === 0) footerNodes.push(document.createTextNode(''));
   for (const footerNode of footerNodes) {
     addInnerContainer('footer', footerNode);
   }
-  
+
   // If scale option is an array (min and max values), attempt to find an optimal scale that fits on a single page, without getting too small
   if (Array.isArray(this._currentOptions.scale) && this._currentOptions.layout !== 'print') {
     const getPageCountAtScale = (scale) => {
-      this._container.dataset.chScale = parseInt(scale);
-      this._container.style.setProperty('--ch-scale', parseInt(scale));
+      this._container.dataset.chScale = Number.parseInt(scale);
+      this._container.style.setProperty('--ch-scale', Number.parseInt(scale));
       const availableHeight = Math.max(this._container.offsetHeight - this._pages[0].scrollHeight, 100);
       this._vrvToolkit.setOptions({ scale: scale, pageHeight: availableHeight });
       this._vrvToolkit.redoLayout();
@@ -2526,7 +2524,7 @@ ChScore.prototype._drawScore = function () {
     // Set final scale
     getPageCountAtScale(minScale);
   }
-    
+
   // Render SVG
   const numPages = this._vrvToolkit.getPageCount();
   for (let p = 1; p <= numPages; p++) {
@@ -2534,14 +2532,14 @@ ChScore.prototype._drawScore = function () {
     svg = this._updateSvg(svg);
     addInnerContainer('svg', svg);
   }
-  
+
   // If the score container has a fixed height that's not tall enough for the rendered score, add bottom margin to increase the available space. Setting container height directly is avoided, because that could trigger a redraw.
   if (this._container.offsetHeight < this._container.scrollHeight && !['paginated', 'print'].includes(this._currentOptions.layout)) {
     this._container.style.marginBottom = `${this._container.scrollHeight - this._container.offsetHeight}px`;
   } else {
     this._container.style.marginBottom = '';
   }
-  
+
   // Paginated layout: sort inner containers into pages
   if (this._currentOptions.layout === 'paginated' && this._pages[0].scrollHeight > this._container.offsetHeight) {
     const pageHeight = this._container.offsetHeight;
@@ -2558,12 +2556,12 @@ ChScore.prototype._drawScore = function () {
       if (innerContainer.pageIndex !== 0) this._pages[innerContainer.pageIndex].append(innerContainer);
     }
   }
-  
+
   // Remove temporary styles
   for (const page of this._pages) {
     page.style.visibility = '';
   }
-  
+
   this._container.dataset.chStatus = 'ready';
   if (this._currentOptions.customEvents.includes('ch:scoredraw')) {
     this._container.dispatchEvent(new CustomEvent('ch:scoredraw', { detail: {
@@ -2580,10 +2578,10 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
   const MUSICAL_ELEMENTS = ['note', 'rest', 'chord', 'space'];
   const MEASURE_ATTRS = ['clef', 'keySig', 'meterSig', 'staffDef'];
   const NOTATION_ELEMENTS = ['tie', 'slur', 'dir', 'harm', 'dynam', 'tempo', 'pedal'];
-  
+
   const updateElementIds = (elem, idMap) => {
-    const elements = elem.tagName === 'chord' ? elem.querySelectorAll('note') : [elem];
-    
+    const elements = elem.matches('chord') ? elem.querySelectorAll('note') : [elem];
+
     for (const el of elements) {
       const oldId = el.getAttribute('xml:id');
       if (oldId) {
@@ -2593,7 +2591,7 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       }
     }
   };
-  
+
   const updateElementAndChildIds = (elem, idMap) => {
     if (elem.hasAttribute('xml:id')) {
       const oldId = elem.getAttribute('xml:id');
@@ -2601,20 +2599,20 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       idMap[oldId] = newId;
       elem.setAttribute('xml:id', newId);
     }
-    
+
     for (const child of elem.children) {
       updateElementAndChildIds(child, idMap);
     }
   };
-  
+
   const calculateDuration = (elem, tstampUnit = 4) => {
-    const dur = parseFloat(elem.getAttribute('dur') || '4');
-    const dots = parseInt(elem.getAttribute('dots') || '0');
+    const dur = Number.parseFloat(elem.getAttribute('dur') || '4');
+    const dots = Number.parseInt(elem.getAttribute('dots') || '0');
     let durTstamps = tstampUnit / dur;
     for (let i = 0; i < dots; i++) durTstamps += durTstamps / 2;
     return durTstamps;
   };
-  
+
   const getTstampUnit = (measure) => {
     // Find time signature
     let meterSig = measure.querySelector('meterSig');
@@ -2622,29 +2620,29 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       const scoreDef = meiParsed.querySelector('scoreDef');
       meterSig = scoreDef?.querySelector('meterSig');
     }
-    
+
     if (meterSig) {
-      const unit = parseInt(meterSig.getAttribute('unit') || '4');
+      const unit = Number.parseInt(meterSig.getAttribute('unit') || '4');
       // The tstamp unit is the denominator of the time signature
       // In 3/2, unit=2, so 1 tstamp = 1 half note
       // In 4/4, unit=4, so 1 tstamp = 1 quarter note
       return unit;
     }
-    
+
     return 4; // Default to quarter note
   };
-  
+
   const convertTstampsToDur = (tstamps, tstampUnit = 4) => {
     // tstampUnit tells us what note value = 1 tstamp
     // In 3/2 time: tstampUnit = 2 (half note = 1 tstamp)
     // In 4/4 time: tstampUnit = 4 (quarter note = 1 tstamp)
-    
+
     // Handle dotted notes
     const withOneDot = tstamps / 1.5;
     const withTwoDots = tstamps / 1.75;
-    
+
     const validDurs = [1, 2, 4, 8, 16, 32, 64];
-    
+
     // Check if it matches a dotted duration
     for (const validDur of validDurs) {
       const plainDur = tstampUnit / validDur;
@@ -2655,12 +2653,12 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
         return { dur: validDur, dots: 2 };
       }
     }
-    
+
     // Otherwise find nearest plain duration
     const meiDur = tstampUnit / tstamps;
     let nearest = validDurs[0];
     let minDiff = Math.abs(meiDur - nearest);
-    
+
     for (const validDur of validDurs) {
       const diff = Math.abs(meiDur - validDur);
       if (diff < minDiff) {
@@ -2668,13 +2666,13 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
         nearest = validDur;
       }
     }
-    
+
     return { dur: nearest, dots: 0 };
   };
-  
+
   const clipElement = (elem, currentTstamp, elemEnd, startTstamp, endTstamp, idMap, tstampUnit) => {
     const newElem = elem.cloneNode(true);
-    
+
     if (currentTstamp >= startTstamp && elemEnd <= endTstamp) {
       // Fully inside range - no clipping needed
       updateElementIds(newElem, idMap);
@@ -2686,7 +2684,7 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       } else {
         newDur = endTstamp - currentTstamp;
       }
-      
+
       const result = convertTstampsToDur(newDur, tstampUnit);
       newElem.setAttribute('dur', String(result.dur));
       if (result.dots > 0) {
@@ -2696,25 +2694,25 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       }
       updateElementIds(newElem, idMap);
     }
-    
+
     return newElem;
   };
-          
+
   const copyLayerRange = (layer, startTstamp, endTstamp, idMap, tstampUnit) => {
     const newLayer = meiParsed.createElement('layer');
     newLayer.setAttribute('n', layer.getAttribute('n') || '1');
-    
+
     let tstamp = 1;
     let hasContent = false;
     startTstamp = startTstamp ?? 1;
     endTstamp = endTstamp ?? Infinity;
-    
+
     const processContainer = (container, currentTstamp) => {
       let containerTstamp = currentTstamp;
       const children = [];
-      
+
       for (const child of container.children) {
-        if (child.tagName === 'beam' || child.tagName === 'tuplet') {
+        if (child.matches('beam, tuplet')) {
           const result = processContainer(child, containerTstamp);
           if (result.element) {
             children.push(result.element);
@@ -2723,15 +2721,15 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
         } else if (MUSICAL_ELEMENTS.includes(child.tagName)) {
           const durTstamps = calculateDuration(child, tstampUnit);
           const elemEnd = containerTstamp + durTstamps;
-          
+
           if (containerTstamp < endTstamp && elemEnd > startTstamp) {
             children.push(clipElement(child, containerTstamp, elemEnd, startTstamp, endTstamp, idMap, tstampUnit));
           }
-          
+
           containerTstamp = elemEnd;
         }
       }
-      
+
       let newContainer = null;
       if (children.length > 0) {
         newContainer = meiParsed.createElement(container.tagName);
@@ -2741,8 +2739,8 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
           idMap[oldId] = newId;
           newContainer.setAttribute('xml:id', newId);
         }
-        
-        if (container.tagName === 'tuplet') {
+
+        if (container.matches('tuplet')) {
           const tupletAttrs = ['num', 'numbase', 'bracket.visible', 'num.visible', 'num.place', 'bracket.place'];
           tupletAttrs.forEach(attr => {
             if (container.hasAttribute(attr)) {
@@ -2750,15 +2748,15 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
             }
           });
         }
-        
+
         children.forEach(child => newContainer.appendChild(child));
       }
-      
+
       return { element: newContainer, endTstamp: containerTstamp };
     };
-    
+
     const processElement = (elem, currentTstamp) => {
-      if (elem.tagName === 'beam' || elem.tagName === 'tuplet') {
+      if (elem.matches('beam, tuplet')) {
         const result = processContainer(elem, currentTstamp);
         if (result.element) {
           newLayer.appendChild(result.element);
@@ -2766,7 +2764,7 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
         }
         return result.endTstamp - currentTstamp;
       }
-      
+
       if (!MUSICAL_ELEMENTS.includes(elem.tagName)) {
         if (startTstamp <= currentTstamp && currentTstamp < endTstamp) {
           newLayer.appendChild(elem.cloneNode(true));
@@ -2774,30 +2772,30 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
         }
         return 0;
       }
-      
+
       const durTstamps = calculateDuration(elem, tstampUnit);
       const elemEnd = currentTstamp + durTstamps;
-      
+
       if (currentTstamp < endTstamp && elemEnd > startTstamp) {
         newLayer.appendChild(clipElement(elem, currentTstamp, elemEnd, startTstamp, endTstamp, idMap, tstampUnit));
         hasContent = true;
       }
-      
+
       return durTstamps;
     };
-    
+
     for (const elem of layer.children) {
       const duration = processElement(elem, tstamp);
       tstamp += duration;
     }
-    
+
     return hasContent ? newLayer : null;
   };
-      
+
   const updateIdReferences = (elem, idMap) => {
     for (const attr of ['startid', 'endid', 'plist']) {
       if (!elem.hasAttribute(attr)) continue;
-      
+
       const value = elem.getAttribute(attr);
       const ids = value.split(/\s+/);
       const updated = ids.map(id => {
@@ -2810,29 +2808,29 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       elem.setAttribute(attr, updated.join(' '));
     }
   };
-  
+
   const getMeasureDuration = (measure) => {
     const staff = measure.querySelector('staff');
     if (!staff) return 0;
-    
+
     const layer = staff.querySelector('layer');
     if (!layer) return 0;
-    
+
     const tstampUnit = getTstampUnit(measure);
-    
+
     let totalDur = 0;
     const traverse = (elem) => {
       if (MUSICAL_ELEMENTS.includes(elem.tagName)) {
         totalDur += calculateDuration(elem, tstampUnit);
-      } else if (elem.tagName === 'beam' || elem.tagName === 'tuplet') {
+      } else if (elem.matches('beam, tuplet')) {
         for (const child of elem.children) traverse(child);
       }
     };
-    
+
     for (const elem of layer.children) traverse(elem);
     return totalDur;
   };
-  
+
   const getExpectedMeasureDuration = (measure) => {
     // Look for time signature in this measure or previous measures
     let timeEl = measure.querySelector('meterSig');
@@ -2840,61 +2838,61 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       const scoreDef = meiParsed.querySelector('scoreDef');
       timeEl = scoreDef?.querySelector('meterSig');
     }
-    
+
     if (timeEl) {
-      const count = parseInt(timeEl.getAttribute('count') || '4');
-      const unit = parseInt(timeEl.getAttribute('unit') || '4');
+      const count = Number.parseInt(timeEl.getAttribute('count') || '4');
+      const unit = Number.parseInt(timeEl.getAttribute('unit') || '4');
       return (4 / unit) * count;
     }
-    
+
     return 4; // Default to 4/4
   };
-  
+
   const renumberAndAppendMeasures = (allExtractedMeasures, introSection, startN) => {
     let n = startN;
-    
+
     for (let rangeIdx = 0; rangeIdx < allExtractedMeasures.length; rangeIdx++) {
       const measures = allExtractedMeasures[rangeIdx];
       for (let i = 0; i < measures.length; i++) {
         const m = measures[i];
         m.setAttribute('n', String(n++));
-        
+
         // If this is the last measure of a range and the next range starts with a partial measure
         if (i === measures.length - 1 && rangeIdx < allExtractedMeasures.length - 1) {
           const nextRangeMeasures = allExtractedMeasures[rangeIdx + 1];
           const thisIsPartial = m.getAttribute('metcon') === 'false';
           const nextIsPartial = nextRangeMeasures[0]?.getAttribute('metcon') === 'false';
-          
+
           if (thisIsPartial && nextIsPartial) {
             m.setAttribute('right', 'invis');
           }
         }
-        
+
         introSection.appendChild(m);
       }
     }
-    
+
     return n;
   };
-  
+
   const extractRange = (measures, startM, startTstamp, endM, endTstamp, idMap) => {
     startM = startM ?? measures[0].getAttribute('n');
-    endM = endM ?? measures[measures.length - 1].getAttribute('n');
-    
+    endM = endM ?? measures.at(-1).getAttribute('n');
+
     const startIdx = measures.findIndex(m => m.getAttribute('n') === String(startM));
     const endIdx = measures.findIndex(m => m.getAttribute('n') === String(endM));
     const selected = measures.slice(startIdx, endIdx + 1);
-    
+
     return selected.map((measure, i) => {
       const newM = meiParsed.createElement('measure');
       newM.setAttribute('n', measure.getAttribute('n'));
-      
+
       const mStart = i === 0 ? startTstamp : null;
       const mEnd = i === selected.length - 1 ? endTstamp : null;
-      
+
       // Get tstamp unit for this measure
       const tstampUnit = getTstampUnit(measure);
-      
+
       // Copy measure attributes (first measure only)
       if (i === 0) {
         for (const child of measure.children) {
@@ -2903,7 +2901,7 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
           }
         }
       }
-      
+
       // Group and copy layers by staff
       const staffs = {};
       for (const staff of measure.querySelectorAll('staff')) {
@@ -2916,7 +2914,7 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
           }
         }
       }
-      
+
       // Create staff elements
       for (const [staffN, layers] of Object.entries(staffs)) {
         const newStaff = meiParsed.createElement('staff');
@@ -2924,7 +2922,7 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
         layers.forEach(layer => newStaff.appendChild(layer));
         newM.appendChild(newStaff);
       }
-      
+
       // Copy notation elements with updated ID references
       for (const elem of measure.children) {
         if (NOTATION_ELEMENTS.includes(elem.tagName)) {
@@ -2934,27 +2932,27 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
           newM.appendChild(newElem);
         }
       }
-      
+
       // Check if this is a partial measure
       const actualDur = getMeasureDuration(newM);
       const expectedDur = getExpectedMeasureDuration(newM);
       if (Math.abs(actualDur - expectedDur) > 0.01) {
         newM.setAttribute('metcon', 'false');
       }
-      
+
       return newM;
     });
   };
-  
+
   const introMeasureRanges = [];
   const introChordPositionRanges = [];
   const introBrackets = meiParsed.querySelectorAll('[ch-intro-bracket]');
   for (const introBracket of introBrackets) {
     const type = introBracket.getAttribute('ch-intro-bracket');
-    const tstamp = parseFloat(introBracket.getAttribute('tstamp'));
-    const chordPosition = parseFloat(introBracket.getAttribute('ch-chord-position'));
+    const tstamp = Number.parseFloat(introBracket.getAttribute('tstamp'));
+    const chordPosition = Number.parseFloat(introBracket.getAttribute('ch-chord-position'));
     const measureNumber = introBracket.closest('measure').getAttribute('n');
-    
+
     if (type === 'start') {
       introMeasureRanges.push([[measureNumber, tstamp], null]);
       introChordPositionRanges.push([chordPosition, null]);
@@ -2964,97 +2962,97 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
     }
     introBracket.remove();
   }
-  
+
   const introChordPositions = [];
   for (const introChordPositionRange of introChordPositionRanges) {
     for (let cp = introChordPositionRange[0]; cp < introChordPositionRange[1]; cp++) introChordPositions.push(cp);
   }
-  
+
   if (meiParsed.querySelector('section[type="introduction"]') || introMeasureRanges.length === 0) return meiParsed;
-  
+
   // Add repeat barlines
   const originalMeasures = Array.from(meiParsed.querySelectorAll('measure'));
   const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed);
   if (!this._scoreData.hasRepeatOrJump && verseNumbers.length > 1) {
     originalMeasures[0].setAttribute('left', 'rptstart');
-    originalMeasures[originalMeasures.length - 1].setAttribute('right', 'rptend');
+    originalMeasures.at(-1).setAttribute('right', 'rptend');
   }
-  
+
   const introSection = meiParsed.createElement('section');
   introSection.setAttribute('type', 'introduction');
   introSection.setAttribute('ch-chord-position', introChordPositions.join(' '));
-  
+
   const idMap = {};
   let n = 1;
-  
+
   // Extract and add all ranges to the section
   const allExtractedMeasures = [];
   for (const [[startM, startTstamp], [endM, endTstamp]] of introMeasureRanges) {
     const extractedMeasures = extractRange(originalMeasures, startM, startTstamp, endM, endTstamp, idMap);
     allExtractedMeasures.push(extractedMeasures);
   }
-  
+
   // Renumber and add measures, setting invisible barlines between consecutive partial measures
   n = renumberAndAppendMeasures(allExtractedMeasures, introSection, n);
-  
+
   // Insert section after scoreDef
   const score = meiParsed.querySelector('score');
   const scoreDef = score.querySelector('scoreDef');
   if (scoreDef) scoreDef.parentNode.insertBefore(introSection, scoreDef.nextSibling);
-  
+
   // Clean up unneeded elements in the introduction
   let removeSelectors = ['verse', 'dir', 'tempo'];
   const introSectionInfo = this._scoreData.sections[0].type === 'introduction' ? this._scoreData.sections[0] : null;
   const introStaffNumbers = introSectionInfo?.chordPositionRanges?.[0]?.staffNumbers ?? [];
   if (introStaffNumbers.length > 0) removeSelectors.push('staff:not(' + introStaffNumbers.map(sn => `[n="${sn}"]`).join(',') + ')');
   introSection.querySelectorAll(removeSelectors.join(',')).forEach(v => v.remove());
-  
+
   // Get all note and chord IDs that exist in the intro section
   const introNoteIds = new Set();
   introSection.querySelectorAll('note[*|id], chord[*|id]').forEach(elem => {
     introNoteIds.add(elem.getAttribute('xml:id'));
   });
-  
+
   // Remove slurs and ties that reference notes outside the intro section
   introSection.querySelectorAll('slur, tie').forEach(elem => {
     const startId = elem.getAttribute('startid')?.replace(/^#/, '');
     const endId = elem.getAttribute('endid')?.replace(/^#/, '');
-    
+
     const hasStart = !startId || introNoteIds.has(startId);
     const hasEnd = !endId || introNoteIds.has(endId);
-    
+
     // Remove if either endpoint is missing
     if (!hasStart || !hasEnd) {
       elem.remove();
     }
   });
-  
+
   // Move tempo to beginning of intro and handle barlines
   const newSectionMeasures = Array.from(introSection.querySelectorAll('measure'));
   const tempo = originalMeasures[0]?.querySelector('tempo');
   if (tempo) {
     newSectionMeasures[0]?.append(tempo);
   }
-  
+
   // Handle barline between intro section and main section
   const lastIntroMeasure = newSectionMeasures.at(-1);
   const firstMainMeasure = originalMeasures[0];
-  
+
   if (lastIntroMeasure && firstMainMeasure) {
     const lastIntroIsPartial = lastIntroMeasure.getAttribute('metcon') === 'false';
     const firstMainIsPartial = firstMainMeasure.getAttribute('metcon') === 'false';
     const firstMainHasNoLeftBarline = !firstMainMeasure.getAttribute('left');
-    
+
     if (lastIntroIsPartial && firstMainIsPartial && firstMainHasNoLeftBarline) {
       lastIntroMeasure.setAttribute('right', 'invis');
     }
   }
-  
+
   // Renumber remaining measures
   originalMeasures.forEach(m => {
     m.setAttribute('n', n++);
   });
-  
+
   return meiParsed;
 }
 
@@ -3081,9 +3079,6 @@ ChScore.prototype._chLoadDependencies = async function () {
   return true;
 }
 ChScore.prototype._chDependenciesLoaded = ChScore.prototype._chLoadDependencies()
-
-// Keep track of all ChScore instances
-ChScore.prototype._chScores = [];
 
 // Check browser type
 ChScore.prototype._supportsCssStylesheetApi = CSSStyleSheet?.prototype?.replaceSync;
@@ -3259,7 +3254,7 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
   const likelyMelodyChars = 'MSP';
   const polyphonicChars = 'IC';
   const vocalChars = 'MSATBPD';
-  
+
   const normalizedPartsTemplate = (
     (partsTemplate || padding).replace(/\s/g, '') // Remove whitespace
     .replaceAll('Melody', 'MC') // Melody and accompaniment
@@ -3281,19 +3276,19 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
     .replaceAll('TTBB', 'TT+BB') // Two staves
     .replaceAll('#;', ';') // Unspecified melody part
   );
-  
+
   // Get parts template chord positions
   const partsTemplates = normalizedPartsTemplate.split(';');
   const partsTemplateChordPositions = [];
   for (let vm = 0; vm < partsTemplates.length; vm++) {
     if (partsTemplates[vm].includes(':')) {
-      partsTemplateChordPositions.push(parseInt(partsTemplates[vm].split(':')[0]));
+      partsTemplateChordPositions.push(Number.parseInt(partsTemplates[vm].split(':')[0]));
     } else {
       partsTemplates[vm] = `0:${partsTemplates[vm]}`;
       partsTemplateChordPositions.push(0);
     }
   }
-  
+
   function getPartId(char, previousChars, splitPartChars) {
     const charToPartId = {
       'M': 'melody',
@@ -3308,18 +3303,18 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
       'C': 'accompaniment',
     };
     let partId = charToPartId[char[0]];
-    
+
     // Handle Soprano 1, Soprano 2, etc.
     let n = null;
     if (char.length > 1 && /\d/.test(char[1])) {
-      n = parseInt(char[1]);
+      n = Number.parseInt(char[1]);
     } else if (splitPartChars.includes(char)) {
       n = previousChars.split('').filter(c => c === char).length + 1;
     }
     if (n !== null) partId = `${partId}-${n}`;
     return partId;
   }
-  
+
   // TODO: Support localized part names
   function getPartName(partId) {
     const capitalizedWords = [];
@@ -3329,7 +3324,7 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
     }
     return capitalizedWords.join(' ');
   }
-  
+
   // Identify parts that need to be split (ex: Soprano 1 and Soprano 2)
   let splitPartChars = '';
   for (const partsTemplate of partsTemplates) {
@@ -3341,13 +3336,13 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
       }
     }
   }
-  
+
   // Build chord position ranges
   const partInfoByPartId = {};
   for (let vm = 0; vm < partsTemplates.length; vm++) {
     const [chordPositionStr, charsAndMelody] = partsTemplates[vm].split(':');
-    const chordPosition = parseInt(chordPositionStr);
-    
+    const chordPosition = Number.parseInt(chordPositionStr);
+
     // Get melody part
     let chars, melodyChar;
     if (charsAndMelody.includes('#')) {
@@ -3357,7 +3352,7 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
       melodyChar = chars.split('').find(char => likelyMelodyChars.includes(char)) || chars[0];
     }
     const melodyPartId = getPartId(melodyChar, '', splitPartChars);
-    
+
     let staffNumber = 1;
     chars = `${chars}+${padding}`;
     for (let cr = 0; cr < chars.length; cr++) {
@@ -3390,7 +3385,7 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
       partInfoByPartId[partId].chordPositionRefs[chordPosition].staffNumbers.push(staffNumber);
     }
   }
-  
+
   // Build parts list
   const parts = [];
   let accompanimentIndex = null;
@@ -3404,12 +3399,12 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
   if (accompanimentIndex !== null) {
     parts.push(parts.splice(accompanimentIndex, 1)[0]);
   }
-  
+
   return parts;
 }
 
 ChScore.prototype._normalizeSections = function () {
-  
+
   // Generate sections based on lyric stanzas
   const generateSectionsFromLyricStanzas = (lyricStanzas, staffNumbers) => {
     const sections = [];
@@ -3429,7 +3424,7 @@ ChScore.prototype._normalizeSections = function () {
     }
     return sections;
   }
-  
+
   // Generate default sections
   const generateDefaultSection = (lyricChordPositionRanges, staffNumbers) => {
     const sections = [];
@@ -3454,14 +3449,14 @@ ChScore.prototype._normalizeSections = function () {
     });
     return sections;
   }
-  
+
   this._scoreData.hasRepeatOrJump = !!this._scoreData.meiParsed.querySelector('repeatMark, coda, segno, ending, measure:is([left="rptstart"], [left="rptboth"], [right="rptend"], [right="rptboth"]), dir:is([type="coda"], [type="tocoda"], [type="segno"], [type="dalsegno"], [type="dacapo"], [type="fine"])')
-  
+
   let hasPrebuiltSections = this._scoreData.sections.length > 0;
   const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed);
   const introBracketElements = this._scoreData.meiParsed.querySelectorAll('[ch-intro-bracket]');
   const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionElement(this._scoreData.meiParsed, verseNumbers.length, introBracketElements.length > 0, this._scoreData.hasRepeatOrJump);
-  
+
   let introSection;
   let otherSections = [];
   // Use existing sections
@@ -3473,7 +3468,7 @@ ChScore.prototype._normalizeSections = function () {
     introSection = this._getIntroSectionFromBrackets(introBracketElements, this._scoreData.staffNumbers);
     if (!hasComplexSections) otherSections = this._generateSectionsFromSimpleScore(verseNumbers, hasInitialChorus);
   }
-  
+
   let firstLyricExpandedChordPosition = 0;
   if (introSection) {
     firstLyricExpandedChordPosition = 0;
@@ -3481,7 +3476,7 @@ ChScore.prototype._normalizeSections = function () {
       firstLyricExpandedChordPosition += chordPositionRange.end - chordPositionRange.start;
     }
   }
-  
+
   // Get sequential lyric chord position ranges
   const lyricChordPositionRanges = [];
   if (otherSections.length > 0) {
@@ -3493,17 +3488,17 @@ ChScore.prototype._normalizeSections = function () {
     const expansionSectionElementIds = expansion.getAttribute('plist').trim().split(' ').map(sid => sid.substring(1));
     for (const expansionSectionElementId of expansionSectionElementIds) {
       const sectionElement = this._scoreData.meiParsed.querySelector(`[*|id="${expansionSectionElementId}"]`);
-      const sectionElementChordPositions = sectionElement.getAttribute('ch-chord-position').trim().split(' ').map(cp => parseInt(cp));
+      const sectionElementChordPositions = sectionElement.getAttribute('ch-chord-position').trim().split(' ').map(cp => Number.parseInt(cp));
       lyricChordPositionRanges.push([sectionElementChordPositions[0], sectionElementChordPositions.at(-1) + 1]);
     }
   } else {
     lyricChordPositionRanges.push([0, this._scoreData.numChordPositions]);
   }
-  
+
   // Get annotated lyric stanzas
   this._markSingleLineChordPositions(lyricChordPositionRanges);
   const lyricStanzas = this._extractLyricStanzas(lyricChordPositionRanges, firstLyricExpandedChordPosition);
-  
+
   // Generate sections based on lyric stanzas, falling back to default sections
   if (otherSections.length === 0) {
     if (lyricStanzas.length > 0) {
@@ -3517,7 +3512,7 @@ ChScore.prototype._normalizeSections = function () {
       otherSections = generateDefaultSection(lyricChordPositionRanges, this._scoreData.staffNumbers);
     }
   }
-  
+
   // Add annotated lyrics to sections
   let sectionBelowCounter = 0;
   if (lyricStanzas.length > 0) {
@@ -3543,16 +3538,16 @@ ChScore.prototype._normalizeSections = function () {
       }
     }
   }
-  
+
   this._scoreData.sections = [];
   if (introSection) this._scoreData.sections.push(introSection);
   for (const otherSection of otherSections) this._scoreData.sections.push(otherSection);
-  
+
   this._scoreData.sectionsById = {};
   for (const section of this._scoreData.sections) {
     this._scoreData.sectionsById[section.sectionId] = section;
   }
-  
+
 }
 
 ChScore.prototype._getInlineVerseNumbers = function (meiParsed) {
@@ -3562,8 +3557,8 @@ ChScore.prototype._getInlineVerseNumbers = function (meiParsed) {
   // Get verse numbers based on <label> elements
   const verseLabels = meiParsed.querySelectorAll('verse label');
   for (const verseLabel of verseLabels) {
-    const verseNumber = parseInt(verseLabel.textContent.trim().replace(/[().]/g, ''));
-    const lineNumber = parseInt(verseLabel.closest('verse').getAttribute('n'));
+    const verseNumber = Number.parseInt(verseLabel.textContent.trim().replace(/[().]/g, ''));
+    const lineNumber = Number.parseInt(verseLabel.closest('verse').getAttribute('n'));
     if (verseNumber === lineNumber && verseNumber === counter) {
       verseNumbers.push(verseNumber);
       counter++;
@@ -3597,8 +3592,8 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
       verseElementsByChordPosition[cp] = this._scoreData.meiParsed.querySelectorAll(`[ch-chord-position="${cp}"][ch-melody] verse, [ch-chord-position="${cp}"]:has([ch-melody]) verse`);
       if (verseElementsByChordPosition[cp].length > 1) rangeHasSingleLine = false;
     }
-    
-    // Test cases: 
+
+    // Test cases:
     // "Gethsemane" (Hymns—For Home and Church), "This Is the Christ" (Hymns—For Home and Church), "Beautiful Savior" (1989 CSB) – complex sections
     // Japanese "When the Savior Comes Again" (Hymns—For Home and Church) – ruby text
     // "Have I Done Any Good?" (1985 Hymns) – simple verses and chorus, but verses have chord positions with only one lyric syllable. When there's only one lyric syllable, it should be extracted only in the correct verse.
@@ -3612,10 +3607,10 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
         if (chordPositionIsSingleLine || rangeHasSingleLine) {
           verseElement = verseElements[0];
         } else {
-          verseElement = Array.from(verseElements).filter(ve => parseInt(ve.getAttribute('n')) === lyricLineCounters[cp])[0];
+          verseElement = Array.from(verseElements).filter(ve => Number.parseInt(ve.getAttribute('n')) === lyricLineCounters[cp])[0];
         }
       }
-      
+
       if (verseElement) {
         const label = verseElement.querySelector('label');
         const text = Array.from(verseElement.querySelectorAll('syl')).map(syl => (syl.textContent.replace(/[\-\‑\s]+$/, '').trim() + ' ').trim()).join(' ').trim() || null;
@@ -3654,12 +3649,12 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
       }
       return str1.length + str2.length > 0 ? (maxLen * 2) / (str1.length + str2.length) : 0;
     }
-    
+
     const stanzas = [];
     if (!expandedLyrics || !syllables || syllables.length === 0) {
       return stanzas;
     }
-    
+
     // Extract stanza headers
     expandedLyrics = expandedLyrics.replace(/\[([^\]]*)\]\n/g, (_, name) => {
       const parts = name.split(' ');
@@ -3673,7 +3668,7 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
       });
       return '';
     });
-    
+
     // Build normalized version with position mapping (HTML-aware)
     // For <ruby> blocks, use the <rt> reading text for matching and map to the <ruby> tag position.
     // For other HTML tags (<em>, <strong>, etc.), skip them entirely.
@@ -3684,7 +3679,7 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
     const stripRe = /[\u0300-\u036f\p{P}\p{N}]/u;
     let lastPlainIndex = 0;
     let rubyMatch;
-    
+
     // Normalize a single character into normChars/posMap.
     // When collapseWhitespace is true, runs of whitespace become a single space.
     function addNormChar(char, position, collapseWhitespace) {
@@ -3699,7 +3694,7 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
         posMap.push(position);
       }
     }
-    
+
     function addPlainText(text, startOriginalIndex) {
       for (let j = 0; j < text.length; j++) {
         const char = text[j];
@@ -3713,7 +3708,7 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
         addNormChar(char, startOriginalIndex + j, true);
       }
     }
-    
+
     while ((rubyMatch = rubyRegex.exec(expandedLyrics)) !== null) {
       if (rubyMatch.index > lastPlainIndex) {
         addPlainText(expandedLyrics.substring(lastPlainIndex, rubyMatch.index), lastPlainIndex);
@@ -3726,30 +3721,30 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
     if (lastPlainIndex < expandedLyrics.length) {
       addPlainText(expandedLyrics.substring(lastPlainIndex), lastPlainIndex);
     }
-    
+
     const normText = normChars.join('');
     let pos = 0;
     const insertions = [];
     let currentStanzaIndex = 0;
-    
+
     // Match each syllable
     for (const syllable of syllables) {
       const normSylText = syllable.text?.normalize('NFD').replace(/[\u0300-\u036f\p{P}\p{N}]/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
       if (!normSylText) continue;
-      
+
       const windowEnd = Math.min(pos + 20, normText.length);
       let matchPos = normText.indexOf(normSylText, pos);
       let matched = false;
-      
+
       // Try exact match first
       if (matchPos !== -1 && matchPos < windowEnd) {
         matched = true;
-      } 
+      }
       // Fuzzy match
       else {
         let bestPos = pos;
         let bestScore = 0;
-        
+
         for (let i = pos; i < windowEnd; i++) {
           const score = similarity(normSylText, normText.substring(i, i + normSylText.length));
           if (score > bestScore) {
@@ -3757,24 +3752,24 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
             bestPos = i;
           }
         }
-        
+
         if (bestScore > 0.6) {
           matchPos = bestPos;
           matched = true;
         }
       }
-      
+
       // Process the match
       if (matched) {
         const originalPos = posMap[matchPos] !== undefined ? posMap[matchPos] : expandedLyrics.length;
-        
+
         // Check if we've crossed into a new stanza (look for \n\n between pos and matchPos)
         const textBetween = expandedLyrics.substring(posMap[pos] || 0, originalPos);
         const stanzaBreaks = (textBetween.match(/\n\n/g) || []).length;
         currentStanzaIndex = Math.min(currentStanzaIndex + stanzaBreaks, stanzas.length - 1);
-        
+
         insertions.push([originalPos, `<span data-ch-chord-position="${syllable.chordPositions.join(' ')}" data-ch-expanded-chord-position="${syllable.expandedChordPositions.join(' ')}" data-ch-lyric-line-id="${syllable.lyricLineIds.join(' ')}"></span>`]);
-        
+
         // Add chord positions to current stanza
         if (currentStanzaIndex < stanzas.length) {
           let previousChordPosition;
@@ -3793,11 +3788,11 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
           }
           stanzas[currentStanzaIndex].expandedChordPositions.push(...syllable.expandedChordPositions);
         }
-        
+
         pos = matchPos + normSylText.length;
       }
     }
-    
+
     function consolidateChordPositionRanges(ranges) {
       const result = [];
       for (const range of ranges) {
@@ -3816,37 +3811,37 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
       }
       return result;
     }
-    
+
     for (const stanza of stanzas) {
       stanza.chordPositionRanges = consolidateChordPositionRanges(stanza.chordPositionRanges);
       stanza.expandedChordPositions = [stanza.expandedChordPositions[0], stanza.expandedChordPositions.at(-1) + 1];
     }
-    
+
     // Insert markers in reverse order
     for (let i = insertions.length - 1; i >= 0; i--) {
       const [idx, marker] = insertions[i];
       expandedLyrics = expandedLyrics.substring(0, idx) + marker + expandedLyrics.substring(idx);
     }
-    
+
     const stanzasText = expandedLyrics.split('\n\n');
     for (let sz = 0; sz < stanzas.length; sz++) {
       stanzas[sz].annotatedLyrics = stanzasText[sz].trim();
     }
-    
+
     return stanzas;
   };
 
-ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasIntroBrackets, hasRepeatOrJump) {  
+ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasIntroBrackets, hasRepeatOrJump) {
   // Check for complex sections and update expansion map
   // TODO: If expansion map doesn't exist, add it
   let hasComplexSections = false;
   let hasInitialChorus = false;
   let expansionIds = [];
-  const measures = meiParsed.querySelectorAll('measure');
+  const measures = Array.from(meiParsed.querySelectorAll('measure'));
   const expansion = meiParsed.querySelector('expansion');
   if (
     hasRepeatOrJump
-    || measures[measures.length - 1].getAttribute('right') !== 'end' // Last measure isn't end of song (ex: All Things Bright and Beautiful, 1989 CSB)
+    || measures.at(-1).getAttribute('right') !== 'end' // Last measure isn't end of song (ex: All Things Bright and Beautiful, 1989 CSB)
     || meiParsed.querySelectorAll('measure[right="end"]').length > 1 // Multiple end barlines (ex: For All the Saints, 1985 Hymns)
     || !measures[0].querySelector('verse') // No lyrics in first measure (ex: Families Can Be Together Forever, 1985 Hymns)
     || (meiParsed.querySelector('verse:not([n="1"])') && numVerses === 0) // Multiple lyric lines but no verse labels
@@ -3855,7 +3850,7 @@ ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasI
     hasComplexSections = true;
   } else if (expansion) {
     expansionIds = expansion.getAttribute('plist').split(' ');
-    
+
     // Simple song with verses or verses and choruses
     // Examples: "The Spirit of God" (1985 Hymns), "Redeemer of Israel" (1985 Hymns)
     if (expansionIds.length === 1) {
@@ -3874,9 +3869,9 @@ ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasI
       const secondSectionElement = meiParsed.querySelector(`[*|id="${expansionIds[1].substring(1)}"]`);
       secondSectionElement.setAttribute('type', 'verse');
       const secondSectionMeasures = secondSectionElement.querySelectorAll('measure');
-      
-      if (firstSectionMeasures[firstSectionMeasures.length - 1].getAttribute('right') === 'end' && 
-          secondSectionMeasures[secondSectionMeasures.length - 1].getAttribute('right') === 'dbl') {
+
+      if (firstSectionMeasures.at(-1).getAttribute('right') === 'end' &&
+          secondSectionMeasures.at(-1).getAttribute('right') === 'dbl') {
         hasInitialChorus = true;
         const repeatedSection = Array(numVerses).fill([expansionIds[0], expansionIds[1]]).flat();
         expansion.setAttribute('plist', [...repeatedSection, expansionIds[0]].join(' '));
@@ -3885,7 +3880,7 @@ ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasI
       expansion.setAttribute('type', 'complex');
       hasComplexSections = true;
     }
-    
+
     // Check for pre-expanded introduction
     // Example: Families Can Be Together Forever (1985 Hymns); I Will Walk with Jesus (HHC)
     if (expansionIds.length > 1 && !hasIntroBrackets) {
@@ -3896,14 +3891,14 @@ ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasI
       }
     }
   }
-  
+
   return [hasComplexSections, hasInitialChorus, expansionIds];
 }
 
 ChScore.prototype._getIntroSectionFromBrackets = function (introBracketElements, staffNumbers) {
   const introChordPositionRanges = [];
   for (const introBracketElement of introBracketElements) {
-    const chordPosition = parseInt(introBracketElement.getAttribute('ch-chord-position'));
+    const chordPosition = Number.parseInt(introBracketElement.getAttribute('ch-chord-position'));
     if (introBracketElement.getAttribute('ch-intro-bracket') === 'start') {
       introChordPositionRanges.push([chordPosition, chordPosition + 1]);
     } else {
@@ -3942,7 +3937,7 @@ ChScore.prototype._getIntroSectionFromChordPositions = function (introChordPosit
 ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, hasInitialChorus) {
   const meiParsed = this._scoreData.meiParsed;
   const sections = [];
-  
+
   const staffNumbersWithLyrics = new Set();
   for (const staffNumber of this._scoreData.staffNumbers) {
     if (meiParsed.querySelector(`staff[n="${staffNumber}"] verse`)) {
@@ -3963,12 +3958,12 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
       if (!(chordPosition in lineNumbersByCp)) {
         lineNumbersByCp[chordPosition] = [];
       }
-      const lineNumber = parseInt(lyric.getAttribute('n'));
+      const lineNumber = Number.parseInt(lyric.getAttribute('n'));
       lineNumbersByCp[chordPosition].push(lineNumber);
     }
     for (const [chordPosition, lineNumbers] of Object.entries(lineNumbersByCp)) {
       if (lineNumbers.length === 1) {
-        lyricGaps[lyricGaps.length - 1].push(chordPosition);
+        lyricGaps.at(-1).push(chordPosition);
       } else {
         lyricGaps.push([]);
       }
@@ -3983,32 +3978,32 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
           }
         }
         // Handle notes without lyrics at the beginning or end of the song
-        if (parseInt(lyricGap[0]) - maxAllowedGap <= 0) {
+        if (Number.parseInt(lyricGap[0]) - maxAllowedGap <= 0) {
           lyricGap[0] = '0';
         }
-        if (parseInt(lyricGap.at(-1)) + maxAllowedGap > this._scoreData.numChordPositions - 1) {
+        if (Number.parseInt(lyricGap.at(-1)) + maxAllowedGap > this._scoreData.numChordPositions - 1) {
           lyricGap[lyricGap.length - 1] = String(this._scoreData.numChordPositions - 1);
         }
         // Save chorus chord position ranges
-        const start = parseInt(lyricGap[0]);
-        const end = parseInt(lyricGap.at(-1)) + 1;
+        const start = Number.parseInt(lyricGap[0]);
+        const end = Number.parseInt(lyricGap.at(-1)) + 1;
         chorusCpRanges.push(Array.from({length: end - start}, (_, i) => start + i));
       }
     }
   }
-  
+
   // Get line numbers from secondary lyrics
   const additionalSecondaryLyricLineNumbers = new Set();
   const chorusChordPositions = chorusCpRanges.flat();
   for (const lyric of meiParsed.querySelectorAll('verse[ch-secondary]')) {
-    const lineNumber = parseInt(lyric.getAttribute('n'));
+    const lineNumber = Number.parseInt(lyric.getAttribute('n'));
     if (chorusChordPositions.includes(lyric.closest('note, chord').getAttribute('ch-chord-position'))) {
       chorusLineNumbers.add(lineNumber);
     } else if (!verseNumbers.includes(lineNumber)) {
       additionalSecondaryLyricLineNumbers.add(lineNumber);
     }
   }
-  
+
   let verseCounter = 0;
   for (const verseNumber of verseNumbers) {
     // Get chord position ranges
@@ -4034,7 +4029,7 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
       if (nextChorusCpRangeIndex < chorusCpRanges.length) {
         const nextChorusCpRange = chorusCpRanges[nextChorusCpRangeIndex];
         if (nextChorusCpRange[0] === nextChordPosition) {
-          cpEnd = nextChorusCpRange[nextChorusCpRange.length - 1] + 1;
+          cpEnd = nextChorusCpRange.at(-1) + 1;
           lyricLinesIds = [];
           for (const staffNumber of staffNumbersWithLyrics) {
             for (const chorusLineNumber of chorusLineNumbers) {
@@ -4054,24 +4049,24 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
       });
       nextChordPosition = cpEnd;
     }
-    
+
     // Add extra chorus for songs with initial chorus
-    if (hasInitialChorus && verseNumber === verseNumbers[verseNumbers.length - 1] && chordPositionRanges.length > 1) {
+    if (hasInitialChorus && verseNumber === verseNumbers.at(-1) && chordPositionRanges.length > 1) {
       chordPositionRanges.push(chordPositionRanges[chordPositionRanges.length - 2]);
     }
-    
+
     // Get pause after
     let pauseAfter = true;
     const lastChordPositionElement = meiParsed.querySelector(`[ch-chord-position="${this._scoreData.numChordPositions - 1}"]:is(chord, note, rest)`);
     if (
-      verseNumber === verseNumbers[verseNumbers.length - 1] // Last verse
-      || lastChordPositionElement.tagName === 'rest' // Last note is a rest
+      verseNumber === verseNumbers.at(-1) // Last verse
+      || lastChordPositionElement.matches('rest') // Last note is a rest
       || !lastChordPositionElement.querySelector('verse') // Last note doesn't have lyrics
-      || parseInt(lastChordPositionElement.getAttribute('dur')) < 4 // Last note is longer than a quarter note
+      || Number.parseInt(lastChordPositionElement.getAttribute('dur')) < 4 // Last note is longer than a quarter note
     ) {
       pauseAfter = false;
     }
-    
+
     for (let cpr = 0; cpr < chordPositionRanges.length; cpr++) {
       const chordPositionRange = chordPositionRanges[cpr];
       if (chorusChordPositions.includes(chordPositionRange.start)) {
@@ -4100,7 +4095,7 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
       }
     }
   }
-  
+
   return sections;
 }
 
@@ -4108,14 +4103,14 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
   const lyricLinesByStaffAndCp = {};
   const lyrics = Array.from(this._scoreData.meiParsed.querySelectorAll(':is(note[ch-melody], chord:has([ch-melody])) verse:has(syl:not(:empty))'));
   for (const lyric of lyrics) {
-    const chordPosition = parseInt(lyric.closest('[ch-chord-position]').getAttribute('ch-chord-position'));
+    const chordPosition = Number.parseInt(lyric.closest('[ch-chord-position]').getAttribute('ch-chord-position'));
     const lyricLineId = lyric.getAttribute('ch-lyric-line-id');
-    const [staffNumber, lineNumber] = lyricLineId.split('.').map(i => parseInt(i));
+    const [staffNumber, lineNumber] = lyricLineId.split('.').map(i => Number.parseInt(i));
     if (!Object.hasOwn(lyricLinesByStaffAndCp, staffNumber)) lyricLinesByStaffAndCp[staffNumber] = {};
     if (!Object.hasOwn(lyricLinesByStaffAndCp[staffNumber], chordPosition)) lyricLinesByStaffAndCp[staffNumber][chordPosition] = new Set();
     lyricLinesByStaffAndCp[staffNumber][chordPosition].add(lineNumber);
   }
-  
+
   let ecpCounter = 0;
   const ecpToCp = {};
   for (const lyricChordPositionRange of lyricChordPositionRanges) {
@@ -4124,13 +4119,13 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
       ecpCounter += 1;
     }
   }
-  
+
   const singleLineCpRangesByStaff = {}
   for (const staffNumber of Object.keys(lyricLinesByStaffAndCp)) {
     let firstLyricEcp;
     const noLyricEcps = [];
     const oneLyricEcpRanges = [];
-    const expandedChordPositions = Object.keys(ecpToCp).map(ecp => parseInt(ecp));
+    const expandedChordPositions = Object.keys(ecpToCp).map(ecp => Number.parseInt(ecp));
     for (const ecp of expandedChordPositions) {
       const cp = ecpToCp[ecp];
       if (Object.hasOwn(lyricLinesByStaffAndCp[staffNumber], cp)) {
@@ -4151,7 +4146,7 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
         noLyricEcps.push(ecp);
       }
     }
-    
+
     // Filter out invalid ranges, expand ranges to include adjacent expanded chord positions with no lyrics
     const filteredEcpRanges = [];
     for (const oneLyricEcpRange of oneLyricEcpRanges) {
@@ -4173,7 +4168,7 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
     }
     singleLineCpRangesByStaff[staffNumber] = filteredEcpRanges;
   }
-  
+
   return singleLineCpRangesByStaff;
 }
 
@@ -4198,7 +4193,7 @@ ChScore.prototype._normalizeChordSets = function () {
       }
       defaultChordSet.chordInfoList.push(chordInfo);
       if (harmElement.getAttribute('ch-chord-position')) {
-        const chordPosition = parseInt(harmElement.getAttribute('ch-chord-position'));
+        const chordPosition = Number.parseInt(harmElement.getAttribute('ch-chord-position'));
         defaultChordSet.chordPositionRefs[chordPosition] = chordInfo;
       }
       harmElement.remove();
@@ -4232,7 +4227,7 @@ ChScore.prototype._binaryFind = function (arr, targetValue, { key = null, return
       arr.sort((a, b) => a[key] - b[key]);
     }
   }
-  
+
   // Do a binary search on the array to find the last value <= the target value
   let leftIndex = 0;
   let rightIndex = arr.length - 1;
@@ -4240,7 +4235,7 @@ ChScore.prototype._binaryFind = function (arr, targetValue, { key = null, return
   while (leftIndex <= rightIndex) {
     const midpointIndex = Math.floor((leftIndex + rightIndex) / 2);
     const midpointValue = key === null ? arr[midpointIndex] : arr[midpointIndex][key];
-    
+
     // Last less than or equal
     if (findType === 'last-lte') {
       if (midpointValue <= targetValue) {
@@ -4258,9 +4253,9 @@ ChScore.prototype._binaryFind = function (arr, targetValue, { key = null, return
         leftIndex = midpointIndex + 1;
       }
     }
-    
+
   }
-  
+
   // Return the matching index or value
   if (returnIndex) {
     return targetIndex;
@@ -4282,11 +4277,11 @@ ChScore.prototype._bisectLeft = function (arr, target) {
     }
   }
   return left;
-}    
+}
 
 ChScore.prototype._getQpmAtTime = function (seconds, midiTempos) {
   const tempo = this._binaryFind(midiTempos, seconds, { key: 'time', findType: 'last-lte' });
-  return tempo?.qpm ?? parseInt(this._scoreData.meiParsed.querySelector('tempo').getAttribute('midi.bpm'));
+  return tempo?.qpm ?? Number.parseInt(this._scoreData.meiParsed.querySelector('tempo').getAttribute('midi.bpm'));
 }
 
 ChScore.prototype._getMidiDuration = function (durationQ, quartersPerMinute) {
@@ -4361,7 +4356,7 @@ ChScore.prototype._removeStylesheets = function () {
     }
   }
 }
-  
+
 // Get score elements at point
 ChScore.prototype._getPointData = function (x, y) {
   const pointData = {
@@ -4382,12 +4377,12 @@ ChScore.prototype._getPointData = function (x, y) {
   } finally {}
   for (const element of elements) {
     if (element === this._container) break;
-    
+
     if (element.dataset.chChordPosition) {
-      pointData.chordPosition = parseInt(element.dataset.chChordPosition);
+      pointData.chordPosition = Number.parseInt(element.dataset.chChordPosition);
     }
     if (element.dataset.chExpandedChordPosition) {
-      pointData.expandedChordPositions = element.dataset.chExpandedChordPosition.split(' ').map(ecp => parseInt(ecp));
+      pointData.expandedChordPositions = element.dataset.chExpandedChordPosition.split(' ').map(ecp => Number.parseInt(ecp));
     }
     if (element.dataset.chSectionId) {
       pointData.sectionIds = element.dataset.chSectionId.split(' ');
@@ -4396,7 +4391,7 @@ ChScore.prototype._getPointData = function (x, y) {
       pointData.lyricLineId = element.dataset.chLyricLineId;
     }
     if (element.dataset.chStaffNumber) {
-      pointData.staffNumber = parseInt(element.dataset.chStaffNumber);
+      pointData.staffNumber = Number.parseInt(element.dataset.chStaffNumber);
     }
     if (element.dataset.related || element.parentElement?.dataset?.related) {
       for (const relatedElementId of (element.dataset.related || element.parentElement.dataset.related).split(' ')) {
@@ -4406,7 +4401,7 @@ ChScore.prototype._getPointData = function (x, y) {
         } else if (relatedElement.classList.contains('measure')) {
           pointData.measureId = relatedElementId;
         } else if (relatedElement.classList.contains('staff')) {
-          pointData.staffNumber = parseInt(relatedElement.dataset.n);
+          pointData.staffNumber = Number.parseInt(relatedElement.dataset.n);
         } else if (relatedElement.classList.contains('note')) {
           pointData.noteIds.push(relatedElementId);
           if (relatedElement.dataset.chPartId) {
@@ -4418,7 +4413,7 @@ ChScore.prototype._getPointData = function (x, y) {
       }
     }
   }
-  
+
   // Get sectionIds if not specified
   if (pointData.sectionIds.length === 0) {
     if (pointData.expandedChordPositions.length > 0 && this._scoreData.expandedChordPositions) {
@@ -4427,12 +4422,12 @@ ChScore.prototype._getPointData = function (x, y) {
       pointData.sectionIds = Object.keys(this._scoreData.chordPositions[pointData.chordPosition].expandedChordPositions ?? {});
     }
   }
-  
+
   return pointData;
-}    
+}
 
 
 /********************** Other **********************/
 
 // Make Chorister.js available to JavaScript module (chorister.mjs)
-window.ChScore = ChScore;
+globalThis.ChScore = ChScore;
