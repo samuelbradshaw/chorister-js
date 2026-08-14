@@ -332,18 +332,26 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
     })(),
   ]);
 
-  // Load score into Verovio
+  // Instantiate Verovio toolkit
   this._container.dataset.chStatus = 'processing';
   this._vrvToolkit = new verovio.toolkit();
   this.setOptions(options, false);
+
+  // Attempt to unzip MXL to MusicXML (will be a no-op in certain environments)
   if (scoreContent instanceof ArrayBuffer) {
-    // MXL (ArrayBuffer)
+    scoreContent = await this._unzipMusicXml(scoreContent) ?? scoreContent;
+  }
+
+  // Load score into Verovio
+  if (scoreContent instanceof ArrayBuffer) {
+    // MXL (compressed MusicXML)
     this._vrvToolkit.loadZipDataBuffer(scoreContent);
   } else {
     // MusicXML, MEI, ABC, Humdrum, or PAE string
     if (format === 'abc') {
-      // Clean up leading spaces on each line
       scoreContent = scoreContent.replace(/^\s+/gm, '');
+    } else if (format === 'musicxml' || format === 'mxl') {
+      scoreContent = this._fixIntroBrackets(scoreContent);
     }
     this._vrvToolkit.loadData(scoreContent);
   }
@@ -913,6 +921,89 @@ ChScore.prototype._loadMidi = function () {
       midiNoteSequence: midiNoteSequence,
     } }));
   }
+}
+
+// Move intro brackets (⌜ ⌝) to the correct document order (based on x-position) relative to surrounding notes. When converting MusicXML to MEI, Verovio uses document order to determine element position.
+ChScore.prototype._fixIntroBrackets = function (musicXml) {
+  if (!musicXml.includes('⌜') && !musicXml.includes('⌝')) return musicXml;
+
+  const parsed = (new DOMParser()).parseFromString(musicXml, 'text/xml');
+  if (parsed.querySelector('parsererror')) return musicXml;
+
+  const adjacentNote = (element, direction) => {
+    let sibling = element[direction];
+    while (sibling && sibling.nodeName !== 'note') sibling = sibling[direction];
+    return sibling;
+  }
+  const previousNote = (element) => adjacentNote(element, 'previousElementSibling');
+  const nextNote = (element) => adjacentNote(element, 'nextElementSibling');
+
+  let moved = false;
+  for (const direction of parsed.querySelectorAll('direction')) {
+    if (!['⌜', '⌝'].includes(direction.textContent.trim())) continue;
+    const positioned = direction.querySelector('[default-x]');
+    const bracketX = positioned ? Number.parseFloat(positioned.getAttribute('default-x')) : null;
+    if (bracketX === null || Number.isNaN(bracketX)) continue;
+
+    for (let note = previousNote(direction); note && Number.parseFloat(note.getAttribute('default-x')) > bracketX; note = previousNote(direction)) {
+      note.parentNode.insertBefore(direction, note);
+      moved = true;
+    }
+    for (let note = nextNote(direction); note && Number.parseFloat(note.getAttribute('default-x')) < bracketX; note = nextNote(direction)) {
+      note.parentNode.insertBefore(direction, note.nextSibling);
+      moved = true;
+    }
+  }
+
+  return moved ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
+}
+
+// Extract MusicXML from compressed MXL file so it can be processed before feeding it into Verovio
+ChScore.prototype._unzipMusicXml = async function (arrayBuffer) {
+  if (typeof DecompressionStream === 'undefined' || typeof Response === 'undefined') return null;
+
+  const CENTRAL_DIRECTORY_END = 0x06054b50;
+  const CENTRAL_DIRECTORY_ENTRY = 0x02014b50;
+  const bytes = new Uint8Array(arrayBuffer);
+  const view = new DataView(arrayBuffer);
+  const decoder = new TextDecoder();
+
+  // Entries are listed in the central directory, which is found through the end-of-central-directory record at the end of the file (after any comment)
+  let directoryEnd = -1;
+  for (let offset = bytes.length - 22; offset >= Math.max(0, bytes.length - 22 - 0xffff); offset--) {
+    if (view.getUint32(offset, true) === CENTRAL_DIRECTORY_END) { directoryEnd = offset; break; }
+  }
+  if (directoryEnd === -1) return null;
+
+  const entryCount = view.getUint16(directoryEnd + 10, true);
+  let entryOffset = view.getUint32(directoryEnd + 16, true);
+  for (let entry = 0; entry < entryCount; entry++) {
+    if (view.getUint32(entryOffset, true) !== CENTRAL_DIRECTORY_ENTRY) return null;
+    const method = view.getUint16(entryOffset + 10, true);
+    const compressedSize = view.getUint32(entryOffset + 20, true);
+    const nameLength = view.getUint16(entryOffset + 28, true);
+    const extraLength = view.getUint16(entryOffset + 30, true);
+    const commentLength = view.getUint16(entryOffset + 32, true);
+    const localOffset = view.getUint32(entryOffset + 42, true);
+    const name = decoder.decode(bytes.subarray(entryOffset + 46, entryOffset + 46 + nameLength));
+    entryOffset += 46 + nameLength + extraLength + commentLength;
+
+    // Skip META-INF and other non-MusicXML files
+    if (name.startsWith('META-INF') || !/\.(musicxml|xml)$/i.test(name)) continue;
+
+    // Sizes in the local header can be zeroed out, so use the central directory's
+    const localNameLength = view.getUint16(localOffset + 26, true);
+    const localExtraLength = view.getUint16(localOffset + 28, true);
+    const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+    const compressed = bytes.subarray(dataOffset, dataOffset + compressedSize);
+
+    if (method === 0) return decoder.decode(compressed); // stored
+    if (method !== 8) return null; // MXL writers only ever deflate
+    const inflated = new Response(compressed).body.pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Response(inflated).text();
+  }
+
+  return null;
 }
 
 ChScore.prototype._parseAndAnnotateMei = function () {
