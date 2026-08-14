@@ -958,6 +958,65 @@ ChScore.prototype._fixIntroBrackets = function (musicXml) {
   return moved ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
 }
 
+// Get metadata from the MEI fileDesc, pgHead, and pgFoot elements
+ChScore.prototype._getScoreMetadata = function (meiParsed) {
+
+  // <lb> is a line break; other elements (<rend>, <ref>, ...) only wrap text
+  const getText = (element) => {
+    if (!element) return '';
+    let text = '';
+    for (const node of element.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) text += node.textContent;
+      else if (node.nodeName === 'lb') text += '\n';
+      else text += getText(node);
+    }
+    // Clean up whitespace
+    return text
+      .split('\n').map(line => line.replace(/[^\S\n]+/g, ' ').trim()).join('\n')
+      .replace(/^\n+|\n+$/g, '') || null;
+  }
+
+  const getTextBlocks = (containerName) => {
+    const blocks = [];
+    for (const container of meiParsed.querySelectorAll(containerName)) {
+      for (const rend of container.querySelectorAll(':scope > rend')) {
+        const text = getText(rend);
+        if (!text) continue;
+        blocks.push({
+          text: text,
+          halign: rend.getAttribute('halign'),
+          valign: rend.getAttribute('valign'),
+          elementId: rend.getAttribute('xml:id'),
+        });
+      }
+    }
+    return blocks;
+  }
+
+  const contributors = [];
+  for (const persName of meiParsed.querySelectorAll('fileDesc respStmt persName')) {
+    const name = getText(persName);
+    if (name) contributors.push({ role: persName.getAttribute('role'), name: name });
+  }
+
+  const date = meiParsed.querySelector('fileDesc pubStmt date');
+  const header = getTextBlocks('pgHead');
+  const footer = getTextBlocks('pgFoot');
+
+  return {
+    title: getText(meiParsed.querySelector('fileDesc titleStmt title')),
+    contributors: contributors,
+    date: date ? (date.getAttribute('isodate') ?? getText(date)) : null,
+    distributor: getText(meiParsed.querySelector('fileDesc pubStmt distributor')),
+    availability: getText(meiParsed.querySelector('fileDesc pubStmt availability')),
+    header: header,
+    footer: footer,
+    stanzas: header.concat(footer)
+      .filter(block => /^\s*\d+\s*[.)]/.test(block.text))
+      .map(block => block.text),
+  };
+}
+
 // Extract MusicXML from compressed MXL file so it can be processed before feeding it into Verovio
 ChScore.prototype._unzipMusicXml = async function (arrayBuffer) {
   if (typeof DecompressionStream === 'undefined' || typeof Response === 'undefined') return null;
@@ -1008,6 +1067,7 @@ ChScore.prototype._unzipMusicXml = async function (arrayBuffer) {
 
 ChScore.prototype._parseAndAnnotateMei = function () {
   this._scoreData.meiParsed = (new DOMParser()).parseFromString(this._scoreData.meiStringOriginal, 'text/xml');
+  this._scoreData.scoreMetadata = this._getScoreMetadata(this._scoreData.meiParsed);
 
   // Enable collapsing empty staves. Example: "True to the Faith" (1985 Hymns).
   for (const scoreDef of this._scoreData.meiParsed.querySelectorAll('scoreDef')) {
