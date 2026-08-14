@@ -3604,6 +3604,7 @@ ChScore.prototype._normalizeSections = function () {
   this._scoreData.hasRepeatOrJump = !!this._scoreData.meiParsed.querySelector('repeatMark, coda, segno, ending, measure:is([left="rptstart"], [left="rptboth"], [right="rptend"], [right="rptboth"]), dir:is([type="coda"], [type="tocoda"], [type="segno"], [type="dalsegno"], [type="dacapo"], [type="fine"])')
 
   let hasPrebuiltSections = this._scoreData.sections.length > 0;
+  this._normalizeLyricVerseNumbers(this._scoreData.meiParsed);
   const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed);
   const introBracketElements = this._scoreData.meiParsed.querySelectorAll('[ch-intro-bracket]');
   const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionElement(this._scoreData.meiParsed, verseNumbers.length, introBracketElements.length > 0, this._scoreData.hasRepeatOrJump);
@@ -3699,6 +3700,39 @@ ChScore.prototype._normalizeSections = function () {
     this._scoreData.sectionsById[section.sectionId] = section;
   }
 
+}
+
+// Clean up verse numbers that were engraved as part of a lyric syllable
+// Example: "Venid a Mí" (Spanish Hymns #61)
+ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
+  if (meiParsed.querySelector('verse label')) return;
+  const firstLyricElementByLineNumber = new Map();
+  for (const verse of meiParsed.querySelectorAll(':is(note[ch-melody], chord:has([ch-melody])) verse')) {
+    const lineNumber = Number.parseInt(verse.getAttribute('n'));
+    if (!Number.isNaN(lineNumber) && !firstLyricElementByLineNumber.has(lineNumber)) {
+      firstLyricElementByLineNumber.set(lineNumber, verse);
+    }
+  }
+
+  const derived = [];
+  for (let lineNumber = 1; lineNumber <= firstLyricElementByLineNumber.size; lineNumber++) {
+    const syl = firstLyricElementByLineNumber.get(lineNumber)?.querySelector('syl');
+    const match = syl && /^\s*(\d+\s*[.)])\s*/.exec(syl.textContent);
+    if (!match || Number.parseInt(match[1]) !== lineNumber) return;
+    derived.push({
+      verse: firstLyricElementByLineNumber.get(lineNumber),
+      syl: syl,
+      label: match[1].replace(/\s+/g, ''),
+      remainingText: syl.textContent.slice(match[0].length),
+    });
+  }
+
+  for (const { verse, syl, label, remainingText } of derived) {
+    const labelElement = meiParsed.createElement('label');
+    labelElement.textContent = label;
+    verse.insertBefore(labelElement, verse.firstChild);
+    syl.textContent = remainingText;
+  }
 }
 
 ChScore.prototype._getInlineVerseNumbers = function (meiParsed) {
