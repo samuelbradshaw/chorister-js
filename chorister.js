@@ -973,7 +973,7 @@ ChScore.prototype._getScoreMetadata = function (meiParsed) {
     // Clean up whitespace
     return text
       .split('\n').map(line => line.replace(/[^\S\n]+/g, ' ').trim()).join('\n')
-      .replace(/^\n+|\n+$/g, '') || null;
+      .replace(/^\n+|\n+$/g, '');
   }
 
   const getTextBlocks = (containerName) => {
@@ -1004,11 +1004,11 @@ ChScore.prototype._getScoreMetadata = function (meiParsed) {
   const footer = getTextBlocks('pgFoot');
 
   return {
-    title: getText(meiParsed.querySelector('fileDesc titleStmt title')),
+    title: getText(meiParsed.querySelector('fileDesc titleStmt title')) || null,
     contributors: contributors,
     date: date ? (date.getAttribute('isodate') ?? getText(date)) : null,
-    distributor: getText(meiParsed.querySelector('fileDesc pubStmt distributor')),
-    availability: getText(meiParsed.querySelector('fileDesc pubStmt availability')),
+    distributor: getText(meiParsed.querySelector('fileDesc pubStmt distributor')) || null,
+    availability: getText(meiParsed.querySelector('fileDesc pubStmt availability')) || null,
     header: header,
     footer: footer,
     stanzas: header.concat(footer)
@@ -3278,6 +3278,7 @@ ChScore.prototype._defaultVerovioOptions = {
   transpose: '', // Don't transpose by default
   expandNever: true, // Prevent Verovio-generated MIDI from expanding
   mmOutput: false, // Use pixel units, not millimeters
+  xmlIdSeed: 1, // Keep generated element IDs consistent between loads
   svgAdditionalAttribute: [
     // Standard MEI attributes
     'staff@n', 'tie@startid', 'slur@startid',
@@ -3717,7 +3718,7 @@ ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
   const derived = [];
   for (let lineNumber = 1; lineNumber <= firstLyricElementByLineNumber.size; lineNumber++) {
     const syl = firstLyricElementByLineNumber.get(lineNumber)?.querySelector('syl');
-    const match = syl && /^\s*(\d+\s*[.)])\s*/.exec(syl.textContent);
+    const match = syl && /^\s*\(?(\d+\s*[.)])\s*/.exec(syl.textContent);
     if (!match || Number.parseInt(match[1]) !== lineNumber) return;
     derived.push({
       verse: firstLyricElementByLineNumber.get(lineNumber),
@@ -3744,6 +3745,8 @@ ChScore.prototype._getInlineVerseNumbers = function (meiParsed) {
   for (const verseLabel of verseLabels) {
     const verseNumber = Number.parseInt(verseLabel.textContent.trim().replace(/[().]/g, ''));
     const lineNumber = Number.parseInt(verseLabel.closest('verse').getAttribute('n'));
+    // Skip duplicate verse numbers, as in "Were You There", HHC
+    if (verseNumbers.includes(verseNumber)) continue;
     if (verseNumber === lineNumber && verseNumber === counter) {
       verseNumbers.push(verseNumber);
       counter++;
@@ -4024,45 +4027,34 @@ ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasI
   let expansionIds = [];
   const measures = Array.from(meiParsed.querySelectorAll('measure'));
   const expansion = meiParsed.querySelector('expansion');
-  if (
-    hasRepeatOrJump
-    || measures.at(-1).getAttribute('right') !== 'end' // Last measure isn't end of song (ex: All Things Bright and Beautiful, 1989 CSB)
-    || meiParsed.querySelectorAll('measure[right="end"]').length > 1 // Multiple end barlines (ex: For All the Saints, 1985 Hymns)
-    || !measures[0].querySelector('verse') // No lyrics in first measure (ex: Families Can Be Together Forever, 1985 Hymns)
-    || (meiParsed.querySelector('verse:not([n="1"])') && numVerses === 0) // Multiple lyric lines but no verse labels
-    || numVerses === 0
-  ) {
-    hasComplexSections = true;
-  } else if (expansion) {
+  if (expansion && numVerses > 0) {
     expansionIds = expansion.getAttribute('plist').split(' ');
 
     // Simple song with verses or verses and choruses
     // Examples: "The Spirit of God" (1985 Hymns), "Redeemer of Israel" (1985 Hymns)
     if (expansionIds.length === 1) {
-      expansion.setAttribute('type', 'verse-chorus');
       expansion.setAttribute('plist', Array(numVerses).fill(expansionIds[0]).join(' '));
       const sectionElement = meiParsed.querySelector(`[*|id="${expansionIds[0].substring(1)}"]`);
       sectionElement.setAttribute('type', 'verse');
-    }
+
     // Simple song with initial chorus, then verses and choruses
     // Examples: "All Things Bright and Beautiful" (1989 CSB); "He Is Born, the Divine Christ Child" (HHC); "Go Tell It on the Mountain" (HHC)
-    else if (expansionIds.length === 2 || (expansionIds.length === 3 && expansionIds[0] === expansionIds[2])) {
-      expansion.setAttribute('type', 'chorus-verse-chorus');
+    } else if (expansionIds.length === 2 || (expansionIds.length === 3 && expansionIds[0] === expansionIds[2])) {
       const firstSectionElement = meiParsed.querySelector(`[*|id="${expansionIds[0].substring(1)}"]`);
-      firstSectionElement.setAttribute('type', 'chorus');
       const firstSectionMeasures = firstSectionElement.querySelectorAll('measure');
       const secondSectionElement = meiParsed.querySelector(`[*|id="${expansionIds[1].substring(1)}"]`);
-      secondSectionElement.setAttribute('type', 'verse');
       const secondSectionMeasures = secondSectionElement.querySelectorAll('measure');
-
       if (firstSectionMeasures.at(-1).getAttribute('right') === 'end' &&
           secondSectionMeasures.at(-1).getAttribute('right') === 'dbl') {
+        firstSectionElement.setAttribute('type', 'chorus');
+        secondSectionElement.setAttribute('type', 'verse');
         hasInitialChorus = true;
         const repeatedSection = Array(numVerses).fill([expansionIds[0], expansionIds[1]]).flat();
         expansion.setAttribute('plist', [...repeatedSection, expansionIds[0]].join(' '));
+      } else {
+        hasComplexSections = true;
       }
     } else {
-      expansion.setAttribute('type', 'complex');
       hasComplexSections = true;
     }
 
@@ -4075,6 +4067,17 @@ ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasI
         firstSection.setAttribute('type', 'introduction');
       }
     }
+
+    expansion.setAttribute('type', hasComplexSections ? 'complex' : hasInitialChorus ? 'chorus-verse-chorus' : 'verse-chorus');
+  } else if (
+    hasRepeatOrJump
+    || measures.at(-1).getAttribute('right') !== 'end' // Last measure isn't end of song
+    || meiParsed.querySelectorAll('measure[right="end"]').length > 1 // Multiple end barlines (ex: For All the Saints, 1985 Hymns)
+    || !measures[0].querySelector('verse') // No lyrics in first measure (ex: Families Can Be Together Forever, 1985 Hymns)
+    || (meiParsed.querySelector('verse:not([n="1"])') && numVerses === 0) // Multiple lyric lines but no verse labels
+    || numVerses === 0
+  ) {
+    hasComplexSections = true;
   }
 
   return [hasComplexSections, hasInitialChorus, expansionIds];
