@@ -40,11 +40,6 @@ describe('ChScore Construction', () => {
     expect(container.score).toBe(score);
   });
 
-  it('should register the instance in _chScores', () => {
-    const score = new ChScore('#score-container');
-    expect(ChScore.prototype._chScores).toContain(score);
-  });
-
   it('should initialize with null scoreData and currentOptions', () => {
     const score = new ChScore('#score-container');
     expect(score._scoreData).toBeNull();

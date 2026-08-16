@@ -54,13 +54,15 @@ export async function initChScore() {
  */
 export function setupStandardHooks() {
   beforeEach(() => {
-    document.body.innerHTML = '<div id="score-container"></div>';
-    document.adoptedStyleSheets = [];
+    // A score registers itself on its container, so any left over from the last
+    // test are torn down through their containers before the DOM is replaced —
+    // otherwise their event listeners and observers outlive them.
     if (window.ChScore) {
-      for (const s of window.ChScore.prototype._chScores) s._controller?.abort();
-      window.ChScore.prototype._chScores = [];
+      for (const element of document.body.querySelectorAll('*')) element.score?.removeScore();
       window.ChScore.prototype._throttleStatus = {};
     }
+    document.body.innerHTML = '<div id="score-container"></div>';
+    document.adoptedStyleSheets = [];
   });
 
   afterEach(() => {

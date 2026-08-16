@@ -755,8 +755,8 @@ describe('Edge Cases', () => {
     const score1 = new ChScore('#container-1');
     const score2 = new ChScore('#container-2');
     expect(score1._container).not.toBe(score2._container);
-    expect(ChScore.prototype._chScores).toContain(score1);
-    expect(ChScore.prototype._chScores).toContain(score2);
+    expect(document.getElementById('container-1').score).toBe(score1);
+    expect(document.getElementById('container-2').score).toBe(score2);
   });
 
   it('should allow loading a new score on a container after removeScore', async () => {
@@ -1489,6 +1489,41 @@ describe('_updateExpansionElement() — unit tests', () => {
     score._updateExpansionElement(mei, 3, false, false);
     const sec1 = mei.querySelector('[*|id="sec1"]');
     expect(sec1.getAttribute('type')).toBe('verse');
+  });
+
+  // ── An expansion is trusted over the complexity heuristics ──
+
+  it('should expand an initial chorus even when the score has a repeat or jump', () => {
+    // Example: "Go Tell It on the Mountain" (HHC). A D.C. al Fine is what produced
+    // the chorus-verse-chorus plist, and the song ends on the chorus, so the last
+    // measure in the score isn't the end of the song.
+    const mei = buildMei({
+      sections: [
+        { id: 'chorus', measures: [{ right: 'end', hasVerse: true }] },
+        { id: 'verse', measures: [{ right: 'dbl', hasVerse: true }] },
+      ],
+      expansion: { plist: '#chorus #verse #chorus' },
+    });
+    const [hasComplexSections, hasInitialChorus] = score._updateExpansionElement(mei, 3, false, true);
+
+    expect(hasComplexSections).toBe(false);
+    expect(hasInitialChorus).toBe(true);
+    expect(mei.querySelector('expansion').getAttribute('type')).toBe('chorus-verse-chorus');
+    // One pass per verse, then a closing chorus
+    expect(mei.querySelector('expansion').getAttribute('plist'))
+      .toBe('#chorus #verse #chorus #verse #chorus #verse #chorus');
+  });
+
+  it('should leave the expansion alone when there are no verse numbers', () => {
+    // Nothing says how many times to repeat the sections, so the plist can't be rebuilt
+    const mei = buildMei({
+      sections: [{ id: 'sec1', measures: [{ right: 'end', hasVerse: true }] }],
+      expansion: { plist: '#sec1' },
+    });
+    const [hasComplexSections] = score._updateExpansionElement(mei, 0, false, false);
+
+    expect(hasComplexSections).toBe(true);
+    expect(mei.querySelector('expansion').getAttribute('plist')).toBe('#sec1');
   });
 });
 

@@ -703,6 +703,19 @@ describe('How Great — plain load (no partsTemplate)', { timeout: 30000 }, () =
     const intro = score._scoreData.sections.find(s => s.type === 'introduction');
     expect(intro).toBeDefined();
   });
+
+  it('should report the lyrics read out of the score as lyricsText', () => {
+    const lyricsText = score._scoreData.lyricsText;
+    expect(lyricsText).toBeTruthy();
+
+    // Bracketed stanzas, in sung order — the same format load() accepts as input
+    const headings = lyricsText.split('\n').filter(line => line.startsWith('['));
+    expect(headings).toEqual(['[Verse 1]', '[Verse 2]', '[Verse 3]', '[Verse 4]']);
+    expect(lyricsText).toContain('How great the wisdom and the love');
+
+    // The introduction carries no words, so it contributes no stanza
+    expect(lyricsText).not.toContain('[Introduction]');
+  });
 });
 
 // ============================================================

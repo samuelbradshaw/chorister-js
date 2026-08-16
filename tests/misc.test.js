@@ -159,21 +159,23 @@ describe('_addStylesheet() — Legacy browser fallback', () => {
 // ============================================================
 // removeScore — deregistration
 // ============================================================
-describe('removeScore() — _chScores deregistration', () => {
-  it('should filter out the removed instance from the scores list', async () => {
+describe('removeScore() — container deregistration', () => {
+  it('should deregister only the removed instance from its container', async () => {
     document.body.innerHTML = '<div id="container-a"></div><div id="container-b"></div>';
+    const containerA = document.getElementById('container-a');
+    const containerB = document.getElementById('container-b');
     const scoreA = new ChScore('#container-a');
     await scoreA.load('musicxml', { scoreContent: sampleMusicXml });
     const scoreB = new ChScore('#container-b');
     await scoreB.load('musicxml', { scoreContent: sampleMusicXml });
 
-    expect(ChScore.prototype._chScores).toContain(scoreA);
-    expect(ChScore.prototype._chScores).toContain(scoreB);
+    expect(containerA.score).toBe(scoreA);
+    expect(containerB.score).toBe(scoreB);
 
     scoreA.removeScore();
 
-    expect(scoreA._chScores).not.toContain(scoreA);
-    expect(scoreA._chScores).toContain(scoreB);
+    expect(containerA.score).toBeUndefined();
+    expect(containerB.score).toBe(scoreB);
   });
 
   it('should disconnect the ResizeObserver on removeScore', async () => {

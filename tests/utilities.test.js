@@ -1526,4 +1526,18 @@ describe('_getInlineVerseNumbers()', () => {
     ]);
     expect(score._getInlineVerseNumbers(mei)).toEqual([]);
   });
+
+  it('should ignore pickup labels that announce a verse already counted', () => {
+    // Example: "Were You There" (HHC). Each verse begins on a pickup note before
+    // the repeat, labeled with the next verse's number, so that label sits on the
+    // previous verse's lyric line.
+    const mei = buildMei([
+      { n: 1, labelText: '1.' },
+      { n: 2, labelText: '(2.' },
+      { n: 3, labelText: '(3.' },
+      { n: 1, labelText: '2.' },  // pickup into verse 2, engraved on lyric line 1
+      { n: 2, labelText: '3.' },
+    ]);
+    expect(score._getInlineVerseNumbers(mei)).toEqual([1, 2, 3]);
+  });
 });
