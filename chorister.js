@@ -1261,8 +1261,9 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   }
   this._scoreData.staffNumbers = Array.from(this._scoreData.meiParsed.querySelectorAll('staffDef')).map(sf => Number.parseInt(sf.getAttribute('n')));
   this._scoreData.hasLyrics = this._scoreData.meiParsed.querySelector('verse') !== null;
-  this._scoreData.numChordPositions = vrvTimemap.filter(entry => (entry.on ?? entry.restsOn ?? []).length > 0).length;
-  this._normalizeParts();
+  const chordPositionIndex = this._indexChordPositions(vrvTimemap);
+  this._scoreData.numChordPositions = chordPositionIndex.qstamps.length - 1;
+  this._normalizeParts(chordPositionIndex);
 
   // Get chord position, note, rest, and measure info from Verovio timemap
   // Add attributes to chords, notes, and rests: @ch-chord-position, @ch-part-id, @ch-melody
@@ -3436,10 +3437,10 @@ ChScore.prototype._coversWordsAbove = function (staff, singingStaff) {
   return secondVoiceNotes >= CH_COVERED_FRACTION * syllablePositions;
 }
 
-// How many voices share a staff, by how many notes actually sound together — two can
-// share a chord in one bar and split into layers in the next. The commonest number
-// wins rather than the largest, so one divisi chord in a cadence doesn't make it three.
-ChScore.prototype._countStaffVoices = function (staffLayers) {
+// How often each number of voices sounds together across one staff of one measure,
+// as a tally keyed by that number. Kept per measure so a range of them can be totalled
+// without going back to the engraving — see _getStaffMeasureData.
+ChScore.prototype._countMeasureVoices = function (layers, counts = {}) {
   const collect = (element, spans, state) => {
     for (const child of element.children) {
       if (child.matches('note, chord, rest, space, mRest')) {
@@ -3454,89 +3455,170 @@ ChScore.prototype._countStaffVoices = function (staffLayers) {
     }
   };
 
-  const counts = {};
-  for (const layers of staffLayers) {
-    const spans = [];
-    for (const layer of layers) collect(layer, spans, { time: 0 });
+  const spans = [];
+  for (const layer of layers) collect(layer, spans, { time: 0 });
 
-    // Sweep the spans in time order rather than re-totalling them at every onset. A
-    // span sounds through an onset once started and before ended, so both its start and
-    // its end apply at any onset at or after them — no ordering left to settle.
-    const events = [];
-    for (const span of spans) {
-      if (span.end <= span.start) continue;
-      events.push({ time: span.start, delta: span.notes });
-      events.push({ time: span.end, delta: -span.notes });
+  // Sweep the spans in time order rather than re-totalling them at every onset. A
+  // span sounds through an onset once started and before ended, so both its start and
+  // its end apply at any onset at or after them — no ordering left to settle.
+  const events = [];
+  for (const span of spans) {
+    if (span.end <= span.start) continue;
+    events.push({ time: span.start, delta: span.notes });
+    events.push({ time: span.end, delta: -span.notes });
+  }
+  events.sort((a, b) => a.time - b.time);
+
+  const onsets = [...new Set(spans.map(span => span.start))].sort((a, b) => a - b);
+  let next = 0;
+  let sounding = 0;
+  for (const onset of onsets) {
+    while (next < events.length && events[next].time <= onset) sounding += events[next++].delta;
+    if (sounding > 0) counts[sounding] = (counts[sounding] ?? 0) + 1;
+  }
+  return counts;
+}
+
+// Where every chord position and measure starts, and which one each note belongs to,
+// read from the Verovio timemap. Naming the place a song changes voicing needs this
+// before the main loop can run, since that loop needs the parts this has yet to derive.
+ChScore.prototype._indexChordPositions = function (vrvTimemap) {
+  const qstamps = [];
+  const byElementId = {};
+  const measures = {};
+  let measureId = null;
+  let chordPositionCounter = 0;
+
+  for (const entry of vrvTimemap) {
+    const onIds = (entry.on ?? []).concat(entry.restsOn ?? []);
+    if (entry.measureOn) {
+      if (measureId) measures[measureId].endQ = entry.qstamp;
+      measureId = entry.measureOn;
+      measures[measureId] = { startQ: entry.qstamp, endQ: entry.qstamp, firstChordPosition: null };
     }
-    events.sort((a, b) => a.time - b.time);
+    if (onIds.length === 0) continue;
+    // The written score is what's being measured, so where a measure is revisited
+    // the first time through is the one that counts
+    if (measureId && measures[measureId].firstChordPosition === null) {
+      measures[measureId].firstChordPosition = chordPositionCounter;
+    }
+    for (const elementId of onIds) byElementId[elementId] = chordPositionCounter;
+    qstamps.push(entry.qstamp);
+    chordPositionCounter += 1;
+  }
+  if (measureId) measures[measureId].endQ = vrvTimemap.at(-1)?.qstamp ?? measures[measureId].startQ;
+  // Trailing bound, so _bisectLeft can place something written at the very end
+  qstamps.push(measures[measureId]?.endQ ?? 0);
 
-    const onsets = [...new Set(spans.map(span => span.start))].sort((a, b) => a - b);
-    let next = 0;
-    let sounding = 0;
-    for (const onset of onsets) {
-      while (next < events.length && events[next].time <= onset) sounding += events[next++].delta;
-      if (sounding > 0) counts[sounding] = (counts[sounding] ?? 0) + 1;
+  return { qstamps: qstamps, byElementId: byElementId, measures: measures };
+}
+
+// What each staff holds in each measure, read once for the whole score. A song that
+// changes voicing is read a section at a time, so _getStaffLayoutInfo totals these over
+// whatever range it's asked about rather than going back to the engraving each time.
+ChScore.prototype._getStaffMeasureData = function () {
+  const measures = Array.from(this._scoreData.meiParsed.querySelectorAll('measure'));
+  const staffDefs = Array.from(this._scoreData.meiParsed.querySelectorAll('staffDef'));
+
+  const byStaff = staffDefs.map(staffDef => ({
+    staffNumber: Number.parseInt(staffDef.getAttribute('n')),
+    clef: this._getClefRegister(staffDef.querySelector('clef')),
+    grandStaffId: staffDef.closest('staffGrp')?.getAttribute('xml:id') ?? null,
+    byMeasure: measures.map(() => ({
+      // Every question a range gets asked reduces to totalling these, so none of it
+      // holds on to the engraving it was read from
+      voiceCounts: {},
+      melodyLayerNotes: 0,
+      melodyLayerChordNotes: 0,
+      syllables: 0,
+      secondVoice: 0,
+      sounds: false,
+      hasVerse: false,
+      sung: 0,
+      shortOfTwoParts: 0,
+      lowerVoiceCantSing: 0,
+    })),
+  }));
+  const byStaffNumber = new Map(byStaff.map(staffData => [staffData.staffNumber, staffData]));
+
+  for (let mi = 0; mi < measures.length; mi++) {
+    for (const staff of measures[mi].querySelectorAll('staff')) {
+      const staffData = byStaffNumber.get(Number.parseInt(staff.getAttribute('n')));
+      if (!staffData) continue;
+      const measure = staffData.byMeasure[mi];
+
+      const layers = Array.from(staff.querySelectorAll('layer'));
+      this._countMeasureVoices(layers, measure.voiceCounts);
+      // Some staves number their only layer 2 (a stem-direction convention),
+      // so fall back to whichever layer comes first
+      const melodyLayer = staff.querySelector('layer[n="1"]') ?? staff.querySelector('layer');
+      if (melodyLayer) {
+        const melodyNotes = melodyLayer.querySelectorAll('note');
+        measure.melodyLayerNotes += melodyNotes.length;
+        for (const note of melodyNotes) {
+          if (note.parentElement?.matches('chord')) measure.melodyLayerChordNotes += 1;
+        }
+        const counts = this._countLowerVoiceNotes(melodyLayer, layers);
+        measure.syllables += counts.syllablePositions;
+        measure.secondVoice += counts.secondVoiceEvents;
+        // The staff is only compared with the one above where its second voice
+        // is singing: silent for the measure, or written a rest, it's tacet
+        measure.sounds = measure.sounds
+          || (staff.querySelector('note') !== null && !counts.secondVoiceResting);
+        if (counts.syllablePositions > 0) {
+          measure.sung += 1;
+          const short = counts.lowerVoiceNotes < counts.syllablePositions;
+          if (short) measure.shortOfTwoParts += 1;
+          // Whether a staff is accompanied is only asked of one with a second
+          // voice engraved as its own layer: a staff of plain single notes is
+          // short everywhere, which says nothing about who is harmonizing it
+          if (short && layers.length > 1) measure.lowerVoiceCantSing += 1;
+        }
+      }
+      if (staff.querySelector('verse')) measure.hasVerse = true;
     }
   }
 
-  const voices = Object.keys(counts).map(Number);
-  return voices.length === 0 ? 1
-    : voices.reduce((best, n) => counts[n] > counts[best] ? n : best, voices[0]);
+  return { measures: measures, byStaff: byStaff };
 }
 
-// What each staff looks like, as far as it can be read before chord positions
-// exist — _normalizeParts runs before they're annotated, so a staff's first
-// lyric is located by the measure it falls in rather than by chord position.
-ChScore.prototype._getStaffLayoutInfo = function () {
-  const measures = Array.from(this._scoreData.meiParsed.querySelectorAll('measure'));
+// What each staff looks like over a range of measures. Chord positions aren't annotated
+// yet, so a staff's first lyric is located by the measure it falls in. The range is the
+// whole score unless a section is read on its own, when `songFacts` supplies the two
+// things a section must not answer for itself: who sings, and who carries the tune.
+ChScore.prototype._getStaffLayoutInfo = function (measureData, startMeasure = 0, endMeasure = Infinity, songFacts = null) {
   const staves = [];
+  const end = Math.min(endMeasure, measureData.measures.length);
 
-  for (const staffDef of this._scoreData.meiParsed.querySelectorAll('staffDef')) {
-    const staffNumber = staffDef.getAttribute('n');
-    // Collected as the measures are walked, so _countStaffVoices doesn't have to
-    // go looking for the same layers again
-    const staffLayers = [];
+  for (const staffData of measureData.byStaff) {
+    const voiceCounts = {};
     let melodyLayerNotes = 0;
     let melodyLayerChordNotes = 0;
     let firstLyricMeasure = null;
     let measuresLowerVoiceCantSing = 0;
     let sungMeasures = 0;
     let measuresShortOfTwoParts = 0;
-    // Kept per measure, so a staff that rests through a passage can be compared
-    // with the one above it over the measures it actually plays
+    // Kept at each measure's own index, so a staff that rests through a passage can be
+    // compared with the one above it over the measures it plays. _coversWordsAbove skips
+    // the gaps, which is what keeps a section's reading to the measures in it.
     const syllablesByMeasure = [];
     const secondVoiceByMeasure = [];
     const soundsByMeasure = [];
 
-    for (let mi = 0; mi < measures.length; mi++) {
-      for (const staff of measures[mi].querySelectorAll(`staff[n="${staffNumber}"]`)) {
-        const layers = Array.from(staff.querySelectorAll('layer'));
-        staffLayers.push(layers);
-        // Some staves number their only layer 2 (a stem-direction convention),
-        // so fall back to whichever layer comes first
-        const melodyLayer = staff.querySelector('layer[n="1"]') ?? staff.querySelector('layer');
-        if (melodyLayer) {
-          melodyLayerNotes += melodyLayer.querySelectorAll('note').length;
-          melodyLayerChordNotes += melodyLayer.querySelectorAll('chord note').length;
-          const counts = this._countLowerVoiceNotes(melodyLayer, layers);
-          syllablesByMeasure[mi] = (syllablesByMeasure[mi] ?? 0) + counts.syllablePositions;
-          secondVoiceByMeasure[mi] = (secondVoiceByMeasure[mi] ?? 0) + counts.secondVoiceEvents;
-          // The staff is only compared with the one above where its second voice
-          // is singing: silent for the measure, or written a rest, it's tacet
-          soundsByMeasure[mi] = soundsByMeasure[mi]
-            || (staff.querySelector('note') !== null && !counts.secondVoiceResting);
-          if (counts.syllablePositions > 0) {
-            sungMeasures += 1;
-            const short = counts.lowerVoiceNotes < counts.syllablePositions;
-            if (short) measuresShortOfTwoParts += 1;
-            // Whether a staff is accompanied is only asked of one with a second
-            // voice engraved as its own layer: a staff of plain single notes is
-            // short everywhere, which says nothing about who is harmonizing it
-            if (short && layers.length > 1) measuresLowerVoiceCantSing += 1;
-          }
-        }
-        if (firstLyricMeasure === null && staff.querySelector('verse')) firstLyricMeasure = mi;
+    for (let mi = startMeasure; mi < end; mi++) {
+      const measure = staffData.byMeasure[mi];
+      for (const [voices, count] of Object.entries(measure.voiceCounts)) {
+        voiceCounts[voices] = (voiceCounts[voices] ?? 0) + count;
       }
+      melodyLayerNotes += measure.melodyLayerNotes;
+      melodyLayerChordNotes += measure.melodyLayerChordNotes;
+      if (measure.syllables) syllablesByMeasure[mi] = measure.syllables;
+      if (measure.secondVoice) secondVoiceByMeasure[mi] = measure.secondVoice;
+      if (measure.sounds) soundsByMeasure[mi] = true;
+      sungMeasures += measure.sung;
+      measuresShortOfTwoParts += measure.shortOfTwoParts;
+      measuresLowerVoiceCantSing += measure.lowerVoiceCantSing;
+      if (firstLyricMeasure === null && measure.hasVerse) firstLyricMeasure = mi;
     }
 
     // Whether the staff is written as chords, rather than merely containing one:
@@ -3544,14 +3626,24 @@ ChScore.prototype._getStaffLayoutInfo = function () {
     // time through, is still one part
     const hasChordsInMelodyLayer = melodyLayerChordNotes * 2 > melodyLayerNotes;
 
+    // How many voices share the staff, by how many notes sound together — two can share
+    // a chord in one bar and split into layers in the next. The commonest number wins
+    // rather than the largest, so one divisi chord in a cadence doesn't make it three.
+    const voices = Object.keys(voiceCounts).map(Number);
+    const numParts = voices.length === 0 ? 1
+      : voices.reduce((best, n) => voiceCounts[n] > voiceCounts[best] ? n : best, voices[0]);
+
     const CH_UNSINGABLE_MEASURES = 3;
     staves.push({
-      staffNumber: Number.parseInt(staffNumber),
-      clef: this._getClefRegister(staffDef.querySelector('clef')),
-      hasLyrics: firstLyricMeasure !== null,
+      staffNumber: staffData.staffNumber,
+      clef: staffData.clef,
+      hasLyrics: songFacts
+        ? songFacts.singingStaffNumbers.has(staffData.staffNumber)
+        : firstLyricMeasure !== null,
       firstLyricMeasure: firstLyricMeasure,
       hasChordsInMelodyLayer: hasChordsInMelodyLayer,
-      // The staff is harmonized by an instrument, not by other singers
+      // The staff is harmonized by an instrument, not by other singers — read per
+      // section, since that changing is what "0:Unison; 78:SATB" describes
       isAccompanied: measuresLowerVoiceCantSing >= CH_UNSINGABLE_MEASURES,
       // Enough notes under the melody, everywhere it sings, for a second voice to
       // sing every word with it — whether as chords or as a layer of its own
@@ -3561,8 +3653,8 @@ ChScore.prototype._getStaffLayoutInfo = function () {
       // staff carries words of its own or not, and where it plays at all
       secondVoiceByMeasure: secondVoiceByMeasure,
       soundsByMeasure: soundsByMeasure,
-      numParts: this._countStaffVoices(staffLayers),
-      grandStaffId: staffDef.closest('staffGrp')?.getAttribute('xml:id') ?? null,
+      numParts: numParts,
+      grandStaffId: staffData.grandStaffId,
       isMelodyStaff: false,
       partsChars: null,
     });
@@ -3572,46 +3664,22 @@ ChScore.prototype._getStaffLayoutInfo = function () {
   // over it rather than carrying it, whatever number they happen to be — an
   // introduction on its own staves can leave the melody well down the system.
   const singingStaves = staves.filter(staff => staff.hasLyrics);
-  const melodyStaff = singingStaves.reduce((earliest, staff) =>
-    staff.firstLyricMeasure < earliest.firstLyricMeasure ? staff : earliest, singingStaves[0]);
+  const melodyStaff = songFacts
+    ? staves.find(staff => staff.staffNumber === songFacts.melodyStaffNumber)
+    : singingStaves.reduce((earliest, staff) =>
+      staff.firstLyricMeasure < earliest.firstLyricMeasure ? staff : earliest, singingStaves[0]);
   if (melodyStaff) melodyStaff.isMelodyStaff = true;
 
   return staves;
 }
 
-// Voicings for a run of adjacent staves of interchangeable parts, keyed by each
-// staff's clef and part count — an SATB hymn is two parts over two parts, and
-// the same hymn in open score is four staves of one part each
-const CH_VOICES_BY_STAFF_RUN = {
-  'G2+G2': ['SS', 'AA'],
-  'F2+F2': ['TT', 'BB'],
-  'G2+F2': ['SA', 'TB'],
-  'G1+F2': ['S', 'TB'],
-  'G2+F1': ['SA', 'B'],
-  'G2+G1': ['SS', 'A'],
-  'G3+F2': ['SSA', 'TB'],
-  'G2+F3': ['SA', 'TTB'],
-  'G3+F3': ['SSA', 'TTB'],
-  // A men's choir puts its upper voices in a C clef, so there's no soprano above
-  'C2+F2': ['TT', 'BB'],
-  'C1+F2': ['T', 'BB'],
-  'C2+F1': ['TT', 'B'],
-  'C2+C2': ['TT', 'BB'],
-  'C2+C1': ['TT', 'B'],
-  'C1+C1+F1+F1': ['T', 'T', 'B', 'B'],
-  'C1+C1+F1': ['T', 'T', 'B'],
-  'C1+F1+F1': ['T', 'B', 'B'],
-  'G1+G1+F1+F1': ['S', 'A', 'T', 'B'],
-  'G1+G1+F1': ['S', 'A', 'B'],
-  'G1+F1+F1': ['S', 'T', 'B'],
-};
+// Work out heuristically what each staff holds over a range of measures, as staves with
+// their parts characters filled in, which _derivePartsTemplate spells out as a template.
+ChScore.prototype._deriveStaffPartsChars = function (measureData, startMeasure = 0, endMeasure = Infinity, songFacts = null) {
+  const staves = this._getStaffLayoutInfo(measureData, startMeasure, endMeasure, songFacts);
 
-// Derive a likely parts template heuristically, from what each staff looks like
-ChScore.prototype._derivePartsTemplate = function () {
-  // Nothing is sung, so every staff is an instrument
-  if (!this._scoreData.hasLyrics) return 'I';
-
-  const staves = this._getStaffLayoutInfo();
+  // Nothing is sung here, so there is no voicing to read
+  if (!staves.some(staff => staff.hasLyrics)) return staves;
 
   // The staves braced together in each system, which is what says whether a staff
   // that doesn't sing belongs to the singers or to an instrument of its own. A Map,
@@ -3692,11 +3760,37 @@ ChScore.prototype._derivePartsTemplate = function () {
   const isParts = staff => /^P+$/.test(staff.partsChars);
   const signature = run => run.map(staff => `${staff.clef}${staff.partsChars.length}`).join('+');
 
+  // Voicings for a run of adjacent staves of interchangeable parts, keyed by each
+  // staff's clef and part count — an SATB hymn is two parts over two parts, and
+  // the same hymn in open score is four staves of one part each
+  const CH_VOICES_BY_STAFF_RUN = {
+    'G2+G2': ['SS', 'AA'],
+    'F2+F2': ['TT', 'BB'],
+    'G2+F2': ['SA', 'TB'],
+    'G1+F2': ['S', 'TB'],
+    'G2+F1': ['SA', 'B'],
+    'G2+G1': ['SS', 'A'],
+    'G3+F2': ['SSA', 'TB'],
+    'G2+F3': ['SA', 'TTB'],
+    'G3+F3': ['SSA', 'TTB'],
+    'C2+F2': ['TT', 'BB'],
+    'C1+F2': ['T', 'BB'],
+    'C2+F1': ['TT', 'B'],
+    'C2+C2': ['TT', 'BB'],
+    'C2+C1': ['TT', 'B'],
+    'C1+C1+F1+F1': ['T', 'T', 'B', 'B'],
+    'C1+C1+F1': ['T', 'T', 'B'],
+    'C1+F1+F1': ['T', 'B', 'B'],
+    'G1+G1+F1+F1': ['S', 'A', 'T', 'B'],
+    'G1+G1+F1': ['S', 'A', 'B'],
+    'G1+F1+F1': ['S', 'T', 'B'],
+  };
+
   // Three interchangeable parts on a staff of their own, by clef — a men's-voice clef
   // has no soprano, like a bass clef. Four on one staff stay 'PPPP': 'SSAA' reads back
   // as two staves of two, moving half of them onto the staff below.
   const trioByClef = { 'G': 'SSA', 'F': 'TTB', 'C': 'TTB' };
-
+  
   for (let s = 0; s < staves.length; s++) {
     if (!isParts(staves[s])) continue;
 
@@ -3737,14 +3831,125 @@ ChScore.prototype._derivePartsTemplate = function () {
     else if (system.filter(other => other.hasLyrics).length === 1) staff.partsChars = 'MC';
   }
 
-  return staves.map(staff => staff.partsChars).join('+');
+  return staves;
 }
 
-ChScore.prototype._normalizeParts = function () {
+// Where the song might change its voicing, from the directions over the staves. A change
+// is announced — "Harmony", "Unison", "Sop 1" — but in whatever words the engraver chose,
+// so every direction is a candidate; sections that read the same are merged again.
+ChScore.prototype._getPartsSegmentBoundaries = function (measureData, wholeStaves, chordPositionIndex) {
+  const accompanimentStaves = new Set(wholeStaves
+    .filter(staff => !staff.hasLyrics || staff.partsChars === 'C')
+    .map(staff => String(staff.staffNumber)));
+
+  // The chord position an element is attached to, by @startid or @tstamp — the same
+  // reading the @ch-chord-position pass makes, from the index rather than the annotations
+  const indexedChordPosition = (element, measureId) => {
+    if (!chordPositionIndex) return null;
+
+    const startid = element.getAttribute('startid')?.substring(1);
+    if (startid && startid in chordPositionIndex.byElementId) return chordPositionIndex.byElementId[startid];
+
+    const measureInfo = this._scoreData.measuresById[measureId];
+    const indexedMeasure = chordPositionIndex.measures[measureId];
+    const tstamp = Number.parseFloat(element.getAttribute('tstamp'));
+    if (tstamp && measureInfo && indexedMeasure) {
+      // Convert tstamp (1-based position in time signature denominator notes, relative to measure) to qstamp (0-based position in quarter notes, relative to song)
+      const quartersPerBeat = 4 / measureInfo.timeSignature[1];
+      const qstamp = Math.min(indexedMeasure.endQ, indexedMeasure.startQ + ((tstamp - 1) * quartersPerBeat));
+      return this._bisectLeft(chordPositionIndex.qstamps, qstamp);
+    }
+
+    // Nothing to place it by: the measure it sits in is as close as this gets
+    return indexedMeasure?.firstChordPosition ?? null;
+  };
+
+  // Text that isn't a direction but is engraved as one. Could be guitar chords, hand and octave marks, and jumps/navigation, etc.
+  const CH_CHORD_SYMBOL = /^\(?[A-G][#b♯♭]?(m|maj|min|dim|aug|sus|add|°|ø)?\d*(\/[A-G][#b♯♭]?)?\)?$/;
+  const CH_FALSE_POSITIVE = /^(r\.?h\.?|l\.?h\.?|8vb|8va|simile|sim\.|[()]|[➀-➓]|[0-9]+\.?)$/i;
+
+  const boundaries = [{ measureIndex: 0, chordPosition: 0 }];
+  for (let mi = 1; mi < measureData.measures.length; mi++) {
+    const measure = measureData.measures[mi];
+    // Tempo and dynamic marks are elements of their own, so most of what is written over
+    // a staff isn't a <dir>. Of what is, anything addressed to the singers is placed above
+    // or below the staff — guitar chords carry no placement — and navigation is named.
+    for (const dir of measure.querySelectorAll('dir[place]:not([type="coda"], [type="tocoda"], [type="segno"], [type="dalsegno"], [type="dacapo"], [type="fine"])')) {
+      const staff = dir.getAttribute('staff');
+      if (staff && accompanimentStaves.has(staff)) continue;
+      const text = dir.textContent.trim();
+      if (!text || text === '⌜' || text === '⌝') continue;
+      if (CH_CHORD_SYMBOL.test(text) || CH_FALSE_POSITIVE.test(text)) continue;
+
+      const chordPosition = indexedChordPosition(dir, measure.getAttribute('xml:id'));
+      if (chordPosition === null) continue;
+      boundaries.push({ measureIndex: mi, chordPosition: chordPosition });
+      // One direction per measure is enough — the rest only mark the same place again
+      break;
+    }
+  }
+
+  // A boundary is only worth taking if the section it opens is long enough to read —
+  // three measures is already the threshold at which a staff counts as accompanied. Where
+  // directions cluster this keeps the last, which is where the music actually changes.
+  const CH_MIN_SEGMENT_MEASURES = 4;
+  return boundaries.filter((boundary, b) => {
+    const next = boundaries[b + 1]?.measureIndex ?? measureData.measures.length;
+    return b === 0 || next - boundary.measureIndex >= CH_MIN_SEGMENT_MEASURES;
+  });
+}
+
+// Derive a likely parts template heuristically, from what each staff looks like
+ChScore.prototype._derivePartsTemplate = function (chordPositionIndex) {
+  // Nothing is sung, so every staff is an instrument — answered without reading the
+  // engraving, which also lets this be asked of a score that has none
+  if (!this._scoreData.hasLyrics) return 'I';
+
+  // Staves as a template with no chord position on it. Nothing sung anywhere is one 'I'
+  // for the score, not one per staff.
+  const joinPartsTemplate = staves => staves.some(staff => staff.hasLyrics)
+    ? staves.map(staff => staff.partsChars).join('+')
+    : 'I';
+
+  const measureData = this._getStaffMeasureData();
+  const wholeStaves = this._deriveStaffPartsChars(measureData);
+  const whole = joinPartsTemplate(wholeStaves);
+
+  // A song announcing this many changes is using its directions for something else
+  const CH_MAX_SEGMENT_BOUNDARIES = 6;
+  const boundaries = this._getPartsSegmentBoundaries(measureData, wholeStaves, chordPositionIndex);
+  if (boundaries.length < 2 || boundaries.length > CH_MAX_SEGMENT_BOUNDARIES) return whole;
+
+  // What belongs to the song rather than to a section of it: who sings (a descant joining
+  // for the last verse sings throughout) and which staff carries the tune (a section where
+  // the melody rests doesn't hand it to the descant above)
+  const songFacts = {
+    singingStaffNumbers: new Set(wholeStaves.filter(staff => staff.hasLyrics).map(staff => staff.staffNumber)),
+    melodyStaffNumber: wholeStaves.find(staff => staff.isMelodyStaff)?.staffNumber ?? null,
+  };
+
+  const segments = [];
+  for (let b = 0; b < boundaries.length; b++) {
+    const endMeasure = boundaries[b + 1]?.measureIndex ?? Infinity;
+    const template = joinPartsTemplate(this._deriveStaffPartsChars(
+      measureData, boundaries[b].measureIndex, endMeasure, songFacts));
+    const previous = segments.at(-1);
+    // A section that reads the same as the one before it wasn't a change, and an
+    // interlude nobody sings says nothing about how the singing around it is voiced
+    if (previous && (template === previous.template || template === 'I')) continue;
+    segments.push({ chordPosition: boundaries[b].chordPosition, template: template });
+  }
+
+  // Nothing changed after all, so answer for the whole song
+  if (segments.length < 2) return whole;
+  return segments.map(segment => `${segment.chordPosition}:${segment.template}`).join('; ');
+}
+
+ChScore.prototype._normalizeParts = function (chordPositionIndex) {
   // Parts supplied by the caller win; otherwise build them from a template,
   // deriving one from the engraving when none was given
   if (this._scoreData.parts.length === 0) {
-    this._scoreData.partsTemplate ||= this._derivePartsTemplate();
+    this._scoreData.partsTemplate ||= this._derivePartsTemplate(chordPositionIndex);
     this._scoreData.parts = this._scoreData.partsTemplate ? this._buildPartsFromTemplate(
       this._scoreData.partsTemplate, this._scoreData.staffNumbers,
       this._scoreData.numChordPositions, this._scoreData.hasLyrics
