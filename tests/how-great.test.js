@@ -679,8 +679,33 @@ describe('How Great — plain load (no partsTemplate)', { timeout: 30000 }, () =
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
+
+  // Which lyric line a section's words were read from. The ch-section-id and
+  // ch-lyric-line-id annotations are Chorister's own record of the mapping.
+  const lyricLinesOf = (sectionId) => {
+    const lines = new Set();
+    for (const verse of score._scoreData.meiParsed.querySelectorAll(`verse[ch-section-id="${sectionId}"]`)) {
+      lines.add(verse.getAttribute('ch-lyric-line-id'));
+    }
+    return [...lines];
+  };
+
   it('should still have 2 staves without partsTemplate', () => {
     expect(score._scoreData.staffNumbers).toEqual([1, 2]);
+  });
+
+  it('should read each verse from its own lyric line, in order', () => {
+    const verses = score._scoreData.sections.filter(section => section.type === 'verse');
+    expect(verses.map(section => String(section.marker))).toEqual(['1', '2', '3', '4']);
+    expect(verses.map(section => lyricLinesOf(section.sectionId)))
+      .toEqual([['1.1'], ['1.2'], ['1.3'], ['1.4']]);
+
+    // Four verses stacked under one pass of the music: own words, same notes
+    expect(new Set(verses.map(section => section.annotatedLyrics)).size).toBe(4);
+    const ranges = verses.map(section =>
+      JSON.stringify(section.chordPositionRanges.map(range => [range.start, range.end])));
+    expect(new Set(ranges).size).toBe(1);
+    expect(verses[0].annotatedLyrics).toMatch(/^How great the wisdom and the love/);
   });
 
   it('should detect intro brackets from the MusicXML', () => {

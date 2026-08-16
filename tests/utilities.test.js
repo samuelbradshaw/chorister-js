@@ -1377,6 +1377,339 @@ describe('_markSingleLineChordPositions()', () => {
 
 
 // ============================================================
+// Verses printed below the music
+// ============================================================
+describe('Verses printed below the music', { timeout: 30000 }, () => {
+  let score;
+
+  // A one-measure score sung once, with three further verses printed underneath as
+  // <credit> text — verse 1 is the one already sung, so only 5 and 6 are recovered.
+  const printedVersesMusicXml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <credit page="1"><credit-words valign="bottom">1. Do Re Mi</credit-words></credit>
+  <credit page="1"><credit-words valign="bottom">5. Prayer is the soul\u2019s sincere desire,
+Uttered or unexpressed.</credit-words></credit>
+  <credit page="1"><credit-words valign="bottom">6. The saints, in prayer, appear as one,
+In word and deed and mind.</credit-words></credit>
+  <part-list><score-part id="P1"><part-name>Voice</part-name></score-part></part-list>
+  <part id="P1"><measure number="1">
+    <attributes><divisions>1</divisions><key><fifths>0</fifths></key>
+      <time><beats>3</beats><beat-type>4</beat-type></time>
+      <clef><sign>G</sign><line>2</line></clef></attributes>
+    <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type>
+      <lyric number="1"><syllabic>single</syllabic><text>Do</text></lyric></note>
+    <note><pitch><step>D</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type>
+      <lyric number="1"><syllabic>single</syllabic><text>Re</text></lyric></note>
+    <note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type>
+      <lyric number="1"><syllabic>single</syllabic><text>Mi</text></lyric></note>
+  </measure></part>
+</score-partwise>`;
+
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: printedVersesMusicXml });
+  });
+
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  it('should recover printed verses that are not sung from the staff', () => {
+    const below = score._scoreData.sections.filter(section => section.placement === 'below');
+    // Verse 1 is sung from the staff, so it is not recovered a second time
+    expect(below.map(section => String(section.marker))).toEqual(['5', '6']);
+
+    for (const section of below) {
+      expect(section.type).toBe('verse');
+      // Printed verses keep their line breaks, and the number is split off the text
+      expect(section.annotatedLyrics).toContain('\n');
+      expect(section.annotatedLyrics[0]).not.toMatch(/\d/);
+      // Nothing sings them, so they hold no chord positions
+      expect(section.chordPositionRanges).toEqual([]);
+    }
+  });
+
+  it('should place printed verses after the ones sung from the staff', () => {
+    const placements = score._scoreData.sections
+      .filter(section => section.annotatedLyrics)
+      .map(section => section.placement);
+    expect(placements).toEqual(['inline', 'below', 'below']);
+  });
+
+  it('should add nothing for a score with no printed verses', async () => {
+    const plain = new ChScore('#score-container');
+    ChScore.prototype._drawScore = function() {};
+    await plain.load('musicxml', {
+      scoreContent: printedVersesMusicXml.replace(/<credit[\s\S]*?<\/credit>/g, ''),
+    });
+
+    expect(plain._scoreData.sections.filter(section => section.placement === 'below')).toEqual([]);
+    plain.removeScore();
+  });
+});
+
+
+// ============================================================
+// _fixIntroBrackets
+// ============================================================
+describe('_fixIntroBrackets()', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  const note = (x) => `<note default-x="${x}"><pitch><step>C</step><octave>4</octave></pitch></note>`;
+  const bracket = (x) => `<direction><direction-type><words default-x="${x}">\u231C</words></direction-type></direction>`;
+
+  /** A one-measure score from the parts given, in the order given. */
+  const scoreXml = (...parts) =>
+    `<score-partwise><part id="P1"><measure number="1">${parts.join('')}</measure></part></score-partwise>`;
+
+  /** What the measure holds, in document order: 'note:X' or 'bracket'. */
+  function layout(musicXml) {
+    const measure = new DOMParser().parseFromString(musicXml, 'text/xml').querySelector('measure');
+    return [...measure.children].map(child =>
+      child.nodeName === 'note' ? `note:${child.getAttribute('default-x')}` : 'bracket');
+  }
+
+  it('should return a score with no brackets untouched, without parsing it', () => {
+    const musicXml = scoreXml(note(10), note(50));
+    // The same string back, not a re-serialized copy
+    expect(score._fixIntroBrackets(musicXml)).toBe(musicXml);
+    expect(score._fixIntroBrackets('<score-partwise/>')).toBe('<score-partwise/>');
+  });
+
+  it('should leave a bracket already in its printed position', () => {
+    const musicXml = scoreXml(note(10), bracket(30), note(50));
+    expect(score._fixIntroBrackets(musicXml)).toBe(musicXml);
+  });
+
+  it('should move a bracket back past notes printed to the right of it', () => {
+    // Engraved after the note at x=50, but printed at x=30 — so it belongs before it
+    const musicXml = scoreXml(note(10), note(50), bracket(30), note(70));
+    expect(layout(score._fixIntroBrackets(musicXml)))
+      .toEqual(['note:10', 'bracket', 'note:50', 'note:70']);
+  });
+
+  it('should move a bracket forward past notes printed to the left of it', () => {
+    const musicXml = scoreXml(note(10), bracket(90), note(50), note(70));
+    expect(layout(score._fixIntroBrackets(musicXml)))
+      .toEqual(['note:10', 'note:50', 'note:70', 'bracket']);
+  });
+
+  it('should leave a bracket that carries no printed position', () => {
+    const musicXml = scoreXml(note(10), note(50), '<direction><direction-type><words>\u231C</words></direction-type></direction>');
+    expect(score._fixIntroBrackets(musicXml)).toBe(musicXml);
+  });
+});
+
+
+// ============================================================
+// _getScoreMetadata
+// ============================================================
+describe('_getScoreMetadata()', () => {
+  let score;
+  const parser = new DOMParser();
+
+  /** A minimal MEI header, plus whatever page blocks a test needs. */
+  function buildMei({ fileDesc = '', pgHead = '', pgFoot = '' } = {}) {
+    return parser.parseFromString(
+      `<mei><meiHead><fileDesc>${fileDesc}</fileDesc></meiHead>` +
+      `<music><body><mdiv><score>${pgHead}${pgFoot}</score></mdiv></body></music></mei>`,
+      'text/xml'
+    );
+  }
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  it('should read what the score says about itself', () => {
+    const metadata = score._getScoreMetadata(buildMei({ fileDesc: `
+      <titleStmt><title>Come, Follow Me</title>
+        <respStmt>
+          <persName role="composer">John Nicholson</persName>
+          <persName role="lyricist">Samuel McBurney</persName>
+        </respStmt>
+      </titleStmt>
+      <pubStmt>
+        <date isodate="1985">1985</date>
+        <distributor>Some Publisher</distributor>
+        <availability>Public domain</availability>
+      </pubStmt>` }));
+
+    expect(metadata.title).toBe('Come, Follow Me');
+    expect(metadata.contributors).toEqual([
+      { role: 'composer', name: 'John Nicholson' },
+      { role: 'lyricist', name: 'Samuel McBurney' },
+    ]);
+    // @isodate is preferred over the printed text
+    expect(metadata.date).toBe('1985');
+    expect(metadata.distributor).toBe('Some Publisher');
+    expect(metadata.availability).toBe('Public domain');
+  });
+
+  it('should leave every field optional', () => {
+    const metadata = score._getScoreMetadata(buildMei());
+
+    expect(metadata.title).toBeNull();
+    expect(metadata.date).toBeNull();
+    expect(metadata.distributor).toBeNull();
+    // An empty respStmt yields no contributors rather than failing
+    expect(metadata.contributors).toEqual([]);
+    expect(metadata.header).toEqual([]);
+    expect(metadata.stanzas).toEqual([]);
+  });
+
+  it('should keep line breaks in a text block but lose stray whitespace', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend halign="center" valign="top" xml:id="h1">  Hymns   of   Praise <lb/>' +
+              '  <rend>second</rend>   line  </rend></pgHead>',
+    }));
+
+    expect(metadata.header).toEqual([{
+      text: 'Hymns of Praise\nsecond line',
+      halign: 'center',
+      valign: 'top',
+      elementId: 'h1',
+    }]);
+  });
+
+  it('should collect only numbered verse blocks as stanzas', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend>Hymns of Praise</rend></pgHead>',
+      pgFoot: '<pgFoot><rend>5. Prayer is the soul\u2019s sincere desire<lb/>Uttered or unexpressed</rend>' +
+              '<rend>6. The saints, in prayer, appear as one</rend>' +
+              '<rend>Text: James Montgomery</rend></pgFoot>',
+    }));
+
+    // The title above and the attribution below are text blocks, but not stanzas
+    expect(metadata.header.length).toBe(1);
+    expect(metadata.footer.length).toBe(3);
+    expect(metadata.stanzas.length).toBe(2);
+    // The verse number stays in the text, and the printed lines are kept
+    expect(metadata.stanzas[0]).toBe('5. Prayer is the soul\u2019s sincere desire\nUttered or unexpressed');
+    expect(metadata.stanzas[1]).toBe('6. The saints, in prayer, appear as one');
+  });
+});
+
+
+// ============================================================
+// _mergePickupStanzas
+// ============================================================
+describe('_mergePickupStanzas()', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+    score._scoreData = { staffNumbers: [1, 2] };
+  });
+
+  /** A stanza as _buildStanzasFromSyllables would have built it. */
+  function stanza(lyricLineId, marker, words, chordPosition) {
+    const built = score._newLyricStanza(lyricLineId, 'verse', marker, chordPosition, chordPosition);
+    built.annotatedLyrics = words;
+    return built;
+  }
+
+  it('should merge a pickup into the verse its label names', () => {
+    // Example: "Were You There" (HHC). Verse 2's first syllables sit on a pickup
+    // before the repeat, so playback reaches them at the end of verse 1's pass —
+    // a short stanza labelled "2." while sitting on lyric line 1.
+    const pickup = stanza('1.1', '2.', 'Were you', 40);
+    const verse2 = stanza('1.2', null, 'there when they crucified my Lord?', 0);
+
+    const merged = score._mergePickupStanzas([pickup, verse2]);
+
+    expect(merged.length).toBe(1);
+    expect(merged[0].marker).toBe('2.');
+    // The pickup's words belong to the verse it names, not a stanza of their own
+    expect(merged[0].annotatedLyrics).toBe('Were you there when they crucified my Lord?');
+    // ...and it is sung first, so its chord positions come first
+    expect(merged[0].chordPositionRanges.map(range => range.start)).toEqual([40, 0]);
+  });
+
+  it('should leave a stanza whose label matches its own lyric line', () => {
+    const verse1 = stanza('1.1', '1.', 'Were you there', 0);
+    const verse2 = stanza('1.2', null, 'Were you there', 40);
+
+    expect(score._mergePickupStanzas([verse1, verse2]).length).toBe(2);
+  });
+
+  it('should leave a pickup whose next stanza is already numbered', () => {
+    const pickup = stanza('1.1', '2.', 'Were you', 40);
+    const verse2 = stanza('1.2', '3.', 'there when they crucified', 0);
+
+    expect(score._mergePickupStanzas([pickup, verse2]).length).toBe(2);
+  });
+
+  it('should leave a pickup whose label names a different lyric line', () => {
+    const pickup = stanza('1.1', '4.', 'Were you', 40);
+    const verse2 = stanza('1.2', null, 'there when they crucified', 0);
+
+    expect(score._mergePickupStanzas([pickup, verse2]).length).toBe(2);
+  });
+});
+
+
+// ============================================================
+// _normalizeLyricVerseNumbers
+// ============================================================
+describe('_normalizeLyricVerseNumbers()', () => {
+  let score;
+  const parser = new DOMParser();
+
+  /** Minimal MEI: one melody note per lyric line, each with a first syllable. */
+  function buildMei(firstSyllables) {
+    const notes = firstSyllables.map((text, index) =>
+      `<note ch-melody="true"><verse n="${index + 1}"><syl>${text}</syl></verse></note>`
+    ).join('');
+    return parser.parseFromString(`<mei>${notes}</mei>`, 'text/xml');
+  }
+
+  const firstSyl = (mei, n) => mei.querySelector(`verse[n="${n}"] syl`).textContent;
+  const firstLabel = (mei, n) => mei.querySelector(`verse[n="${n}"] label`)?.textContent ?? null;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  it('should split a verse number engraved into the first syllable', () => {
+    // Example: "Venid a Mí" (Spanish Hymns 61), which writes verse 1 as "1.Ve"
+    const mei = buildMei(['1.Ve', '2.Bus']);
+    score._normalizeLyricVerseNumbers(mei);
+
+    expect([firstLabel(mei, 1), firstLabel(mei, 2)]).toEqual(['1.', '2.']);
+    expect([firstSyl(mei, 1), firstSyl(mei, 2)]).toEqual(['Ve', 'Bus']);
+  });
+
+  it('should leave a number that does not match its lyric line in the words', () => {
+    const mei = buildMei(['7.Do']);
+    score._normalizeLyricVerseNumbers(mei);
+
+    expect(firstLabel(mei, 1)).toBeNull();
+    expect(firstSyl(mei, 1)).toBe('7.Do');
+  });
+
+  it('should leave the lyrics alone when the score already labels its verses', () => {
+    const mei = parser.parseFromString(
+      '<mei><note ch-melody="true"><verse n="1"><label>1.</label><syl>2.Do</syl></verse></note></mei>',
+      'text/xml'
+    );
+    score._normalizeLyricVerseNumbers(mei);
+
+    expect(firstSyl(mei, 1)).toBe('2.Do');
+    expect(mei.querySelectorAll('verse label').length).toBe(1);
+  });
+});
+
+
+// ============================================================
 // _getInlineVerseNumbers
 // ============================================================
 describe('_getInlineVerseNumbers()', () => {

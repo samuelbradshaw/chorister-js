@@ -431,10 +431,13 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
     beforeAll(() => { score.setOptions({ expandScore: 'intro' }); });
     afterAll(() => { resetScoreState(score); });
 
-    it('should not create an introduction section (no intro brackets to extract)', () => {
+    it('should create an introduction from the music before the first lyric', () => {
+      // TLL has no intro brackets, but its words start at chord position 12, so the
+      // opening is an introduction in its own right
       const introSection = score._scoreData.meiParsed.querySelector('section[type="introduction"]');
-      // TLL has no intro brackets, so expandScore 'intro' has no introduction to extract
-      expect(introSection).toBeNull();
+      expect(introSection).not.toBeNull();
+      expect(introSection.getAttribute('ch-chord-position').trim().split(/\s+/))
+        .toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']);
     });
 
     it('measure count should remain 24 with expandScore intro (no change for TLL)', () => {
@@ -564,8 +567,40 @@ describe('This Little Light — plain load (no partsTemplate)', { timeout: 30000
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
+
+  // Which lyric line a section's words were read from. The ch-section-id and
+  // ch-lyric-line-id annotations are Chorister's own record of the mapping.
+  const lyricLinesOf = (sectionId) => {
+    const lines = new Set();
+    for (const verse of score._scoreData.meiParsed.querySelectorAll(`verse[ch-section-id="${sectionId}"]`)) {
+      lines.add(verse.getAttribute('ch-lyric-line-id'));
+    }
+    return [...lines];
+  };
+
   it('should still have 2 staves', () => {
     expect(score._scoreData.staffNumbers).toEqual([1, 2]);
+  });
+
+  it('should play an introduction before the first words', () => {
+    // The intro is a section of its own in the expansion, so it carries no lyrics
+    // and never turns up as a stanza — and the words start after it
+    const intro = score._scoreData.sections.find(section => section.type === 'introduction');
+    expect(intro).toBeDefined();
+    expect(intro.annotatedLyrics).toBeFalsy();
+
+    const sung = score._scoreData.sections.filter(section => section.annotatedLyrics);
+    const firstWords = Math.min(...sung[0].chordPositionRanges.map(range => range.start));
+    const introEnd = Math.max(...intro.chordPositionRanges.map(range => range.end));
+    expect(firstWords).toBe(introEnd);
+    expect(firstWords).toBeGreaterThan(0);
+  });
+
+  it('should read its stanzas from more than one lyric line', () => {
+    expect(score._scoreData.hasExpansion).toBe(true);
+    const sung = score._scoreData.sections.filter(section => section.annotatedLyrics);
+    const lines = new Set(sung.flatMap(section => lyricLinesOf(section.sectionId)));
+    expect(lines.size).toBeGreaterThan(1);
   });
 
   it('should have hasRepeatOrJump true', () => {

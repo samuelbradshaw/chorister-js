@@ -685,8 +685,44 @@ describe('It Is Well — default load (no parts/sections)', { timeout: 30000 }, 
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
+
+  // Which lyric line a section's words were read from. The ch-section-id and
+  // ch-lyric-line-id annotations are Chorister's own record of the mapping.
+  const lyricLinesOf = (sectionId) => {
+    const lines = new Set();
+    for (const verse of score._scoreData.meiParsed.querySelectorAll(`verse[ch-section-id="${sectionId}"]`)) {
+      lines.add(verse.getAttribute('ch-lyric-line-id'));
+    }
+    return [...lines];
+  };
+
   it('should still have 3 staves without custom parts', () => {
     expect(score._scoreData.staffNumbers).toEqual([1, 2, 3]);
+  });
+
+  it('should read the verses from the second staff, not the descant above them', () => {
+    // The descant rests until the chorus, so reading the melody from the top staff
+    // would lose all four verses. Lyrics under the second staff identify the layout.
+    expect(score._scoreData.parts.map(part => part.partId))
+      .toEqual(['descant', 'soprano', 'alto', 'tenor', 'bass']);
+
+    const verses = score._scoreData.sections.filter(section => section.type === 'verse');
+    expect(verses.map(section => String(section.marker))).toEqual(['1', '2', '3', '4']);
+    expect(verses.map(section => lyricLinesOf(section.sectionId)))
+      .toEqual([['2.1'], ['2.2'], ['2.3'], ['2.4']]);
+    expect(verses[0].annotatedLyrics).toMatch(/^When peace, like a river/);
+  });
+
+  it('should sing the same chorus after every verse', () => {
+    const sung = score._scoreData.sections.filter(section => section.annotatedLyrics);
+    expect(sung.map(section => section.type))
+      .toEqual(['verse', 'chorus', 'verse', 'chorus', 'verse', 'chorus', 'verse', 'chorus']);
+    // Only the verses are numbered — a chorus is the same words every time
+    expect(sung.map(section => section.marker == null ? null : String(section.marker)))
+      .toEqual(['1', null, '2', null, '3', null, '4', null]);
+
+    const choruses = sung.filter(section => section.type === 'chorus');
+    expect(new Set(choruses.map(section => section.annotatedLyrics)).size).toBe(1);
   });
 
   it('should have intro brackets even without custom sections', () => {

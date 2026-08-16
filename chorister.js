@@ -1114,6 +1114,10 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   // Change cue notes to regular notes so they appear at regular size
   for (const meiElement of this._scoreData.meiParsed.querySelectorAll('[cue="true"]')) meiElement.removeAttribute('cue');
 
+  // Correct syllables that carry a verse number before anything reads them, starting
+  // with the syllable text gathered below
+  this._normalizeLyricVerseNumbers(this._scoreData.meiParsed);
+
   // Gather information about each note and rest
   this._scoreData.notesAndRestsById = {}
   const notesAndRests = this._scoreData.meiParsed.querySelectorAll('note, rest');
@@ -1686,6 +1690,61 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   // Save the complete MEI string
   this._scoreData.meiStringComplete = (new XMLSerializer()).serializeToString(this._scoreData.meiParsed);
   this._updateMei();
+}
+
+// Clean up verse numbers that were engraved as part of a lyric syllable
+// Example: "Venid a Mí" (Spanish Hymns #61)
+const CH_INLINE_VERSE_NUMBER = /^\s*\(?(\d+\s*[.)])\s*/;
+ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
+  if (meiParsed.querySelector('verse label')) return;
+
+  // Every staff carrying lyrics prints its own copy of the numbers and numbers its
+  // own lines from 1, so a staff's lyric lines are read on their own. A line can be
+  // numbered more than once, where a score lays its stanzas out one after another
+  // rather than stacking them — example: "Were You There?" (Hymns for Home and Church)
+  const versesByStaff = new Map();
+  for (const verse of meiParsed.querySelectorAll('verse')) {
+    // Empty verse elements are removed later; one landing first for a line would
+    // cost the staff the number it does carry
+    if (verse.textContent.trim() === '') continue;
+    const staffNumber = verse.closest('staff')?.getAttribute('n') ?? '';
+    const lineNumber = Number.parseInt(verse.getAttribute('n'));
+    if (Number.isNaN(lineNumber)) continue;
+    if (!versesByStaff.has(staffNumber)) versesByStaff.set(staffNumber, new Map());
+    const versesByLineNumber = versesByStaff.get(staffNumber);
+    if (!versesByLineNumber.has(lineNumber)) versesByLineNumber.set(lineNumber, []);
+    versesByLineNumber.get(lineNumber).push(verse);
+  }
+
+  for (const versesByLineNumber of versesByStaff.values()) {
+    // A staff engraves its numbers inline or it doesn't: every line has to start with
+    // its own number for any of them to be read as one, which is what tells a verse
+    // number from a lyric that merely starts with a digit
+    let engravesNumbersInline = true;
+    for (let lineNumber = 1; lineNumber <= versesByLineNumber.size; lineNumber++) {
+      const syl = versesByLineNumber.get(lineNumber)?.[0].querySelector('syl');
+      const match = syl && CH_INLINE_VERSE_NUMBER.exec(syl.textContent);
+      if (!match || Number.parseInt(match[1]) !== lineNumber) {
+        engravesNumbersInline = false;
+        break;
+      }
+    }
+    if (!engravesNumbersInline) continue;
+
+    // Each stanza's number moves out of the syllable it was engraved in, the ones
+    // that start a lyric line and the ones that start a later stanza of it alike
+    for (const verses of versesByLineNumber.values()) {
+      for (const verse of verses) {
+        const syl = verse.querySelector('syl');
+        const match = syl && CH_INLINE_VERSE_NUMBER.exec(syl.textContent);
+        if (!match) continue;
+        const labelElement = meiParsed.createElement('label');
+        labelElement.textContent = match[1].replace(/\s+/g, '');
+        verse.insertBefore(labelElement, verse.firstChild);
+        syl.textContent = syl.textContent.slice(match[0].length);
+      }
+    }
+  }
 }
 
 // Clean up and add metadata to MEI document based on rendering options
@@ -3359,126 +3418,6 @@ ChScore.prototype._getKeySignatures = function (tonality = 'major') {
 
 /********************** Private methods: normalize input data **********************/
 
-// How many syllables the melody sings in this measure, and how many notes the voice
-// below has to sing them with. A piano's right hand doubling a line holds one note
-// under several syllables; a real second voice articulates every one.
-ChScore.prototype._countLowerVoiceNotes = function (melodyLayer, layers) {
-  const sungPositions = Array.from(melodyLayer.querySelectorAll('chord, note'))
-    .filter(element => element.matches('chord') || !element.closest('chord'))
-    .filter(element => element.querySelector('verse'));
-
-  // Each verse counted on its own: stacked verses break words differently, and the
-  // sparsest line is what the voice below has to keep up with.
-  const lineNumbers = new Set();
-  for (const verse of melodyLayer.querySelectorAll('verse')) {
-    lineNumbers.add(verse.getAttribute('n') ?? '1');
-  }
-  // Syllable positions, not verse elements: a note carrying four stanzas is
-  // still one place where a syllable is sung, and a syllable held over several
-  // notes is one place too
-  const syllablePositions = sungPositions.length === 0 ? 0
-    : Math.min(...Array.from(lineNumbers, lineNumber =>
-        sungPositions.filter(element => element.querySelector(`verse[n="${lineNumber}"]`)).length));
-
-  // The lower voice sounds once per chord it shares with the melody, plus once
-  // per note of its own
-  let lowerVoiceNotes = melodyLayer.querySelectorAll('chord').length;
-  // Rests count wherever they fall, the melody layer included: on a staff written in
-  // chords a rest silences every voice on it, and a part entering or leaving a tacet
-  // passage mid-measure is marked by nothing else.
-  let secondVoiceRests = melodyLayer.querySelectorAll('rest, mRest, space').length;
-  for (const layer of layers) {
-    if (layer === melodyLayer) continue;
-    const chordNotes = layer.querySelectorAll('chord note').length;
-    lowerVoiceNotes += layer.querySelectorAll('note, chord').length - chordNotes;
-    secondVoiceRests += layer.querySelectorAll('rest, mRest, space').length;
-  }
-
-  // A voice written a rest here has somewhere to be and isn't singing this bar —
-  // which is a part resting, not a part missing. Where nothing is written for it
-  // at all, there was never a second voice to rest.
-  const secondVoiceResting = lowerVoiceNotes === 0 && secondVoiceRests > 0;
-
-  return {
-    syllablePositions,
-    lowerVoiceNotes,
-    // What the voice has to answer for the words above: the notes it sings, and
-    // the rests that say it isn't meant to be singing them
-    secondVoiceEvents: lowerVoiceNotes + secondVoiceRests,
-    secondVoiceResting,
-  };
-}
-
-// Which voices a clef puts on the staff: 'G' treble, 'F' bass, 'C' men's voices. A
-// treble clef marked to sound an octave lower is how modern engraving writes a tenor
-// line, so it says what a C clef says — no sopranos — and is read the same way.
-ChScore.prototype._getClefRegister = function (clef) {
-  const shape = clef?.getAttribute('shape') ?? null;
-  const soundsOctaveLower = clef?.getAttribute('dis') === '8'
-    && clef?.getAttribute('dis.place') === 'below';
-  return shape === 'G' && soundsOctaveLower ? 'C' : shape;
-}
-
-// Whether a silent staff has notes enough to be singing the words above it. Only the
-// measures it plays in count: a staff resting under a whole verse isn't failing to
-// sing it — it's tacet, and its rests say so.
-const CH_COVERED_FRACTION = 0.95;
-ChScore.prototype._coversWordsAbove = function (staff, singingStaff) {
-  let secondVoiceNotes = 0;
-  let syllablePositions = 0;
-  for (let mi = 0; mi < staff.soundsByMeasure.length; mi++) {
-    if (!staff.soundsByMeasure[mi]) continue;
-    const syllables = singingStaff.syllablesByMeasure[mi] ?? 0;
-    // A measure counts as covered at most once: spare notes in one bar say
-    // nothing about a bar where the voice came up short
-    secondVoiceNotes += Math.min(staff.secondVoiceByMeasure[mi] ?? 0, syllables);
-    syllablePositions += syllables;
-  }
-  return secondVoiceNotes >= CH_COVERED_FRACTION * syllablePositions;
-}
-
-// How often each number of voices sounds together across one staff of one measure,
-// as a tally keyed by that number. Kept per measure so a range of them can be totalled
-// without going back to the engraving — see _getStaffMeasureData.
-ChScore.prototype._countMeasureVoices = function (layers, counts = {}) {
-  const collect = (element, spans, state) => {
-    for (const child of element.children) {
-      if (child.matches('note, chord, rest, space, mRest')) {
-        const notes = child.matches('chord') ? child.querySelectorAll('note').length
-                    : child.matches('note') ? 1 : 0;
-        const duration = Number.parseInt(child.getAttribute('dur.ppq') ?? '0') || 0;
-        if (notes > 0) spans.push({ start: state.time, end: state.time + duration, notes });
-        state.time += duration;
-      } else if (child.matches('beam, tuplet, graceGrp, bTrem, fTrem')) {
-        collect(child, spans, state);
-      }
-    }
-  };
-
-  const spans = [];
-  for (const layer of layers) collect(layer, spans, { time: 0 });
-
-  // Sweep the spans in time order rather than re-totalling them at every onset. A
-  // span sounds through an onset once started and before ended, so both its start and
-  // its end apply at any onset at or after them — no ordering left to settle.
-  const events = [];
-  for (const span of spans) {
-    if (span.end <= span.start) continue;
-    events.push({ time: span.start, delta: span.notes });
-    events.push({ time: span.end, delta: -span.notes });
-  }
-  events.sort((a, b) => a.time - b.time);
-
-  const onsets = [...new Set(spans.map(span => span.start))].sort((a, b) => a - b);
-  let next = 0;
-  let sounding = 0;
-  for (const onset of onsets) {
-    while (next < events.length && events[next].time <= onset) sounding += events[next++].delta;
-    if (sounding > 0) counts[sounding] = (counts[sounding] ?? 0) + 1;
-  }
-  return counts;
-}
-
 // Where every chord position and measure starts, and which one each note belongs to,
 // read from the Verovio timemap. Naming the place a song changes voicing needs this
 // before the main loop can run, since that loop needs the parts this has yet to derive.
@@ -3513,6 +3452,165 @@ ChScore.prototype._indexChordPositions = function (vrvTimemap) {
   return { qstamps: qstamps, byElementId: byElementId, measures: measures };
 }
 
+ChScore.prototype._getInlineVerseNumbers = function (meiParsed) {
+  const verseNumbers = [];
+  let hasVerseNumberMismatch = false;
+  let counter = 1;
+  // Get verse numbers based on <label> elements
+  const verseLabels = meiParsed.querySelectorAll('verse label');
+  const lyricLinesSeen = new Set();
+  for (const verseLabel of verseLabels) {
+    const verse = verseLabel.closest('verse');
+    const verseNumber = Number.parseInt(this._cleanMarker(verseLabel.textContent));
+    const lineNumber = Number.parseInt(verse.getAttribute('n'));
+    // Only the first label of a lyric line names the line. A score that lays its
+    // stanzas out one after another numbers the same line again further in, and that
+    // number is the stanza's, not the line's.
+    const lyricLineId = `${verse.closest('staff')?.getAttribute('n') ?? ''}.${lineNumber}`;
+    if (lyricLinesSeen.has(lyricLineId)) continue;
+    lyricLinesSeen.add(lyricLineId);
+    // Skip duplicate verse numbers, as in "Were You There", HHC
+    if (verseNumbers.includes(verseNumber)) continue;
+    if (verseNumber === lineNumber && verseNumber === counter) {
+      verseNumbers.push(verseNumber);
+      counter++;
+    } else {
+      hasVerseNumberMismatch = true;
+      break;
+    }
+  }
+  // Handle single-verse songs where the verse doesn't have a label
+  if (verseNumbers.length === 0) verseNumbers.push(1);
+  return hasVerseNumberMismatch ? [] : verseNumbers;
+}
+
+ChScore.prototype._normalizeChordSets = function () {
+  // Add default chord set
+  const harmElements = this._scoreData.meiParsed.querySelectorAll('harm');
+  if (harmElements.length > 0) {
+    const defaultChordSet = {
+      chordSetId: 'default',
+      name: 'Default',
+      chordPositionRefs: {},
+      svgSymbolsUrl: null,
+      chordInfoList: [],
+    }
+    for (const harmElement of harmElements) {
+      const chordInfo = {
+        prefix: null,
+        text: harmElement.textContent.trim().replace('♭', 'b').replace('♯', '#'),
+        svgSymbolId: null,
+        measureId: harmElement.closest('measure').getAttribute('xml:id'),
+        tstamp: harmElement.getAttribute('tstamp'),
+      }
+      defaultChordSet.chordInfoList.push(chordInfo);
+      if (harmElement.getAttribute('ch-chord-position')) {
+        const chordPosition = Number.parseInt(harmElement.getAttribute('ch-chord-position'));
+        defaultChordSet.chordPositionRefs[chordPosition] = chordInfo;
+      }
+      harmElement.remove();
+    }
+    this._scoreData.chordSets.unshift(defaultChordSet);
+  }
+  this._scoreData.chordSetsById = {};
+  for (const chordSet of this._scoreData.chordSets) {
+    this._scoreData.chordSetsById[chordSet.chordSetId] = chordSet;
+  }
+}
+
+
+/********************** Private methods: normalize parts **********************/
+
+ChScore.prototype._normalizeParts = function (chordPositionIndex) {
+  // Parts supplied by the caller win; otherwise build them from a template,
+  // deriving one from the engraving when none was given
+  if (this._scoreData.parts.length === 0) {
+    this._scoreData.partsTemplate ||= this._derivePartsTemplate(chordPositionIndex);
+    this._scoreData.parts = this._scoreData.partsTemplate ? this._buildPartsFromTemplate(
+      this._scoreData.partsTemplate, this._scoreData.staffNumbers,
+      this._scoreData.numChordPositions, this._scoreData.hasLyrics
+    ) : [
+      {
+        partId: 'melody',
+        name: 'Melody',
+        isVocal: true,
+        placement: 'auto',
+        chordPositionRefs: {
+          0: {
+            isMelody: true,
+            staffNumbers: [1],
+            lyricLineIds: null,
+          },
+        },
+      },
+      {
+        partId: 'accompaniment',
+        name: 'Accompaniment',
+        isVocal: false,
+        placement: 'full',
+        chordPositionRefs: {
+          0: {
+            isMelody: false,
+            staffNumbers: this._scoreData.staffNumbers,
+            lyricLineIds: null,
+          },
+        },
+      },
+    ];
+  }
+
+  this._scoreData.partsById = {};
+  for (const part of this._scoreData.parts) {
+    this._scoreData.partsById[part.partId] = part;
+  }
+}
+
+// Derive a likely parts template heuristically, from what each staff looks like
+ChScore.prototype._derivePartsTemplate = function (chordPositionIndex) {
+  // Nothing is sung, so every staff is an instrument — answered without reading the
+  // engraving, which also lets this be asked of a score that has none
+  if (!this._scoreData.hasLyrics) return 'I';
+
+  // Staves as a template with no chord position on it. Nothing sung anywhere is one 'I'
+  // for the score, not one per staff.
+  const joinPartsTemplate = staves => staves.some(staff => staff.hasLyrics)
+    ? staves.map(staff => staff.partsChars).join('+')
+    : 'I';
+
+  const measureData = this._getStaffMeasureData();
+  const wholeStaves = this._deriveStaffPartsChars(measureData);
+  const whole = joinPartsTemplate(wholeStaves);
+
+  // A song announcing this many changes is using its directions for something else
+  const CH_MAX_SEGMENT_BOUNDARIES = 6;
+  const boundaries = this._getPartsSegmentBoundaries(measureData, wholeStaves, chordPositionIndex);
+  if (boundaries.length < 2 || boundaries.length > CH_MAX_SEGMENT_BOUNDARIES) return whole;
+
+  // What belongs to the song rather than to a section of it: who sings (a descant joining
+  // for the last verse sings throughout) and which staff carries the tune (a section where
+  // the melody rests doesn't hand it to the descant above)
+  const songFacts = {
+    singingStaffNumbers: new Set(wholeStaves.filter(staff => staff.hasLyrics).map(staff => staff.staffNumber)),
+    melodyStaffNumber: wholeStaves.find(staff => staff.isMelodyStaff)?.staffNumber ?? null,
+  };
+
+  const segments = [];
+  for (let b = 0; b < boundaries.length; b++) {
+    const endMeasure = boundaries[b + 1]?.measureIndex ?? Infinity;
+    const template = joinPartsTemplate(this._deriveStaffPartsChars(
+      measureData, boundaries[b].measureIndex, endMeasure, songFacts));
+    const previous = segments.at(-1);
+    // A section that reads the same as the one before it wasn't a change, and an
+    // interlude nobody sings says nothing about how the singing around it is voiced
+    if (previous && (template === previous.template || template === 'I')) continue;
+    segments.push({ chordPosition: boundaries[b].chordPosition, template: template });
+  }
+
+  // Nothing changed after all, so answer for the whole song
+  if (segments.length < 2) return whole;
+  return segments.map(segment => `${segment.chordPosition}:${segment.template}`).join('; ');
+}
+
 // What each staff holds in each measure, read once for the whole score. A song that
 // changes voicing is read a section at a time, so _getStaffLayoutInfo totals these over
 // whatever range it's asked about rather than going back to the engraving each time.
@@ -3539,8 +3637,8 @@ ChScore.prototype._getStaffMeasureData = function () {
       lowerVoiceCantSing: 0,
     })),
   }));
-  const byStaffNumber = new Map(byStaff.map(staffData => [staffData.staffNumber, staffData]));
 
+  const byStaffNumber = new Map(byStaff.map(staffData => [staffData.staffNumber, staffData]));
   for (let mi = 0; mi < measures.length; mi++) {
     for (const staff of measures[mi].querySelectorAll('staff')) {
       const staffData = byStaffNumber.get(Number.parseInt(staff.getAttribute('n')));
@@ -3580,97 +3678,6 @@ ChScore.prototype._getStaffMeasureData = function () {
   }
 
   return { measures: measures, byStaff: byStaff };
-}
-
-// What each staff looks like over a range of measures. Chord positions aren't annotated
-// yet, so a staff's first lyric is located by the measure it falls in. The range is the
-// whole score unless a section is read on its own, when `songFacts` supplies the two
-// things a section must not answer for itself: who sings, and who carries the tune.
-ChScore.prototype._getStaffLayoutInfo = function (measureData, startMeasure = 0, endMeasure = Infinity, songFacts = null) {
-  const staves = [];
-  const end = Math.min(endMeasure, measureData.measures.length);
-
-  for (const staffData of measureData.byStaff) {
-    const voiceCounts = {};
-    let melodyLayerNotes = 0;
-    let melodyLayerChordNotes = 0;
-    let firstLyricMeasure = null;
-    let measuresLowerVoiceCantSing = 0;
-    let sungMeasures = 0;
-    let measuresShortOfTwoParts = 0;
-    // Kept at each measure's own index, so a staff that rests through a passage can be
-    // compared with the one above it over the measures it plays. _coversWordsAbove skips
-    // the gaps, which is what keeps a section's reading to the measures in it.
-    const syllablesByMeasure = [];
-    const secondVoiceByMeasure = [];
-    const soundsByMeasure = [];
-
-    for (let mi = startMeasure; mi < end; mi++) {
-      const measure = staffData.byMeasure[mi];
-      for (const [voices, count] of Object.entries(measure.voiceCounts)) {
-        voiceCounts[voices] = (voiceCounts[voices] ?? 0) + count;
-      }
-      melodyLayerNotes += measure.melodyLayerNotes;
-      melodyLayerChordNotes += measure.melodyLayerChordNotes;
-      if (measure.syllables) syllablesByMeasure[mi] = measure.syllables;
-      if (measure.secondVoice) secondVoiceByMeasure[mi] = measure.secondVoice;
-      if (measure.sounds) soundsByMeasure[mi] = true;
-      sungMeasures += measure.sung;
-      measuresShortOfTwoParts += measure.shortOfTwoParts;
-      measuresLowerVoiceCantSing += measure.lowerVoiceCantSing;
-      if (firstLyricMeasure === null && measure.hasVerse) firstLyricMeasure = mi;
-    }
-
-    // Whether the staff is written as chords, rather than merely containing one:
-    // a line with a couple of divisi notes, or an alternate note for a second
-    // time through, is still one part
-    const hasChordsInMelodyLayer = melodyLayerChordNotes * 2 > melodyLayerNotes;
-
-    // How many voices share the staff, by how many notes sound together — two can share
-    // a chord in one bar and split into layers in the next. The commonest number wins
-    // rather than the largest, so one divisi chord in a cadence doesn't make it three.
-    const voices = Object.keys(voiceCounts).map(Number);
-    const numParts = voices.length === 0 ? 1
-      : voices.reduce((best, n) => voiceCounts[n] > voiceCounts[best] ? n : best, voices[0]);
-
-    const CH_UNSINGABLE_MEASURES = 3;
-    staves.push({
-      staffNumber: staffData.staffNumber,
-      clef: staffData.clef,
-      hasLyrics: songFacts
-        ? songFacts.singingStaffNumbers.has(staffData.staffNumber)
-        : firstLyricMeasure !== null,
-      firstLyricMeasure: firstLyricMeasure,
-      hasChordsInMelodyLayer: hasChordsInMelodyLayer,
-      // The staff is harmonized by an instrument, not by other singers — read per
-      // section, since that changing is what "0:Unison; 78:SATB" describes
-      isAccompanied: measuresLowerVoiceCantSing >= CH_UNSINGABLE_MEASURES,
-      // Enough notes under the melody, everywhere it sings, for a second voice to
-      // sing every word with it — whether as chords or as a layer of its own
-      hasTwoPartCoverage: sungMeasures > 0 && measuresShortOfTwoParts === 0,
-      syllablesByMeasure: syllablesByMeasure,
-      // What a second voice on this staff would have to sing with, whether the
-      // staff carries words of its own or not, and where it plays at all
-      secondVoiceByMeasure: secondVoiceByMeasure,
-      soundsByMeasure: soundsByMeasure,
-      numParts: numParts,
-      grandStaffId: staffData.grandStaffId,
-      isMelodyStaff: false,
-      partsChars: null,
-    });
-  }
-
-  // The melody is on the staff that starts singing first. Staves above it sing
-  // over it rather than carrying it, whatever number they happen to be — an
-  // introduction on its own staves can leave the melody well down the system.
-  const singingStaves = staves.filter(staff => staff.hasLyrics);
-  const melodyStaff = songFacts
-    ? staves.find(staff => staff.staffNumber === songFacts.melodyStaffNumber)
-    : singingStaves.reduce((earliest, staff) =>
-      staff.firstLyricMeasure < earliest.firstLyricMeasure ? staff : earliest, singingStaves[0]);
-  if (melodyStaff) melodyStaff.isMelodyStaff = true;
-
-  return staves;
 }
 
 // Work out heuristically what each staff holds over a range of measures, as staves with
@@ -3834,6 +3841,97 @@ ChScore.prototype._deriveStaffPartsChars = function (measureData, startMeasure =
   return staves;
 }
 
+// What each staff looks like over a range of measures. Chord positions aren't annotated
+// yet, so a staff's first lyric is located by the measure it falls in. The range is the
+// whole score unless a section is read on its own, when `songFacts` supplies the two
+// things a section must not answer for itself: who sings, and who carries the tune.
+ChScore.prototype._getStaffLayoutInfo = function (measureData, startMeasure = 0, endMeasure = Infinity, songFacts = null) {
+  const staves = [];
+  const end = Math.min(endMeasure, measureData.measures.length);
+
+  for (const staffData of measureData.byStaff) {
+    const voiceCounts = {};
+    let melodyLayerNotes = 0;
+    let melodyLayerChordNotes = 0;
+    let firstLyricMeasure = null;
+    let measuresLowerVoiceCantSing = 0;
+    let sungMeasures = 0;
+    let measuresShortOfTwoParts = 0;
+    // Kept at each measure's own index, so a staff that rests through a passage can be
+    // compared with the one above it over the measures it plays. _coversWordsAbove skips
+    // the gaps, which is what keeps a section's reading to the measures in it.
+    const syllablesByMeasure = [];
+    const secondVoiceByMeasure = [];
+    const soundsByMeasure = [];
+
+    for (let mi = startMeasure; mi < end; mi++) {
+      const measure = staffData.byMeasure[mi];
+      for (const [voices, count] of Object.entries(measure.voiceCounts)) {
+        voiceCounts[voices] = (voiceCounts[voices] ?? 0) + count;
+      }
+      melodyLayerNotes += measure.melodyLayerNotes;
+      melodyLayerChordNotes += measure.melodyLayerChordNotes;
+      if (measure.syllables) syllablesByMeasure[mi] = measure.syllables;
+      if (measure.secondVoice) secondVoiceByMeasure[mi] = measure.secondVoice;
+      if (measure.sounds) soundsByMeasure[mi] = true;
+      sungMeasures += measure.sung;
+      measuresShortOfTwoParts += measure.shortOfTwoParts;
+      measuresLowerVoiceCantSing += measure.lowerVoiceCantSing;
+      if (firstLyricMeasure === null && measure.hasVerse) firstLyricMeasure = mi;
+    }
+
+    // Whether the staff is written as chords, rather than merely containing one:
+    // a line with a couple of divisi notes, or an alternate note for a second
+    // time through, is still one part
+    const hasChordsInMelodyLayer = melodyLayerChordNotes * 2 > melodyLayerNotes;
+
+    // How many voices share the staff, by how many notes sound together — two can share
+    // a chord in one bar and split into layers in the next. The commonest number wins
+    // rather than the largest, so one divisi chord in a cadence doesn't make it three.
+    const voices = Object.keys(voiceCounts).map(Number);
+    const numParts = voices.length === 0 ? 1
+      : voices.reduce((best, n) => voiceCounts[n] > voiceCounts[best] ? n : best, voices[0]);
+
+    const CH_UNSINGABLE_MEASURES = 3;
+    staves.push({
+      staffNumber: staffData.staffNumber,
+      clef: staffData.clef,
+      hasLyrics: songFacts
+        ? songFacts.singingStaffNumbers.has(staffData.staffNumber)
+        : firstLyricMeasure !== null,
+      firstLyricMeasure: firstLyricMeasure,
+      hasChordsInMelodyLayer: hasChordsInMelodyLayer,
+      // The staff is harmonized by an instrument, not by other singers — read per
+      // section, since that changing is what "0:Unison; 78:SATB" describes
+      isAccompanied: measuresLowerVoiceCantSing >= CH_UNSINGABLE_MEASURES,
+      // Enough notes under the melody, everywhere it sings, for a second voice to
+      // sing every word with it — whether as chords or as a layer of its own
+      hasTwoPartCoverage: sungMeasures > 0 && measuresShortOfTwoParts === 0,
+      syllablesByMeasure: syllablesByMeasure,
+      // What a second voice on this staff would have to sing with, whether the
+      // staff carries words of its own or not, and where it plays at all
+      secondVoiceByMeasure: secondVoiceByMeasure,
+      soundsByMeasure: soundsByMeasure,
+      numParts: numParts,
+      grandStaffId: staffData.grandStaffId,
+      isMelodyStaff: false,
+      partsChars: null,
+    });
+  }
+
+  // The melody is on the staff that starts singing first. Staves above it sing
+  // over it rather than carrying it, whatever number they happen to be — an
+  // introduction on its own staves can leave the melody well down the system.
+  const singingStaves = staves.filter(staff => staff.hasLyrics);
+  const melodyStaff = songFacts
+    ? staves.find(staff => staff.staffNumber === songFacts.melodyStaffNumber)
+    : singingStaves.reduce((earliest, staff) =>
+      staff.firstLyricMeasure < earliest.firstLyricMeasure ? staff : earliest, singingStaves[0]);
+  if (melodyStaff) melodyStaff.isMelodyStaff = true;
+
+  return staves;
+}
+
 // Where the song might change its voicing, from the directions over the staves. A change
 // is announced — "Harmony", "Unison", "Sop 1" — but in whatever words the engraver chose,
 // so every direction is a candidate; sections that read the same are merged again.
@@ -3897,96 +3995,6 @@ ChScore.prototype._getPartsSegmentBoundaries = function (measureData, wholeStave
     const next = boundaries[b + 1]?.measureIndex ?? measureData.measures.length;
     return b === 0 || next - boundary.measureIndex >= CH_MIN_SEGMENT_MEASURES;
   });
-}
-
-// Derive a likely parts template heuristically, from what each staff looks like
-ChScore.prototype._derivePartsTemplate = function (chordPositionIndex) {
-  // Nothing is sung, so every staff is an instrument — answered without reading the
-  // engraving, which also lets this be asked of a score that has none
-  if (!this._scoreData.hasLyrics) return 'I';
-
-  // Staves as a template with no chord position on it. Nothing sung anywhere is one 'I'
-  // for the score, not one per staff.
-  const joinPartsTemplate = staves => staves.some(staff => staff.hasLyrics)
-    ? staves.map(staff => staff.partsChars).join('+')
-    : 'I';
-
-  const measureData = this._getStaffMeasureData();
-  const wholeStaves = this._deriveStaffPartsChars(measureData);
-  const whole = joinPartsTemplate(wholeStaves);
-
-  // A song announcing this many changes is using its directions for something else
-  const CH_MAX_SEGMENT_BOUNDARIES = 6;
-  const boundaries = this._getPartsSegmentBoundaries(measureData, wholeStaves, chordPositionIndex);
-  if (boundaries.length < 2 || boundaries.length > CH_MAX_SEGMENT_BOUNDARIES) return whole;
-
-  // What belongs to the song rather than to a section of it: who sings (a descant joining
-  // for the last verse sings throughout) and which staff carries the tune (a section where
-  // the melody rests doesn't hand it to the descant above)
-  const songFacts = {
-    singingStaffNumbers: new Set(wholeStaves.filter(staff => staff.hasLyrics).map(staff => staff.staffNumber)),
-    melodyStaffNumber: wholeStaves.find(staff => staff.isMelodyStaff)?.staffNumber ?? null,
-  };
-
-  const segments = [];
-  for (let b = 0; b < boundaries.length; b++) {
-    const endMeasure = boundaries[b + 1]?.measureIndex ?? Infinity;
-    const template = joinPartsTemplate(this._deriveStaffPartsChars(
-      measureData, boundaries[b].measureIndex, endMeasure, songFacts));
-    const previous = segments.at(-1);
-    // A section that reads the same as the one before it wasn't a change, and an
-    // interlude nobody sings says nothing about how the singing around it is voiced
-    if (previous && (template === previous.template || template === 'I')) continue;
-    segments.push({ chordPosition: boundaries[b].chordPosition, template: template });
-  }
-
-  // Nothing changed after all, so answer for the whole song
-  if (segments.length < 2) return whole;
-  return segments.map(segment => `${segment.chordPosition}:${segment.template}`).join('; ');
-}
-
-ChScore.prototype._normalizeParts = function (chordPositionIndex) {
-  // Parts supplied by the caller win; otherwise build them from a template,
-  // deriving one from the engraving when none was given
-  if (this._scoreData.parts.length === 0) {
-    this._scoreData.partsTemplate ||= this._derivePartsTemplate(chordPositionIndex);
-    this._scoreData.parts = this._scoreData.partsTemplate ? this._buildPartsFromTemplate(
-      this._scoreData.partsTemplate, this._scoreData.staffNumbers,
-      this._scoreData.numChordPositions, this._scoreData.hasLyrics
-    ) : [
-      {
-        partId: 'melody',
-        name: 'Melody',
-        isVocal: true,
-        placement: 'auto',
-        chordPositionRefs: {
-          0: {
-            isMelody: true,
-            staffNumbers: [1],
-            lyricLineIds: null,
-          },
-        },
-      },
-      {
-        partId: 'accompaniment',
-        name: 'Accompaniment',
-        isVocal: false,
-        placement: 'full',
-        chordPositionRefs: {
-          0: {
-            isMelody: false,
-            staffNumbers: this._scoreData.staffNumbers,
-            lyricLineIds: null,
-          },
-        },
-      },
-    ];
-  }
-
-  this._scoreData.partsById = {};
-  for (const part of this._scoreData.parts) {
-    this._scoreData.partsById[part.partId] = part;
-  }
 }
 
 ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumbers, numChordPositions, hasLyrics) {
@@ -4145,8 +4153,130 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
   return parts;
 }
 
-ChScore.prototype._normalizeSections = function () {
+// How often each number of voices sounds together across one staff of one measure,
+// as a tally keyed by that number. Kept per measure so a range of them can be totalled
+// without going back to the engraving — see _getStaffMeasureData.
+ChScore.prototype._countMeasureVoices = function (layers, counts = {}) {
+  const collect = (element, spans, state) => {
+    for (const child of element.children) {
+      if (child.matches('note, chord, rest, space, mRest')) {
+        const notes = child.matches('chord') ? child.querySelectorAll('note').length
+                    : child.matches('note') ? 1 : 0;
+        const duration = Number.parseInt(child.getAttribute('dur.ppq') ?? '0') || 0;
+        if (notes > 0) spans.push({ start: state.time, end: state.time + duration, notes });
+        state.time += duration;
+      } else if (child.matches('beam, tuplet, graceGrp, bTrem, fTrem')) {
+        collect(child, spans, state);
+      }
+    }
+  };
 
+  const spans = [];
+  for (const layer of layers) collect(layer, spans, { time: 0 });
+
+  // Sweep the spans in time order rather than re-totalling them at every onset. A
+  // span sounds through an onset once started and before ended, so both its start and
+  // its end apply at any onset at or after them — no ordering left to settle.
+  const events = [];
+  for (const span of spans) {
+    if (span.end <= span.start) continue;
+    events.push({ time: span.start, delta: span.notes });
+    events.push({ time: span.end, delta: -span.notes });
+  }
+  events.sort((a, b) => a.time - b.time);
+
+  const onsets = [...new Set(spans.map(span => span.start))].sort((a, b) => a - b);
+  let next = 0;
+  let sounding = 0;
+  for (const onset of onsets) {
+    while (next < events.length && events[next].time <= onset) sounding += events[next++].delta;
+    if (sounding > 0) counts[sounding] = (counts[sounding] ?? 0) + 1;
+  }
+  return counts;
+}
+
+// How many syllables the melody sings in this measure, and how many notes the voice
+// below has to sing them with. A piano's right hand doubling a line holds one note
+// under several syllables; a real second voice articulates every one.
+ChScore.prototype._countLowerVoiceNotes = function (melodyLayer, layers) {
+  const sungPositions = Array.from(melodyLayer.querySelectorAll('chord, note'))
+    .filter(element => element.matches('chord') || !element.closest('chord'))
+    .filter(element => element.querySelector('verse'));
+
+  // Each verse counted on its own: stacked verses break words differently, and the
+  // sparsest line is what the voice below has to keep up with.
+  const lineNumbers = new Set();
+  for (const verse of melodyLayer.querySelectorAll('verse')) {
+    lineNumbers.add(verse.getAttribute('n') ?? '1');
+  }
+  // Syllable positions, not verse elements: a note carrying four stanzas is
+  // still one place where a syllable is sung, and a syllable held over several
+  // notes is one place too
+  const syllablePositions = sungPositions.length === 0 ? 0
+    : Math.min(...Array.from(lineNumbers, lineNumber =>
+        sungPositions.filter(element => element.querySelector(`verse[n="${lineNumber}"]`)).length));
+
+  // The lower voice sounds once per chord it shares with the melody, plus once
+  // per note of its own
+  let lowerVoiceNotes = melodyLayer.querySelectorAll('chord').length;
+  // Rests count wherever they fall, the melody layer included: on a staff written in
+  // chords a rest silences every voice on it, and a part entering or leaving a tacet
+  // passage mid-measure is marked by nothing else.
+  let secondVoiceRests = melodyLayer.querySelectorAll('rest, mRest, space').length;
+  for (const layer of layers) {
+    if (layer === melodyLayer) continue;
+    const chordNotes = layer.querySelectorAll('chord note').length;
+    lowerVoiceNotes += layer.querySelectorAll('note, chord').length - chordNotes;
+    secondVoiceRests += layer.querySelectorAll('rest, mRest, space').length;
+  }
+
+  // A voice written a rest here has somewhere to be and isn't singing this bar —
+  // which is a part resting, not a part missing. Where nothing is written for it
+  // at all, there was never a second voice to rest.
+  const secondVoiceResting = lowerVoiceNotes === 0 && secondVoiceRests > 0;
+
+  return {
+    syllablePositions,
+    lowerVoiceNotes,
+    // What the voice has to answer for the words above: the notes it sings, and
+    // the rests that say it isn't meant to be singing them
+    secondVoiceEvents: lowerVoiceNotes + secondVoiceRests,
+    secondVoiceResting,
+  };
+}
+
+// Whether a silent staff has notes enough to be singing the words above it. Only the
+// measures it plays in count: a staff resting under a whole verse isn't failing to
+// sing it — it's tacet, and its rests say so.
+const CH_COVERED_FRACTION = 0.95;
+ChScore.prototype._coversWordsAbove = function (staff, singingStaff) {
+  let secondVoiceNotes = 0;
+  let syllablePositions = 0;
+  for (let mi = 0; mi < staff.soundsByMeasure.length; mi++) {
+    if (!staff.soundsByMeasure[mi]) continue;
+    const syllables = singingStaff.syllablesByMeasure[mi] ?? 0;
+    // A measure counts as covered at most once: spare notes in one bar say
+    // nothing about a bar where the voice came up short
+    secondVoiceNotes += Math.min(staff.secondVoiceByMeasure[mi] ?? 0, syllables);
+    syllablePositions += syllables;
+  }
+  return secondVoiceNotes >= CH_COVERED_FRACTION * syllablePositions;
+}
+
+// Which voices a clef puts on the staff: 'G' treble, 'F' bass, 'C' men's voices. A
+// treble clef marked to sound an octave lower is how modern engraving writes a tenor
+// line, so it says what a C clef says — no sopranos — and is read the same way.
+ChScore.prototype._getClefRegister = function (clef) {
+  const shape = clef?.getAttribute('shape') ?? null;
+  const soundsOctaveLower = clef?.getAttribute('dis') === '8'
+    && clef?.getAttribute('dis.place') === 'below';
+  return shape === 'G' && soundsOctaveLower ? 'C' : shape;
+}
+
+
+/********************** Private methods: normalize sections **********************/
+
+ChScore.prototype._normalizeSections = function () {
   // Generate sections based on lyric stanzas
   const generateSectionsFromLyricStanzas = (lyricStanzas, staffNumbers) => {
     const sections = [];
@@ -4195,7 +4325,6 @@ ChScore.prototype._normalizeSections = function () {
   this._scoreData.hasRepeatOrJump = !!this._scoreData.meiParsed.querySelector('repeatMark, coda, segno, ending, measure:is([left="rptstart"], [left="rptboth"], [right="rptend"], [right="rptboth"]), dir:is([type="coda"], [type="tocoda"], [type="segno"], [type="dalsegno"], [type="dacapo"], [type="fine"])')
 
   let hasPrebuiltSections = this._scoreData.sections.length > 0;
-  this._normalizeLyricVerseNumbers(this._scoreData.meiParsed);
   const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed);
   const introBracketElements = this._scoreData.meiParsed.querySelectorAll('[ch-intro-bracket]');
   const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionElement(this._scoreData.meiParsed, verseNumbers.length, introBracketElements.length > 0, this._scoreData.hasRepeatOrJump);
@@ -4220,11 +4349,16 @@ ChScore.prototype._normalizeSections = function () {
     }
   }
 
-  // Get sequential lyric chord position ranges
+  // Get sequential lyric chord position ranges. Ranges that came from a section
+  // carry its type, and the first one is marked as starting it, so the stanzas
+  // built from them line up with the sections they came from.
   const lyricChordPositionRanges = [];
   if (otherSections.length > 0) {
     for (const sectionInfo of otherSections) {
-      for (const cpr of sectionInfo.chordPositionRanges) lyricChordPositionRanges.push([cpr.start, cpr.end]);
+      for (let cpr = 0; cpr < sectionInfo.chordPositionRanges.length; cpr++) {
+        const chordPositionRange = sectionInfo.chordPositionRanges[cpr];
+        lyricChordPositionRanges.push([chordPositionRange.start, chordPositionRange.end, sectionInfo.type, cpr === 0]);
+      }
     }
   } else if (this._scoreData.hasExpansion) {
     const expansion = this._scoreData.meiParsed.querySelector('expansion[plist]');
@@ -4256,6 +4390,19 @@ ChScore.prototype._normalizeSections = function () {
     }
   }
 
+  // A stanza that isn't sung from the staff: a lyric line playback never reached, or
+  // a verse printed under the music. The shape is the same either way.
+  const newSectionBelow = (counter, { type, name, marker, annotatedLyrics, chordPositionRanges = [] }) => ({
+    sectionId: `below-${counter}`,
+    type: type,
+    name: name,
+    marker: marker,
+    placement: 'below',
+    pauseAfter: false,
+    chordPositionRanges: chordPositionRanges,
+    annotatedLyrics: annotatedLyrics,
+  });
+
   // Add annotated lyrics to sections
   let sectionBelowCounter = 0;
   if (lyricStanzas.length > 0) {
@@ -4265,21 +4412,32 @@ ChScore.prototype._normalizeSections = function () {
       if (section?.type === lyricStanza.type && !section.annotatedLyrics) {
         section.annotatedLyrics = lyricStanza.annotatedLyrics;
       } else if (!section) {
-        otherSections.push({
-          sectionId: `below-${sectionBelowCounter}`,
-          type: lyricStanza.type,
-          name: lyricStanza.name,
-          marker: lyricStanza.marker,
-          placement: 'below',
-          pauseAfter: false,
-          chordPositionRanges: lyricStanza.chordPositionRanges,
-          annotatedLyrics: lyricStanza.annotatedLyrics,
-        });
+        otherSections.push(newSectionBelow(sectionBelowCounter, lyricStanza));
         sectionBelowCounter += 1;
       } else {
         break;
       }
     }
+  }
+
+  // Add verses printed below the music (from <pgHead> or <pgFoot>) that aren't
+  // sung from the staff. Example: "Redeemer of Israel" (1985 Hymns), where
+  // verses 5 and 6 appear as text under the score.
+  for (const stanzaText of this._scoreData.scoreMetadata?.stanzas ?? []) {
+    const [, marker, annotatedLyrics] = /^\s*(\d+)\s*[.)]\s*([\s\S]*)$/.exec(stanzaText) ?? [];
+    if (!annotatedLyrics) continue;
+
+    // Skip verses that are already sung from the staff
+    const alreadyPresent = otherSections.some(section => this._cleanMarker(section.marker) === marker);
+    if (alreadyPresent) continue;
+
+    otherSections.push(newSectionBelow(sectionBelowCounter, {
+      type: 'verse',
+      name: `Verse ${marker}`,
+      marker: marker,
+      annotatedLyrics: annotatedLyrics,
+    }));
+    sectionBelowCounter += 1;
   }
 
   this._scoreData.sections = [];
@@ -4291,323 +4449,18 @@ ChScore.prototype._normalizeSections = function () {
     this._scoreData.sectionsById[section.sectionId] = section;
   }
 
+  // Save lyrics if lyrics weren't provided
+  if (!this._scoreData.lyricsText) {
+    const stanzaTexts = [];
+    for (const section of this._scoreData.sections) {
+      if (!section.annotatedLyrics) continue;
+      const name = section.name || this._stanzaName(section);
+      stanzaTexts.push(`[${name}]\n${section.annotatedLyrics}`);
+    }
+    this._scoreData.lyricsText = stanzaTexts.join('\n\n') || null;
+  }
+
 }
-
-// Clean up verse numbers that were engraved as part of a lyric syllable
-// Example: "Venid a Mí" (Spanish Hymns #61)
-ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
-  if (meiParsed.querySelector('verse label')) return;
-  const firstLyricElementByLineNumber = new Map();
-  for (const verse of meiParsed.querySelectorAll(':is(note[ch-melody], chord:has([ch-melody])) verse')) {
-    const lineNumber = Number.parseInt(verse.getAttribute('n'));
-    if (!Number.isNaN(lineNumber) && !firstLyricElementByLineNumber.has(lineNumber)) {
-      firstLyricElementByLineNumber.set(lineNumber, verse);
-    }
-  }
-
-  const derived = [];
-  for (let lineNumber = 1; lineNumber <= firstLyricElementByLineNumber.size; lineNumber++) {
-    const syl = firstLyricElementByLineNumber.get(lineNumber)?.querySelector('syl');
-    const match = syl && /^\s*\(?(\d+\s*[.)])\s*/.exec(syl.textContent);
-    if (!match || Number.parseInt(match[1]) !== lineNumber) return;
-    derived.push({
-      verse: firstLyricElementByLineNumber.get(lineNumber),
-      syl: syl,
-      label: match[1].replace(/\s+/g, ''),
-      remainingText: syl.textContent.slice(match[0].length),
-    });
-  }
-
-  for (const { verse, syl, label, remainingText } of derived) {
-    const labelElement = meiParsed.createElement('label');
-    labelElement.textContent = label;
-    verse.insertBefore(labelElement, verse.firstChild);
-    syl.textContent = remainingText;
-  }
-}
-
-ChScore.prototype._getInlineVerseNumbers = function (meiParsed) {
-  const verseNumbers = [];
-  let hasVerseNumberMismatch = false;
-  let counter = 1;
-  // Get verse numbers based on <label> elements
-  const verseLabels = meiParsed.querySelectorAll('verse label');
-  for (const verseLabel of verseLabels) {
-    const verseNumber = Number.parseInt(this._cleanMarker(verseLabel.textContent));
-    const lineNumber = Number.parseInt(verseLabel.closest('verse').getAttribute('n'));
-    // Skip duplicate verse numbers, as in "Were You There", HHC
-    if (verseNumbers.includes(verseNumber)) continue;
-    if (verseNumber === lineNumber && verseNumber === counter) {
-      verseNumbers.push(verseNumber);
-      counter++;
-    } else {
-      hasVerseNumberMismatch = true;
-      break;
-    }
-  }
-  // Handle single-verse songs where the verse doesn't have a label
-  if (verseNumbers.length === 0) verseNumbers.push(1);
-  return hasVerseNumberMismatch ? [] : verseNumbers;
-}
-
-ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecpStart) {
-  const extractedLyricSyllables = [];
-  extractedLyricSyllables.push({
-    label: null,
-    text: '',
-    suffix: '',
-    chordPositions: [],
-    expandedChordPositions: [],
-    lyricLineIds: [],
-  });
-  let ecpCounter = ecpStart;
-  const lyricLineCounters = {};
-  for (const lyricChordPositionRange of lyricChordPositionRanges) {
-    const [start, end] = lyricChordPositionRange;
-    let rangeHasSingleLine = true;
-    const verseElementsByChordPosition = {};
-    for (let cp = start; cp < end; cp++) {
-      verseElementsByChordPosition[cp] = this._scoreData.meiParsed.querySelectorAll(`[ch-chord-position="${cp}"][ch-melody] verse, [ch-chord-position="${cp}"]:has([ch-melody]) verse`);
-      if (verseElementsByChordPosition[cp].length > 1) rangeHasSingleLine = false;
-    }
-
-    // Test cases:
-    // "Gethsemane" (Hymns—For Home and Church), "This Is the Christ" (Hymns—For Home and Church), "Beautiful Savior" (1989 CSB) – complex sections
-    // Japanese "When the Savior Comes Again" (Hymns—For Home and Church) – ruby text
-    // "Have I Done Any Good?" (1985 Hymns) – simple verses and chorus, but verses have chord positions with only one lyric syllable. When there's only one lyric syllable, it should be extracted only in the correct verse.
-    for (let cp = start; cp < end; cp++) {
-      const chordPositionIsSingleLine = this._scoreData.chordPositions[cp].isSingleLine;
-      if (!Object.hasOwn(lyricLineCounters, cp)) lyricLineCounters[cp] = 0;
-      lyricLineCounters[cp] += 1;
-      const verseElements = verseElementsByChordPosition[cp];
-      let verseElement;
-      if (verseElements.length > 0) {
-        if (chordPositionIsSingleLine || rangeHasSingleLine) {
-          verseElement = verseElements[0];
-        } else {
-          verseElement = Array.from(verseElements).filter(ve => Number.parseInt(ve.getAttribute('n')) === lyricLineCounters[cp])[0];
-        }
-      }
-
-      if (verseElement) {
-        const label = verseElement.querySelector('label');
-        const text = Array.from(verseElement.querySelectorAll('syl')).map(syl => (syl.textContent.replace(/[\-\‑\s]+$/, '').trim() + ' ').trim()).join(' ').trim() || null;
-        extractedLyricSyllables.push({
-          label: label ? label.textContent.trim() : null,
-          text: text,
-          chordPositions: [cp],
-          expandedChordPositions: [ecpCounter],
-          lyricLineIds: [verseElement.getAttribute('ch-lyric-line-id')],
-        });
-      } else {
-        extractedLyricSyllables.at(-1).chordPositions.push(cp);
-        extractedLyricSyllables.at(-1).expandedChordPositions.push(ecpCounter);
-      }
-      ecpCounter += 1;
-    }
-  }
-  return this._alignSyllablesToLyrics(this._scoreData.lyricsText, extractedLyricSyllables, this._scoreData.staffNumbers);
-}
-
-// Help from AI: https://claude.ai/chat/71346065-9bc9-4cb9-b8dd-f8718ce5dc10
-// JavaScript version: https://claude.ai/chat/ab222e85-8da6-494d-97dc-f969cb8097f7
-ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables, staffNumbers) {
-    // Longest common substring similarity (like Python's SequenceMatcher)
-    function similarity(str1, str2) {
-      const matrix = Array(str1.length + 1).fill(null)
-        .map(() => Array(str2.length + 1).fill(0));
-      let maxLen = 0;
-      for (let i = 1; i <= str1.length; i++) {
-        for (let j = 1; j <= str2.length; j++) {
-          if (str1[i - 1] === str2[j - 1]) {
-            matrix[i][j] = matrix[i - 1][j - 1] + 1;
-            maxLen = Math.max(maxLen, matrix[i][j]);
-          }
-        }
-      }
-      return str1.length + str2.length > 0 ? (maxLen * 2) / (str1.length + str2.length) : 0;
-    }
-
-    const stanzas = [];
-    if (!expandedLyrics || !syllables || syllables.length === 0) {
-      return stanzas;
-    }
-
-    // Extract stanza headers
-    expandedLyrics = expandedLyrics.replace(/\[([^\]]*)\]\n/g, (_, name) => {
-      const parts = name.split(' ');
-      stanzas.push({
-        name,
-        type: parts[0].toLowerCase(),
-        marker: parts[1] ?? null,
-        annotatedLyrics: '',
-        chordPositionRanges: [],
-        expandedChordPositions: [],
-      });
-      return '';
-    });
-
-    // Build normalized version with position mapping (HTML-aware)
-    // For <ruby> blocks, use the <rt> reading text for matching and map to the <ruby> tag position.
-    // For other HTML tags (<em>, <strong>, etc.), skip them entirely.
-    // For plain text, apply the existing normalization (strip accents, punctuation, digits; collapse whitespace).
-    const normChars = [];
-    const posMap = [];
-    const rubyRegex = /<ruby[^>]*>[\s\S]*?<\/ruby>/gi;
-    const stripRe = /[\u0300-\u036f\p{P}\p{N}]/u;
-    let lastPlainIndex = 0;
-    let rubyMatch;
-
-    // Normalize a single character into normChars/posMap.
-    // When collapseWhitespace is true, runs of whitespace become a single space.
-    function addNormChar(char, position, collapseWhitespace) {
-      const norm = char.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-      if (norm && !/\s/.test(norm)) {
-        for (const ch of norm) {
-          normChars.push(ch);
-          posMap.push(position);
-        }
-      } else if (collapseWhitespace && /\s/.test(norm) && normChars.at(-1) !== ' ') {
-        normChars.push(' ');
-        posMap.push(position);
-      }
-    }
-
-    function addPlainText(text, startOriginalIndex) {
-      for (let j = 0; j < text.length; j++) {
-        const char = text[j];
-        // Skip HTML tags (e.g. <em>, </strong>, <span class="...">)
-        if (char === '<') {
-          const closeIdx = text.indexOf('>', j);
-          if (closeIdx !== -1) { j = closeIdx; continue; }
-        }
-        // Skip punctuation, digits, and combining marks
-        if (stripRe.test(char)) continue;
-        addNormChar(char, startOriginalIndex + j, true);
-      }
-    }
-
-    while ((rubyMatch = rubyRegex.exec(expandedLyrics)) !== null) {
-      if (rubyMatch.index > lastPlainIndex) {
-        addPlainText(expandedLyrics.substring(lastPlainIndex, rubyMatch.index), lastPlainIndex);
-      }
-      const rtMatch = rubyMatch[0].match(/<rt>(.*?)<\/rt>/i);
-      const reading = rtMatch ? rtMatch[1] : '';
-      for (const char of reading) addNormChar(char, rubyMatch.index, false);
-      lastPlainIndex = rubyRegex.lastIndex;
-    }
-    if (lastPlainIndex < expandedLyrics.length) {
-      addPlainText(expandedLyrics.substring(lastPlainIndex), lastPlainIndex);
-    }
-
-    const normText = normChars.join('');
-    let pos = 0;
-    const insertions = [];
-    let currentStanzaIndex = 0;
-
-    // Match each syllable
-    for (const syllable of syllables) {
-      const normSylText = syllable.text?.normalize('NFD').replace(/[\u0300-\u036f\p{P}\p{N}]/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
-      if (!normSylText) continue;
-
-      const windowEnd = Math.min(pos + 20, normText.length);
-      let matchPos = normText.indexOf(normSylText, pos);
-      let matched = false;
-
-      // Try exact match first
-      if (matchPos !== -1 && matchPos < windowEnd) {
-        matched = true;
-      }
-      // Fuzzy match
-      else {
-        let bestPos = pos;
-        let bestScore = 0;
-
-        for (let i = pos; i < windowEnd; i++) {
-          const score = similarity(normSylText, normText.substring(i, i + normSylText.length));
-          if (score > bestScore) {
-            bestScore = score;
-            bestPos = i;
-          }
-        }
-
-        if (bestScore > 0.6) {
-          matchPos = bestPos;
-          matched = true;
-        }
-      }
-
-      // Process the match
-      if (matched) {
-        const originalPos = posMap[matchPos] !== undefined ? posMap[matchPos] : expandedLyrics.length;
-
-        // Check if we've crossed into a new stanza (look for \n\n between pos and matchPos)
-        const textBetween = expandedLyrics.substring(posMap[pos] || 0, originalPos);
-        const stanzaBreaks = (textBetween.match(/\n\n/g) || []).length;
-        currentStanzaIndex = Math.min(currentStanzaIndex + stanzaBreaks, stanzas.length - 1);
-
-        insertions.push([originalPos, `<span data-ch-chord-position="${syllable.chordPositions.join(' ')}" data-ch-expanded-chord-position="${syllable.expandedChordPositions.join(' ')}" data-ch-lyric-line-id="${syllable.lyricLineIds.join(' ')}"></span>`]);
-
-        // Add chord positions to current stanza
-        if (currentStanzaIndex < stanzas.length) {
-          let previousChordPosition;
-          for (const chordPosition of syllable.chordPositions) {
-            if (previousChordPosition == null || previousChordPosition + 1 != chordPosition) {
-              stanzas[currentStanzaIndex].chordPositionRanges.push({
-                start: chordPosition,
-                end: chordPosition + 1,
-                lyricLineIds: syllable.lyricLineIds,
-                staffNumbers: staffNumbers,
-              });
-            } else {
-              stanzas[currentStanzaIndex].chordPositionRanges.at(-1).end = chordPosition + 1;
-            }
-            previousChordPosition = chordPosition;
-          }
-          stanzas[currentStanzaIndex].expandedChordPositions.push(...syllable.expandedChordPositions);
-        }
-
-        pos = matchPos + normSylText.length;
-      }
-    }
-
-    function consolidateChordPositionRanges(ranges) {
-      const result = [];
-      for (const range of ranges) {
-        const last = result.at(-1);
-        if (last
-            && last.end === range.start
-            && last.staffNumbers.toString() === range.staffNumbers.toString()
-            && last.lyricLineIds.toString() === range.lyricLineIds.toString()) {
-          last.end = range.end;
-          for (const id of range.lyricLineIds) {
-            if (!last.lyricLineIds.includes(id)) last.lyricLineIds.push(id);
-          }
-        } else {
-          result.push(range);
-        }
-      }
-      return result;
-    }
-
-    for (const stanza of stanzas) {
-      stanza.chordPositionRanges = consolidateChordPositionRanges(stanza.chordPositionRanges);
-      stanza.expandedChordPositions = [stanza.expandedChordPositions[0], stanza.expandedChordPositions.at(-1) + 1];
-    }
-
-    // Insert markers in reverse order
-    for (let i = insertions.length - 1; i >= 0; i--) {
-      const [idx, marker] = insertions[i];
-      expandedLyrics = expandedLyrics.substring(0, idx) + marker + expandedLyrics.substring(idx);
-    }
-
-    const stanzasText = expandedLyrics.split('\n\n');
-    for (let sz = 0; sz < stanzas.length; sz++) {
-      stanzas[sz].annotatedLyrics = stanzasText[sz].trim();
-    }
-
-    return stanzas;
-  };
 
 ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasIntroBrackets, hasRepeatOrJump) {
   // Check for complex sections and update expansion map
@@ -4951,38 +4804,443 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
   return singleLineCpRangesByStaff;
 }
 
-ChScore.prototype._normalizeChordSets = function () {
-  // Add default chord set
-  const harmElements = this._scoreData.meiParsed.querySelectorAll('harm');
-  if (harmElements.length > 0) {
-    const defaultChordSet = {
-      chordSetId: 'default',
-      name: 'Default',
-      chordPositionRefs: {},
-      svgSymbolsUrl: null,
-      chordInfoList: [],
+
+/********************** Private methods: normalize lyrics **********************/
+
+ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecpStart) {
+  const extractedLyricSyllables = [];
+  extractedLyricSyllables.push({
+    label: null,
+    text: '',
+    suffix: '',
+    chordPositions: [],
+    expandedChordPositions: [],
+    lyricLineIds: [],
+  });
+  let ecpCounter = ecpStart;
+  const lyricLineCounters = {};
+  for (const lyricChordPositionRange of lyricChordPositionRanges) {
+    const [start, end, sectionType, startsSection] = lyricChordPositionRange;
+    let isFirstSyllableOfSection = startsSection ?? false;
+    let rangeHasSingleLine = true;
+    const verseElementsByChordPosition = {};
+    for (let cp = start; cp < end; cp++) {
+      verseElementsByChordPosition[cp] = this._scoreData.meiParsed.querySelectorAll(`[ch-chord-position="${cp}"][ch-melody] verse, [ch-chord-position="${cp}"]:has([ch-melody]) verse`);
+      if (verseElementsByChordPosition[cp].length > 1) rangeHasSingleLine = false;
     }
-    for (const harmElement of harmElements) {
-      const chordInfo = {
-        prefix: null,
-        text: harmElement.textContent.trim().replace('♭', 'b').replace('♯', '#'),
-        svgSymbolId: null,
-        measureId: harmElement.closest('measure').getAttribute('xml:id'),
-        tstamp: harmElement.getAttribute('tstamp'),
+
+    // Test cases:
+    // "Gethsemane" (Hymns—For Home and Church), "This Is the Christ" (Hymns—For Home and Church), "Beautiful Savior" (1989 CSB) – complex sections
+    // Japanese "When the Savior Comes Again" (Hymns—For Home and Church) – ruby text
+    // "Have I Done Any Good?" (1985 Hymns) – simple verses and chorus, but verses have chord positions with only one lyric syllable. When there's only one lyric syllable, it should be extracted only in the correct verse.
+    for (let cp = start; cp < end; cp++) {
+      const chordPositionIsSingleLine = this._scoreData.chordPositions[cp].isSingleLine;
+      if (!Object.hasOwn(lyricLineCounters, cp)) lyricLineCounters[cp] = 0;
+      lyricLineCounters[cp] += 1;
+      const verseElements = verseElementsByChordPosition[cp];
+      let verseElement;
+      if (verseElements.length > 0) {
+        if (chordPositionIsSingleLine || rangeHasSingleLine) {
+          verseElement = verseElements[0];
+        } else {
+          verseElement = Array.from(verseElements).filter(ve => Number.parseInt(ve.getAttribute('n')) === lyricLineCounters[cp])[0];
+        }
       }
-      defaultChordSet.chordInfoList.push(chordInfo);
-      if (harmElement.getAttribute('ch-chord-position')) {
-        const chordPosition = Number.parseInt(harmElement.getAttribute('ch-chord-position'));
-        defaultChordSet.chordPositionRefs[chordPosition] = chordInfo;
+
+      if (verseElement) {
+        const label = verseElement.querySelector('label');
+        const sylElements = Array.from(verseElement.querySelectorAll('syl'));
+        const text = sylElements.map(syl => (syl.textContent.replace(/[\-\‑\s]+$/, '').trim() + ' ').trim()).join(' ').trim() || null;
+        extractedLyricSyllables.push({
+          label: label ? label.textContent.trim() : null,
+          text: text,
+          // The syllables as engraved, kept for _buildStanzasFromSyllables: joining
+          // them back into words needs @wordpos, which the flattened text loses
+          syls: sylElements.map(syl => ({ text: syl.textContent.trim(), wordpos: syl.getAttribute('wordpos') })),
+          verseLabel: verseElement.getAttribute('label'),
+          chordPositions: [cp],
+          expandedChordPositions: [ecpCounter],
+          lyricLineIds: [verseElement.getAttribute('ch-lyric-line-id')],
+          startsSection: isFirstSyllableOfSection,
+          sectionType: sectionType ?? null,
+        });
+        isFirstSyllableOfSection = false;
+      } else {
+        extractedLyricSyllables.at(-1).chordPositions.push(cp);
+        extractedLyricSyllables.at(-1).expandedChordPositions.push(ecpCounter);
       }
-      harmElement.remove();
+      ecpCounter += 1;
     }
-    this._scoreData.chordSets.unshift(defaultChordSet);
   }
-  this._scoreData.chordSetsById = {};
-  for (const chordSet of this._scoreData.chordSets) {
-    this._scoreData.chordSetsById[chordSet.chordSetId] = chordSet;
+  return this._alignSyllablesToLyrics(this._scoreData.lyricsText, extractedLyricSyllables, this._scoreData.staffNumbers);
+}
+
+// Help from AI: https://claude.ai/chat/71346065-9bc9-4cb9-b8dd-f8718ce5dc10
+// JavaScript version: https://claude.ai/chat/ab222e85-8da6-494d-97dc-f969cb8097f7
+ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables, staffNumbers) {
+    // Longest common substring similarity (like Python's SequenceMatcher)
+    function similarity(str1, str2) {
+      const matrix = Array(str1.length + 1).fill(null)
+        .map(() => Array(str2.length + 1).fill(0));
+      let maxLen = 0;
+      for (let i = 1; i <= str1.length; i++) {
+        for (let j = 1; j <= str2.length; j++) {
+          if (str1[i - 1] === str2[j - 1]) {
+            matrix[i][j] = matrix[i - 1][j - 1] + 1;
+            maxLen = Math.max(maxLen, matrix[i][j]);
+          }
+        }
+      }
+      return str1.length + str2.length > 0 ? (maxLen * 2) / (str1.length + str2.length) : 0;
+    }
+
+    if (!syllables || syllables.length === 0) return [];
+
+    // With no lyrics to align against, read the stanzas out of the score itself
+    if (!expandedLyrics) return this._buildStanzasFromSyllables(syllables);
+
+    const stanzas = [];
+
+    // Extract stanza headers
+    expandedLyrics = expandedLyrics.replace(/\[([^\]]*)\]\n/g, (_, name) => {
+      const parts = name.split(' ');
+      stanzas.push({
+        name,
+        type: parts[0].toLowerCase(),
+        marker: parts[1] ?? null,
+        annotatedLyrics: '',
+        chordPositionRanges: [],
+        expandedChordPositions: [],
+      });
+      return '';
+    });
+
+    // Build normalized version with position mapping (HTML-aware)
+    // For <ruby> blocks, use the <rt> reading text for matching and map to the <ruby> tag position.
+    // For other HTML tags (<em>, <strong>, etc.), skip them entirely.
+    // For plain text, apply the existing normalization (strip accents, punctuation, digits; collapse whitespace).
+    const normChars = [];
+    const posMap = [];
+    const rubyRegex = /<ruby[^>]*>[\s\S]*?<\/ruby>/gi;
+    const stripRe = /[\u0300-\u036f\p{P}\p{N}]/u;
+    let lastPlainIndex = 0;
+    let rubyMatch;
+
+    // Normalize a single character into normChars/posMap.
+    // When collapseWhitespace is true, runs of whitespace become a single space.
+    function addNormChar(char, position, collapseWhitespace) {
+      const norm = char.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      if (norm && !/\s/.test(norm)) {
+        for (const ch of norm) {
+          normChars.push(ch);
+          posMap.push(position);
+        }
+      } else if (collapseWhitespace && /\s/.test(norm) && normChars.at(-1) !== ' ') {
+        normChars.push(' ');
+        posMap.push(position);
+      }
+    }
+
+    function addPlainText(text, startOriginalIndex) {
+      for (let j = 0; j < text.length; j++) {
+        const char = text[j];
+        // Skip HTML tags (e.g. <em>, </strong>, <span class="...">)
+        if (char === '<') {
+          const closeIdx = text.indexOf('>', j);
+          if (closeIdx !== -1) { j = closeIdx; continue; }
+        }
+        // Skip punctuation, digits, and combining marks
+        if (stripRe.test(char)) continue;
+        addNormChar(char, startOriginalIndex + j, true);
+      }
+    }
+
+    while ((rubyMatch = rubyRegex.exec(expandedLyrics)) !== null) {
+      if (rubyMatch.index > lastPlainIndex) {
+        addPlainText(expandedLyrics.substring(lastPlainIndex, rubyMatch.index), lastPlainIndex);
+      }
+      const rtMatch = rubyMatch[0].match(/<rt>(.*?)<\/rt>/i);
+      const reading = rtMatch ? rtMatch[1] : '';
+      for (const char of reading) addNormChar(char, rubyMatch.index, false);
+      lastPlainIndex = rubyRegex.lastIndex;
+    }
+    if (lastPlainIndex < expandedLyrics.length) {
+      addPlainText(expandedLyrics.substring(lastPlainIndex), lastPlainIndex);
+    }
+
+    const normText = normChars.join('');
+    let pos = 0;
+    const insertions = [];
+    let currentStanzaIndex = 0;
+
+    // Match each syllable
+    for (const syllable of syllables) {
+      const normSylText = syllable.text?.normalize('NFD').replace(/[\u0300-\u036f\p{P}\p{N}]/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!normSylText) continue;
+
+      const windowEnd = Math.min(pos + 20, normText.length);
+      let matchPos = normText.indexOf(normSylText, pos);
+      let matched = false;
+
+      // Try exact match first
+      if (matchPos !== -1 && matchPos < windowEnd) {
+        matched = true;
+      }
+      // Fuzzy match
+      else {
+        let bestPos = pos;
+        let bestScore = 0;
+
+        for (let i = pos; i < windowEnd; i++) {
+          const score = similarity(normSylText, normText.substring(i, i + normSylText.length));
+          if (score > bestScore) {
+            bestScore = score;
+            bestPos = i;
+          }
+        }
+
+        if (bestScore > 0.6) {
+          matchPos = bestPos;
+          matched = true;
+        }
+      }
+
+      // Process the match
+      if (matched) {
+        const originalPos = posMap[matchPos] !== undefined ? posMap[matchPos] : expandedLyrics.length;
+
+        // Check if we've crossed into a new stanza (look for \n\n between pos and matchPos)
+        const textBetween = expandedLyrics.substring(posMap[pos] || 0, originalPos);
+        const stanzaBreaks = (textBetween.match(/\n\n/g) || []).length;
+        currentStanzaIndex = Math.min(currentStanzaIndex + stanzaBreaks, stanzas.length - 1);
+
+        insertions.push([originalPos, `<span data-ch-chord-position="${syllable.chordPositions.join(' ')}" data-ch-expanded-chord-position="${syllable.expandedChordPositions.join(' ')}" data-ch-lyric-line-id="${syllable.lyricLineIds.join(' ')}"></span>`]);
+
+        // Add chord positions to current stanza
+        if (currentStanzaIndex < stanzas.length) {
+          let previousChordPosition;
+          for (const chordPosition of syllable.chordPositions) {
+            if (previousChordPosition == null || previousChordPosition + 1 != chordPosition) {
+              stanzas[currentStanzaIndex].chordPositionRanges.push({
+                start: chordPosition,
+                end: chordPosition + 1,
+                lyricLineIds: syllable.lyricLineIds,
+                staffNumbers: staffNumbers,
+              });
+            } else {
+              stanzas[currentStanzaIndex].chordPositionRanges.at(-1).end = chordPosition + 1;
+            }
+            previousChordPosition = chordPosition;
+          }
+          stanzas[currentStanzaIndex].expandedChordPositions.push(...syllable.expandedChordPositions);
+        }
+
+        pos = matchPos + normSylText.length;
+      }
+    }
+
+    function consolidateChordPositionRanges(ranges) {
+      const result = [];
+      for (const range of ranges) {
+        const last = result.at(-1);
+        if (last
+            && last.end === range.start
+            && last.staffNumbers.toString() === range.staffNumbers.toString()
+            && last.lyricLineIds.toString() === range.lyricLineIds.toString()) {
+          last.end = range.end;
+          for (const id of range.lyricLineIds) {
+            if (!last.lyricLineIds.includes(id)) last.lyricLineIds.push(id);
+          }
+        } else {
+          result.push(range);
+        }
+      }
+      return result;
+    }
+
+    for (const stanza of stanzas) {
+      stanza.chordPositionRanges = consolidateChordPositionRanges(stanza.chordPositionRanges);
+      stanza.expandedChordPositions = [stanza.expandedChordPositions[0], stanza.expandedChordPositions.at(-1) + 1];
+    }
+
+    // Insert markers in reverse order
+    for (let i = insertions.length - 1; i >= 0; i--) {
+      const [idx, marker] = insertions[i];
+      expandedLyrics = expandedLyrics.substring(0, idx) + marker + expandedLyrics.substring(idx);
+    }
+
+    const stanzasText = expandedLyrics.split('\n\n');
+    for (let sz = 0; sz < stanzas.length; sz++) {
+      stanzas[sz].annotatedLyrics = stanzasText[sz].trim();
+    }
+
+    return stanzas;
+  };
+
+// Build lyric stanzas from the syllables engraved in the score, when no lyrics were
+// given to align against. A stanza is a run of syllables sharing one lyric line, in
+// sung order, then any line playback never reached — and syllables aren't lines.
+ChScore.prototype._buildStanzasFromSyllables = function (syllables) {
+  // Walk the syllables in the order they're sung
+  const built = [];
+  let current = null;
+  let builder = null;
+  for (const syllable of syllables) {
+    const lyricLineId = syllable.lyricLineIds?.[0] ?? null;
+    if (!lyricLineId || !syllable.text) continue;
+
+    const chordPosition = syllable.chordPositions[0];
+    // A section says what it is; fall back to the verse element's own label for
+    // scores walked without sections to align to
+    const type = syllable.sectionType ?? syllable.verseLabel ?? null;
+    const label = syllable.label ?? null;
+
+    // A stanza ends where its section does, when the lyric line changes, when the
+    // verse type changes, when a verse label is reached, or when playback jumps
+    // back into a repeat
+    const startsNewStanza = !current
+      || syllable.startsSection
+      || current.lyricLineIds[0] !== lyricLineId
+      || current.type !== type
+      || Boolean(label)
+      || chordPosition < current.chordPositionRanges.at(-1).end - 1;
+
+    if (startsNewStanza) {
+      current = this._newLyricStanza(lyricLineId, type, label, chordPosition, syllable.expandedChordPositions[0]);
+      builder = this._wordBuilder();
+      built.push({ stanza: current, builder: builder });
+    }
+
+    // The syllables as engraved, carried over from _extractLyricStanzas, which
+    // read them off the verse element: @wordpos is what joins them into words
+    const syls = syllable.syls ?? [];
+    if (syls.length > 0) {
+      for (const syl of syls) builder.add(syl.text, syl.wordpos);
+    } else {
+      builder.add(syllable.text, null);
+    }
+
+    // A label reached mid-stanza names the stanza; it doesn't start a new one
+    if (label && !current.marker) current.marker = label;
+
+    current.chordPositionRanges.at(-1).end = syllable.chordPositions.at(-1) + 1;
+    current.expandedChordPositions[1] = syllable.expandedChordPositions.at(-1) + 1;
   }
+
+  // Join each stanza's words once it's complete, rather than on every syllable
+  for (const { stanza, builder: words } of built) stanza.annotatedLyrics = words.text();
+
+  const stanzas = this._mergePickupStanzas(built.map(entry => entry.stanza));
+  for (const stanza of stanzas) stanza.name = this._stanzaName(stanza);
+  return stanzas;
+}
+
+// Chord position ranges carry the lyric line and staves they belong to, the same
+// shape _extractLyricStanzas and generateDefaultSection produce — _expandSections
+// reads both to link sections to their verse elements.
+ChScore.prototype._newLyricStanza = function (lyricLineId, type, marker, chordPosition, expandedChordPosition) {
+  const staffNumber = Number.parseInt(lyricLineId?.split('.')[0]);
+  return {
+    type: type,
+    name: null, // set by _stanzaName once the stanza is complete
+    marker: marker,
+    annotatedLyrics: '',
+    chordPositionRanges: [{
+      start: chordPosition,
+      end: chordPosition + 1,
+      staffNumbers: Number.isNaN(staffNumber) ? this._scoreData.staffNumbers : [staffNumber],
+      lyricLineIds: lyricLineId ? [lyricLineId] : [],
+    }],
+    expandedChordPositions: expandedChordPosition == null ? [] : [expandedChordPosition, expandedChordPosition + 1],
+    lyricLineIds: lyricLineId ? [lyricLineId] : [],
+  };
+}
+
+// Joins syllables into words. MEI marks each syllable's position within its
+// word with @wordpos: i(nitial), m(edial), t(erminal), s(ingle).
+ChScore.prototype._wordBuilder = function () {
+  const trailingHyphen = /[-‑\s]+$/;
+  const words = [];
+  let partial = '';
+  return {
+    add(text, wordpos) {
+      const syllable = text.replace(trailingHyphen, '');
+      if (!syllable) return;
+      if (wordpos === 'i' || wordpos === 'm') {
+        partial += syllable;
+      } else if (partial) {
+        // A hyphen means the word continues, even where a score marks the
+        // continuing syllable inconsistently — @wordpos="s" in a second ending
+        // where the first ending marks the same syllable "t".
+        words.push(partial + syllable);
+        partial = '';
+      } else {
+        words.push(syllable);
+      }
+    },
+    text() { return (partial ? words.concat(partial) : words).join(' ').trim(); },
+  };
+}
+
+// Merge pickup fragments into the verse they belong to. A hymn often engraves the
+// next verse's first syllables on a pickup before a repeat, so they arrive as a short
+// stanza labelled "2." while sitting on lyric line 1 — sung before the verse it names.
+ChScore.prototype._mergePickupStanzas = function (stanzas) {
+  const merged = [];
+
+  for (let s = 0; s < stanzas.length; s++) {
+    const stanza = stanzas[s];
+    const next = stanzas[s + 1];
+    const number = this._markerNumber(stanza.marker);
+    const lineNumber = Number.parseInt(stanza.lyricLineIds[0]?.split('.')[1]);
+    const nextLineNumber = Number.parseInt(next?.lyricLineIds[0]?.split('.')[1]);
+
+    const isPickup = number !== null
+      && number !== lineNumber
+      && next
+      && next.type === stanza.type
+      && this._markerNumber(next.marker) === null
+      && nextLineNumber === number;
+
+    if (isPickup) {
+      next.marker = stanza.marker;
+      next.annotatedLyrics = `${stanza.annotatedLyrics} ${next.annotatedLyrics}`.trim();
+      next.chordPositionRanges = stanza.chordPositionRanges.concat(next.chordPositionRanges);
+      if (stanza.expandedChordPositions.length) next.expandedChordPositions[0] = stanza.expandedChordPositions[0];
+      continue;
+    }
+    merged.push(stanza);
+  }
+
+  return merged;
+}
+
+ChScore.prototype._markerNumber = function (marker) {
+  const match = /(\d+)/.exec(marker ?? '');
+  return match ? Number.parseInt(match[1]) : null;
+}
+
+// What a stanza is called: "Verse 2", "Chorus", or "Unknown" where the score says
+// nothing. Settles what the name is read from as it goes — a numbered lyric line is a
+// verse even with no verse@label, and a marker keeps only its digits. Stanza or section.
+ChScore.prototype._stanzaName = function (stanza) {
+  if (!stanza.type && stanza.marker) stanza.type = 'verse';
+  if (stanza.marker) stanza.marker = this._cleanMarker(stanza.marker);
+
+  if (stanza.type === 'verse') {
+    // The lyric line stands in for display only. Leaving @marker alone keeps it
+    // honest: a repeated passage that prints one lyric line is verse 1's words
+    // sung again, not evidence of which verse is meant.
+    const lineNumber = stanza.lyricLineIds?.[0]?.split('.')[1];
+    return `Verse ${stanza.marker || lineNumber || ''}`.trim();
+  }
+  // Types are stored lowercase ("chorus", "bridge") and displayed capitalized
+  return stanza.type ? stanza.type.charAt(0).toUpperCase() + stanza.type.slice(1) : 'Unknown';
+}
+
+// A verse number as engraved carries the punctuation that goes with it: "2.", "(3."
+ChScore.prototype._cleanMarker = function (marker) {
+  return String(marker ?? '').replace(/[().]/g, '').trim();
 }
 
 
