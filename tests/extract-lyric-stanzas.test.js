@@ -1,13 +1,15 @@
 /**
  * Tests: ChScore.prototype._extractLyricStanzas() — integration tests.
  *
- * This function reads MEI verse/syl elements from the parsed score data,
- * builds an array of extracted syllable objects (with chord positions,
- * expanded chord positions, labels, and lyric line IDs), then delegates
- * to ChScore._alignSyllablesToLyrics() to produce annotated stanza data.
+ * This function gathers syllables from the score (ChScore._gatherSyllables()
+ * reads MEI verse/syl elements into objects with chord positions, expanded
+ * chord positions, labels, and lyric line IDs), then produces stanzas either
+ * by aligning them to given lyrics (ChScore._alignSyllablesToLyrics()) or, with
+ * no lyrics given, from the syllables alone (ChScore._getLyricsFromSyllables()).
  *
  * Covers:
  * - Syllable extraction from MEI (verse elements, syl text, label elements)
+ * - Stanzas built from the score itself when no lyrics text is given
  * - Chord position → expanded chord position mapping with ecpStart offset
  * - Multi-lyric-line handling (single-line vs. multi-line chord positions)
  * - Empty chord positions appended to previous syllable
@@ -594,11 +596,18 @@ describe('_extractLyricStanzas — no lyrics text', { timeout: 30000 }, () => {
     expect(score._scoreData.sections.length).toBeGreaterThan(0);
   });
 
-  it('sections should not have annotatedLyrics when lyricsText is null', () => {
-    for (const section of score._scoreData.sections) {
-      // With no lyricsText, _extractLyricStanzas returns empty → no annotatedLyrics
-      expect(section.annotatedLyrics == null || section.annotatedLyrics === undefined).toBe(true);
-    }
+  // With no lyricsText, _extractLyricStanzas reads the stanzas out of the score's own
+  // syllables (_getLyricsFromSyllables) instead of aligning to given lyrics
+  it('should build verse sections from the engraved lyric lines', () => {
+    const verses = score._scoreData.sections.filter(section => section.type === 'verse');
+    expect(verses.map(verse => verse.name)).toEqual(['Verse 1', 'Verse 2', 'Verse 3', 'Verse 4']);
+  });
+
+  it('verse sections should carry lyrics joined from the engraved syllables', () => {
+    const verses = score._scoreData.sections.filter(section => section.type === 'verse');
+    for (const verse of verses) expect(verse.annotatedLyrics).toBeTruthy();
+    expect(verses[0].annotatedLyrics).toContain('How great the wisdom and the love');
+    expect(verses[1].annotatedLyrics).toContain('His precious blood He freely spilt');
   });
 });
 
@@ -627,10 +636,11 @@ describe('_extractLyricStanzas — empty lyrics text', { timeout: 30000 }, () =>
     expect(score._scoreData.sections.length).toBeGreaterThan(0);
   });
 
-  it('sections should not have annotatedLyrics when lyricsText is empty', () => {
-    for (const section of score._scoreData.sections) {
-      expect(section.annotatedLyrics == null || section.annotatedLyrics === undefined).toBe(true);
-    }
+  // An empty lyricsText takes the same path as none at all
+  it('should build verse sections from the engraved lyric lines', () => {
+    const verses = score._scoreData.sections.filter(section => section.type === 'verse');
+    expect(verses.map(verse => verse.name)).toEqual(['Verse 1', 'Verse 2', 'Verse 3', 'Verse 4']);
+    expect(verses[0].annotatedLyrics).toContain('How great the wisdom and the love');
   });
 });
 
@@ -735,5 +745,59 @@ describe('_extractLyricStanzas — span marker counts', { timeout: 30000 }, () =
         }
       }
     }
+  });
+});
+
+
+// ════════════════════════════════════════════════════════════════
+// Syllable gathering, on its own
+// ════════════════════════════════════════════════════════════════
+describe('_gatherSyllables — How Great the Wisdom', { timeout: 30000 }, () => {
+  let score, syllables;
+
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    score = new ChScore('#score-container');
+    await score.load('musicxml', {
+      scoreContent: sampleMusicXmlHGW,
+      lyricsText: sampleLyricsHGW,
+      partsTemplate: hgwPartsTemplate,
+      fermatas: hgwFermatas,
+    });
+    syllables = score._gatherSyllables([[0, score._scoreData.numChordPositions]], 0);
+  });
+
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  it('should start with the seed entry that collects chord positions before the first syllable', () => {
+    expect(syllables[0].text).toBe('');
+    expect(syllables[0].lyricLineIds).toEqual([]);
+  });
+
+  it('should gather sung syllables with their positions and lyric line', () => {
+    const sung = syllables.filter(syllable => syllable.text);
+    expect(sung.length).toBeGreaterThan(0);
+    for (const syllable of sung) {
+      expect(syllable.chordPositions.length).toBeGreaterThan(0);
+      expect(syllable.expandedChordPositions.length).toBe(syllable.chordPositions.length);
+      expect(syllable.lyricLineIds[0]).toMatch(/^\d+\.\d+$/);
+    }
+  });
+
+  it('should keep the syllables as engraved, with @wordpos, alongside the flattened text', () => {
+    const sung = syllables.filter(syllable => syllable.text);
+    for (const syllable of sung) {
+      expect(syllable.syls.length).toBeGreaterThan(0);
+      for (const syl of syllable.syls) {
+        expect(typeof syl.text).toBe('string');
+        expect([null, 'i', 'm', 't', 's']).toContain(syl.wordpos);
+      }
+    }
+  });
+
+  it('should offset expanded chord positions by ecpStart', () => {
+    const offset = score._gatherSyllables([[0, score._scoreData.numChordPositions]], 100);
+    expect(offset[1].expandedChordPositions[0]).toBe(syllables[1].expandedChordPositions[0] + 100);
   });
 });

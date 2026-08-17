@@ -1609,7 +1609,7 @@ describe('_mergePickupStanzas()', () => {
     score._scoreData = { staffNumbers: [1, 2] };
   });
 
-  /** A stanza as _buildStanzasFromSyllables would have built it. */
+  /** A stanza as _getLyricsFromSyllables would have built it. */
   function stanza(lyricLineId, marker, words, chordPosition) {
     const built = score._newLyricStanza(lyricLineId, 'verse', marker, chordPosition, chordPosition);
     built.annotatedLyrics = words;

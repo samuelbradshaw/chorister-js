@@ -4854,8 +4854,21 @@ ChScore.prototype._getMelodyVerseElementsByChordPosition = function () {
   return versesByChordPosition;
 }
 
+// Lyric stanzas as sung, read off the score. Lyrics given to align against decide
+// what the stanzas are; without them, the stanzas are read out of the score's own
+// syllables.
 ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecpStart) {
+  const syllables = this._gatherSyllables(lyricChordPositionRanges, ecpStart);
+  return this._scoreData.lyricsText
+    ? this._alignSyllablesToLyrics(this._scoreData.lyricsText, syllables, this._scoreData.staffNumbers)
+    : this._getLyricsFromSyllables(syllables);
+}
+
+// Walk the chord positions in sung order and pull out the syllable engraved at each,
+// as a flat list — one entry per syllable, carrying where it's sung and what line it's on
+ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStart) {
   const extractedLyricSyllables = [];
+  // Seed entry: chord positions sung before the first syllable have nowhere else to go
   extractedLyricSyllables.push({
     label: null,
     text: '',
@@ -4900,7 +4913,7 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
         extractedLyricSyllables.push({
           label: label ? label.textContent.trim() : null,
           text: text,
-          // The syllables as engraved, kept for _buildStanzasFromSyllables: joining
+          // The syllables as engraved, kept for _getLyricsFromSyllables: joining
           // them back into words needs @wordpos, which the flattened text loses
           syls: sylElements.map(syl => ({ text: syl.textContent.trim(), wordpos: syl.getAttribute('wordpos') })),
           verseLabel: verseElement.getAttribute('label'),
@@ -4918,215 +4931,220 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
       ecpCounter += 1;
     }
   }
-  return this._alignSyllablesToLyrics(this._scoreData.lyricsText, extractedLyricSyllables, this._scoreData.staffNumbers);
+  return extractedLyricSyllables;
 }
 
-// Help from AI: https://claude.ai/chat/71346065-9bc9-4cb9-b8dd-f8718ce5dc10
-// JavaScript version: https://claude.ai/chat/ab222e85-8da6-494d-97dc-f969cb8097f7
+// Match the syllables sung in the score against lyrics given to align them to, and
+// return those lyrics as stanzas, each syllable marked with where it's sung. Takes
+// everything it needs as arguments, so it can be exercised without a loaded score.
 ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables, staffNumbers) {
-    // Longest common substring similarity (like Python's SequenceMatcher)
-    function similarity(str1, str2) {
-      const matrix = Array(str1.length + 1).fill(null)
-        .map(() => Array(str2.length + 1).fill(0));
-      let maxLen = 0;
-      for (let i = 1; i <= str1.length; i++) {
-        for (let j = 1; j <= str2.length; j++) {
-          if (str1[i - 1] === str2[j - 1]) {
-            matrix[i][j] = matrix[i - 1][j - 1] + 1;
-            maxLen = Math.max(maxLen, matrix[i][j]);
-          }
-        }
-      }
-      return str1.length + str2.length > 0 ? (maxLen * 2) / (str1.length + str2.length) : 0;
-    }
+  if (!expandedLyrics) return [];
+  if (!syllables || syllables.length === 0) return [];
 
-    if (!syllables || syllables.length === 0) return [];
+  const stanzas = [];
 
-    // With no lyrics to align against, read the stanzas out of the score itself
-    if (!expandedLyrics) return this._buildStanzasFromSyllables(syllables);
-
-    const stanzas = [];
-
-    // Extract stanza headers
-    expandedLyrics = expandedLyrics.replace(/\[([^\]]*)\]\n/g, (_, name) => {
-      const parts = name.split(' ');
-      stanzas.push({
-        name,
-        type: parts[0].toLowerCase(),
-        marker: parts[1] ?? null,
-        annotatedLyrics: '',
-        chordPositionRanges: [],
-        expandedChordPositions: [],
-      });
-      return '';
+  // Extract stanza headers
+  expandedLyrics = expandedLyrics.replace(/\[([^\]]*)\]\n/g, (_, name) => {
+    const parts = name.split(' ');
+    stanzas.push({
+      name,
+      type: parts[0].toLowerCase(),
+      marker: parts[1] ?? null,
+      annotatedLyrics: '',
+      chordPositionRanges: [],
+      expandedChordPositions: [],
     });
+    return '';
+  });
 
-    // Build normalized version with position mapping (HTML-aware)
-    // For <ruby> blocks, use the <rt> reading text for matching and map to the <ruby> tag position.
-    // For other HTML tags (<em>, <strong>, etc.), skip them entirely.
-    // For plain text, apply the existing normalization (strip accents, punctuation, digits; collapse whitespace).
-    const normChars = [];
-    const posMap = [];
-    const rubyRegex = /<ruby[^>]*>[\s\S]*?<\/ruby>/gi;
-    const stripRe = /[\u0300-\u036f\p{P}\p{N}]/u;
-    let lastPlainIndex = 0;
-    let rubyMatch;
+  const { normText, posMap } = this._normalizeLyricsForMatching(expandedLyrics);
+  let pos = 0;
+  const insertions = [];
+  let currentStanzaIndex = 0;
 
-    // Normalize a single character into normChars/posMap.
-    // When collapseWhitespace is true, runs of whitespace become a single space.
-    function addNormChar(char, position, collapseWhitespace) {
-      const norm = char.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-      if (norm && !/\s/.test(norm)) {
-        for (const ch of norm) {
-          normChars.push(ch);
-          posMap.push(position);
+  // Match each syllable
+  for (const syllable of syllables) {
+    const normSylText = syllable.text?.normalize('NFD').replace(/[\u0300-\u036f\p{P}\p{N}]/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!normSylText) continue;
+
+    const windowEnd = Math.min(pos + 20, normText.length);
+    let matchPos = normText.indexOf(normSylText, pos);
+    let matched = false;
+
+    // Try exact match first
+    if (matchPos !== -1 && matchPos < windowEnd) {
+      matched = true;
+    }
+    // Fuzzy match
+    else {
+      let bestPos = pos;
+      let bestScore = 0;
+
+      for (let i = pos; i < windowEnd; i++) {
+        const score = this._lyricSimilarity(normSylText, normText.substring(i, i + normSylText.length));
+        if (score > bestScore) {
+          bestScore = score;
+          bestPos = i;
         }
-      } else if (collapseWhitespace && /\s/.test(norm) && normChars.at(-1) !== ' ') {
-        normChars.push(' ');
-        posMap.push(position);
       }
-    }
 
-    function addPlainText(text, startOriginalIndex) {
-      for (let j = 0; j < text.length; j++) {
-        const char = text[j];
-        // Skip HTML tags (e.g. <em>, </strong>, <span class="...">)
-        if (char === '<') {
-          const closeIdx = text.indexOf('>', j);
-          if (closeIdx !== -1) { j = closeIdx; continue; }
-        }
-        // Skip punctuation, digits, and combining marks
-        if (stripRe.test(char)) continue;
-        addNormChar(char, startOriginalIndex + j, true);
-      }
-    }
-
-    while ((rubyMatch = rubyRegex.exec(expandedLyrics)) !== null) {
-      if (rubyMatch.index > lastPlainIndex) {
-        addPlainText(expandedLyrics.substring(lastPlainIndex, rubyMatch.index), lastPlainIndex);
-      }
-      const rtMatch = rubyMatch[0].match(/<rt>(.*?)<\/rt>/i);
-      const reading = rtMatch ? rtMatch[1] : '';
-      for (const char of reading) addNormChar(char, rubyMatch.index, false);
-      lastPlainIndex = rubyRegex.lastIndex;
-    }
-    if (lastPlainIndex < expandedLyrics.length) {
-      addPlainText(expandedLyrics.substring(lastPlainIndex), lastPlainIndex);
-    }
-
-    const normText = normChars.join('');
-    let pos = 0;
-    const insertions = [];
-    let currentStanzaIndex = 0;
-
-    // Match each syllable
-    for (const syllable of syllables) {
-      const normSylText = syllable.text?.normalize('NFD').replace(/[\u0300-\u036f\p{P}\p{N}]/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
-      if (!normSylText) continue;
-
-      const windowEnd = Math.min(pos + 20, normText.length);
-      let matchPos = normText.indexOf(normSylText, pos);
-      let matched = false;
-
-      // Try exact match first
-      if (matchPos !== -1 && matchPos < windowEnd) {
+      if (bestScore > 0.6) {
+        matchPos = bestPos;
         matched = true;
       }
-      // Fuzzy match
-      else {
-        let bestPos = pos;
-        let bestScore = 0;
+    }
 
-        for (let i = pos; i < windowEnd; i++) {
-          const score = similarity(normSylText, normText.substring(i, i + normSylText.length));
-          if (score > bestScore) {
-            bestScore = score;
-            bestPos = i;
+    // Process the match
+    if (matched) {
+      const originalPos = posMap[matchPos] !== undefined ? posMap[matchPos] : expandedLyrics.length;
+
+      // Check if we've crossed into a new stanza (look for \n\n between pos and matchPos)
+      const textBetween = expandedLyrics.substring(posMap[pos] || 0, originalPos);
+      const stanzaBreaks = (textBetween.match(/\n\n/g) || []).length;
+      currentStanzaIndex = Math.min(currentStanzaIndex + stanzaBreaks, stanzas.length - 1);
+
+      insertions.push([originalPos, `<span data-ch-chord-position="${syllable.chordPositions.join(' ')}" data-ch-expanded-chord-position="${syllable.expandedChordPositions.join(' ')}" data-ch-lyric-line-id="${syllable.lyricLineIds.join(' ')}"></span>`]);
+
+      // Add chord positions to current stanza
+      if (currentStanzaIndex < stanzas.length) {
+        let previousChordPosition;
+        for (const chordPosition of syllable.chordPositions) {
+          if (previousChordPosition == null || previousChordPosition + 1 != chordPosition) {
+            stanzas[currentStanzaIndex].chordPositionRanges.push({
+              start: chordPosition,
+              end: chordPosition + 1,
+              lyricLineIds: syllable.lyricLineIds,
+              staffNumbers: staffNumbers,
+            });
+          } else {
+            stanzas[currentStanzaIndex].chordPositionRanges.at(-1).end = chordPosition + 1;
           }
+          previousChordPosition = chordPosition;
         }
-
-        if (bestScore > 0.6) {
-          matchPos = bestPos;
-          matched = true;
-        }
+        stanzas[currentStanzaIndex].expandedChordPositions.push(...syllable.expandedChordPositions);
       }
 
-      // Process the match
-      if (matched) {
-        const originalPos = posMap[matchPos] !== undefined ? posMap[matchPos] : expandedLyrics.length;
+      pos = matchPos + normSylText.length;
+    }
+  }
 
-        // Check if we've crossed into a new stanza (look for \n\n between pos and matchPos)
-        const textBetween = expandedLyrics.substring(posMap[pos] || 0, originalPos);
-        const stanzaBreaks = (textBetween.match(/\n\n/g) || []).length;
-        currentStanzaIndex = Math.min(currentStanzaIndex + stanzaBreaks, stanzas.length - 1);
+  for (const stanza of stanzas) {
+    stanza.chordPositionRanges = this._consolidateChordPositionRanges(stanza.chordPositionRanges);
+    stanza.expandedChordPositions = [stanza.expandedChordPositions[0], stanza.expandedChordPositions.at(-1) + 1];
+  }
 
-        insertions.push([originalPos, `<span data-ch-chord-position="${syllable.chordPositions.join(' ')}" data-ch-expanded-chord-position="${syllable.expandedChordPositions.join(' ')}" data-ch-lyric-line-id="${syllable.lyricLineIds.join(' ')}"></span>`]);
+  // Insert markers in reverse order
+  for (let i = insertions.length - 1; i >= 0; i--) {
+    const [idx, marker] = insertions[i];
+    expandedLyrics = expandedLyrics.substring(0, idx) + marker + expandedLyrics.substring(idx);
+  }
 
-        // Add chord positions to current stanza
-        if (currentStanzaIndex < stanzas.length) {
-          let previousChordPosition;
-          for (const chordPosition of syllable.chordPositions) {
-            if (previousChordPosition == null || previousChordPosition + 1 != chordPosition) {
-              stanzas[currentStanzaIndex].chordPositionRanges.push({
-                start: chordPosition,
-                end: chordPosition + 1,
-                lyricLineIds: syllable.lyricLineIds,
-                staffNumbers: staffNumbers,
-              });
-            } else {
-              stanzas[currentStanzaIndex].chordPositionRanges.at(-1).end = chordPosition + 1;
-            }
-            previousChordPosition = chordPosition;
-          }
-          stanzas[currentStanzaIndex].expandedChordPositions.push(...syllable.expandedChordPositions);
-        }
+  const stanzasText = expandedLyrics.split('\n\n');
+  for (let sz = 0; sz < stanzas.length; sz++) {
+    stanzas[sz].annotatedLyrics = stanzasText[sz].trim();
+  }
 
-        pos = matchPos + normSylText.length;
+  return stanzas;
+}
+
+// Build a match-friendly version of the lyrics, with a map back to where each
+// normalized character came from in the original text (HTML-aware).
+// For <ruby> blocks, use the <rt> reading text for matching and map to the <ruby> tag position.
+// For other HTML tags (<em>, <strong>, etc.), skip them entirely.
+// For plain text, apply the existing normalization (strip accents, punctuation, digits; collapse whitespace).
+ChScore.prototype._normalizeLyricsForMatching = function (expandedLyrics) {
+  const normChars = [];
+  const posMap = [];
+  const rubyRegex = /<ruby[^>]*>[\s\S]*?<\/ruby>/gi;
+  const stripRe = /[\u0300-\u036f\p{P}\p{N}]/u;
+  let lastPlainIndex = 0;
+  let rubyMatch;
+
+  // Normalize a single character into normChars/posMap.
+  // When collapseWhitespace is true, runs of whitespace become a single space.
+  function addNormChar(char, position, collapseWhitespace) {
+    const norm = char.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    if (norm && !/\s/.test(norm)) {
+      for (const ch of norm) {
+        normChars.push(ch);
+        posMap.push(position);
+      }
+    } else if (collapseWhitespace && /\s/.test(norm) && normChars.at(-1) !== ' ') {
+      normChars.push(' ');
+      posMap.push(position);
+    }
+  }
+
+  function addPlainText(text, startOriginalIndex) {
+    for (let j = 0; j < text.length; j++) {
+      const char = text[j];
+      // Skip HTML tags (e.g. <em>, </strong>, <span class="...">)
+      if (char === '<') {
+        const closeIdx = text.indexOf('>', j);
+        if (closeIdx !== -1) { j = closeIdx; continue; }
+      }
+      // Skip punctuation, digits, and combining marks
+      if (stripRe.test(char)) continue;
+      addNormChar(char, startOriginalIndex + j, true);
+    }
+  }
+
+  while ((rubyMatch = rubyRegex.exec(expandedLyrics)) !== null) {
+    if (rubyMatch.index > lastPlainIndex) {
+      addPlainText(expandedLyrics.substring(lastPlainIndex, rubyMatch.index), lastPlainIndex);
+    }
+    const rtMatch = rubyMatch[0].match(/<rt>(.*?)<\/rt>/i);
+    const reading = rtMatch ? rtMatch[1] : '';
+    for (const char of reading) addNormChar(char, rubyMatch.index, false);
+    lastPlainIndex = rubyRegex.lastIndex;
+  }
+  if (lastPlainIndex < expandedLyrics.length) {
+    addPlainText(expandedLyrics.substring(lastPlainIndex), lastPlainIndex);
+  }
+
+  return { normText: normChars.join(''), posMap: posMap };
+}
+
+// Longest common substring similarity (like Python's SequenceMatcher)
+ChScore.prototype._lyricSimilarity = function (str1, str2) {
+  const matrix = Array(str1.length + 1).fill(null)
+    .map(() => Array(str2.length + 1).fill(0));
+  let maxLen = 0;
+  for (let i = 1; i <= str1.length; i++) {
+    for (let j = 1; j <= str2.length; j++) {
+      if (str1[i - 1] === str2[j - 1]) {
+        matrix[i][j] = matrix[i - 1][j - 1] + 1;
+        maxLen = Math.max(maxLen, matrix[i][j]);
       }
     }
+  }
+  return str1.length + str2.length > 0 ? (maxLen * 2) / (str1.length + str2.length) : 0;
+}
 
-    function consolidateChordPositionRanges(ranges) {
-      const result = [];
-      for (const range of ranges) {
-        const last = result.at(-1);
-        if (last
-            && last.end === range.start
-            && last.staffNumbers.toString() === range.staffNumbers.toString()
-            && last.lyricLineIds.toString() === range.lyricLineIds.toString()) {
-          last.end = range.end;
-          for (const id of range.lyricLineIds) {
-            if (!last.lyricLineIds.includes(id)) last.lyricLineIds.push(id);
-          }
-        } else {
-          result.push(range);
-        }
+// Join chord position ranges that continue one another on the same staves and lyric line
+ChScore.prototype._consolidateChordPositionRanges = function (ranges) {
+  const result = [];
+  for (const range of ranges) {
+    const last = result.at(-1);
+    if (last
+        && last.end === range.start
+        && last.staffNumbers.toString() === range.staffNumbers.toString()
+        && last.lyricLineIds.toString() === range.lyricLineIds.toString()) {
+      last.end = range.end;
+      for (const id of range.lyricLineIds) {
+        if (!last.lyricLineIds.includes(id)) last.lyricLineIds.push(id);
       }
-      return result;
+    } else {
+      result.push(range);
     }
-
-    for (const stanza of stanzas) {
-      stanza.chordPositionRanges = consolidateChordPositionRanges(stanza.chordPositionRanges);
-      stanza.expandedChordPositions = [stanza.expandedChordPositions[0], stanza.expandedChordPositions.at(-1) + 1];
-    }
-
-    // Insert markers in reverse order
-    for (let i = insertions.length - 1; i >= 0; i--) {
-      const [idx, marker] = insertions[i];
-      expandedLyrics = expandedLyrics.substring(0, idx) + marker + expandedLyrics.substring(idx);
-    }
-
-    const stanzasText = expandedLyrics.split('\n\n');
-    for (let sz = 0; sz < stanzas.length; sz++) {
-      stanzas[sz].annotatedLyrics = stanzasText[sz].trim();
-    }
-
-    return stanzas;
-  };
+  }
+  return result;
+}
 
 // Build lyric stanzas from the syllables engraved in the score, when no lyrics were
 // given to align against. A stanza is a run of syllables sharing one lyric line, in
 // sung order, then any line playback never reached — and syllables aren't lines.
-ChScore.prototype._buildStanzasFromSyllables = function (syllables) {
+ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   // Walk the syllables in the order they're sung
   const built = [];
   let current = null;
