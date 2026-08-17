@@ -1615,14 +1615,25 @@ describe('_getIntroSectionFromBrackets()', () => {
     return el;
   }
 
+  /** Wrap bracket elements in a document, which is what the method now reads them from. */
+  function doc(brackets) {
+    const parsed = new DOMParser().parseFromString('<mei/>', 'text/xml');
+    for (const el of brackets) {
+      const imported = parsed.createElement('dir');
+      for (const attr of el.getAttributeNames()) imported.setAttribute(attr, el.getAttribute(attr));
+      parsed.documentElement.append(imported);
+    }
+    return parsed;
+  }
+
   it('should return undefined for an empty bracket array', () => {
-    const result = score._getIntroSectionFromBrackets([], [1, 2]);
+    const result = score._getIntroSectionFromBrackets(doc([]), [1, 2]);
     expect(result).toBeUndefined();
   });
 
   it('should build a single range from a start/end bracket pair', () => {
     const brackets = [bracket(0, 'start'), bracket(4, 'end')];
-    const result = score._getIntroSectionFromBrackets(brackets, [1, 2]);
+    const result = score._getIntroSectionFromBrackets(doc(brackets), [1, 2]);
     expect(result.chordPositionRanges.length).toBe(1);
     expect(result.chordPositionRanges[0].start).toBe(0);
     expect(result.chordPositionRanges[0].end).toBe(4);
@@ -1633,7 +1644,7 @@ describe('_getIntroSectionFromBrackets()', () => {
       bracket(0, 'start'), bracket(4, 'end'),
       bracket(10, 'start'), bracket(15, 'end'),
     ];
-    const result = score._getIntroSectionFromBrackets(brackets, [1]);
+    const result = score._getIntroSectionFromBrackets(doc(brackets), [1]);
     expect(result.chordPositionRanges.length).toBe(2);
     expect(result.chordPositionRanges[0]).toMatchObject({ start: 0, end: 4 });
     expect(result.chordPositionRanges[1]).toMatchObject({ start: 10, end: 15 });
@@ -1641,27 +1652,45 @@ describe('_getIntroSectionFromBrackets()', () => {
 
   it('should always set pauseAfter=true', () => {
     const brackets = [bracket(0, 'start'), bracket(4, 'end')];
-    const result = score._getIntroSectionFromBrackets(brackets, [1]);
+    const result = score._getIntroSectionFromBrackets(doc(brackets), [1]);
     expect(result.pauseAfter).toBe(true);
   });
 
   it('should assign staffNumbers to all ranges', () => {
     const brackets = [bracket(0, 'start'), bracket(4, 'end')];
-    const result = score._getIntroSectionFromBrackets(brackets, [1, 2, 3]);
+    const result = score._getIntroSectionFromBrackets(doc(brackets), [1, 2, 3]);
     expect(result.chordPositionRanges[0].staffNumbers).toEqual([1, 2, 3]);
   });
 
-  it('should create a range of size 1 when start bracket has no matching end', () => {
-    // A start bracket sets [cp, cp+1]; without an end bracket, it stays that way
+  it('should drop a start bracket that has no matching end', () => {
+    // A bracket without its partner describes no range, so it is dropped — leaving
+    // no ranges at all here, and so no introduction section
     const brackets = [bracket(5, 'start')];
-    const result = score._getIntroSectionFromBrackets(brackets, [1]);
+    const result = score._getIntroSectionFromBrackets(doc(brackets), [1]);
+    expect(result).toBeUndefined();
+  });
+
+  it('should drop an earlier start bracket that was never closed', () => {
+    // "The Lord's My Shepherd" (Hymns—For Home and Church) opens a bracket, opens a
+    // second one, and closes only the second
+    const brackets = [bracket(1, 'start'), bracket(5, 'start'), bracket(9, 'end')];
+    const result = score._getIntroSectionFromBrackets(doc(brackets), [1]);
+    expect(result.chordPositionRanges).toHaveLength(1);
     expect(result.chordPositionRanges[0].start).toBe(5);
-    expect(result.chordPositionRanges[0].end).toBe(6);
+    expect(result.chordPositionRanges[0].end).toBe(9);
+  });
+
+  it('should ignore an end bracket with nothing open', () => {
+    const brackets = [bracket(0, 'start'), bracket(4, 'end'), bracket(9, 'end')];
+    const result = score._getIntroSectionFromBrackets(doc(brackets), [1]);
+    expect(result.chordPositionRanges).toHaveLength(1);
+    expect(result.chordPositionRanges[0].start).toBe(0);
+    expect(result.chordPositionRanges[0].end).toBe(4);
   });
 
   it('should return an introduction section object', () => {
     const brackets = [bracket(0, 'start'), bracket(8, 'end')];
-    const result = score._getIntroSectionFromBrackets(brackets, [1, 2]);
+    const result = score._getIntroSectionFromBrackets(doc(brackets), [1, 2]);
     expect(result.sectionId).toBe('introduction');
     expect(result.type).toBe('introduction');
     expect(result.name).toBe('Introduction');
@@ -2681,6 +2710,7 @@ describe('_extractPianoIntroduction', () => {
     const ctx = {
       _scoreData: { meiParsed, hasRepeatOrJump, sections },
       _getInlineVerseNumbers: () => verseNumbers,
+      _getIntroBrackets: ChScore.prototype._getIntroBrackets,
     };
     return ChScore.prototype._extractPianoIntroduction.call(ctx, meiParsed);
   }

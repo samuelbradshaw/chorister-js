@@ -380,12 +380,12 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
     fermatas: fermatas ?? [],
   };
 
-  // Process and render MEI and MIDI
+  // Process MEI, draw SVG, and load MIDI
   this._parseAndAnnotateMei();
-  this._loadMidi();
-
-  // Draw score
+  // TODO: Transposition doesn't take effect when setOptions is called above, because the MEI isn't parsed yet. Calling setOptions again here fixes it, but I'd like to find a cleaner fix.
+  if (this._currentOptions.keySignatureId) this.setOptions(this._currentOptions, false);
   this._drawScore();
+  this._loadMidi();
 
   if (this._currentOptions.customEvents.includes('ch:scoreload')) {
     this._container.dispatchEvent(new CustomEvent('ch:scoreload', { detail: {
@@ -479,12 +479,15 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
   }
 
   // Transpose
-  if (this._currentOptions.keySignatureId) {
-    const keySignatureInfo = this.getKeySignatureInfo();
+  const keySignatureInfo = this._scoreData?.keySignatureInfo;
+  if (this._currentOptions.keySignatureId && keySignatureInfo) {
     const nearbyKeyIndex = keySignatureInfo.nearbyKeySignatures.findIndex(ks => ks.keySignatureId === this._currentOptions.keySignatureId);
     const nearbyKeyInfo = keySignatureInfo.nearbyKeySignatures[nearbyKeyIndex];
-    const directionOperator = nearbyKeyIndex < 7 ? '-' : nearbyKeyIndex > 7 ? '+' : '';
-    verovioOptions.transpose = directionOperator + nearbyKeyInfo.meiPnameAccid;
+    // TODO: Figure out why nearbyKeyInfo is undefined when transposing "His Voice As the Sound" (HHC)
+    if (nearbyKeyInfo) {
+      const directionOperator = nearbyKeyIndex < 7 ? '-' : nearbyKeyIndex > 7 ? '+' : '';
+      verovioOptions.transpose = directionOperator + nearbyKeyInfo.meiPnameAccid;
+    }
   }
 
   this._vrvToolkit.resetOptions();
@@ -721,7 +724,6 @@ ChScore.prototype._loadMidi = function () {
       const averageVelocity = Math.round(referenceNoteVelocities.reduce((accumulator, v) => accumulator + v, 0) / referenceNoteVelocities.length);
 
       const channels = [];
-      const allPartIds = Array.from(Object.keys(this._scoreData.partsById));
       for (const partId of meiNotes[0].partIds) {
         const channel = allPartIds.indexOf(partId) ?? 0;
         if (!channels.includes(channel)) channels.push(channel);
@@ -1120,6 +1122,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
 
   // Gather information about each note and rest
   this._scoreData.notesAndRestsById = {}
+  const tiedNoteEndIds = new Set(Object.values(tiedNotes));
   const notesAndRests = this._scoreData.meiParsed.querySelectorAll('note, rest');
   for (const meiElement of notesAndRests) {
     const elementId = meiElement.getAttribute('xml:id');
@@ -1128,7 +1131,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
     const meiLayerElement = meiElement.closest('layer');
     const meiStaffElement = meiElement.closest('staff');
     const meiMeasureElement = meiElement.closest('measure');
-    const isTiedNote = Object.values(tiedNotes).includes(elementId);
+    const isTiedNote = tiedNoteEndIds.has(elementId);
     const isRest = meiElement.matches('rest');
     const isCue = meiElement.getAttribute('cue') === 'true';
     // TODO: This only gets lyric text attached to the current note (or note chord) in the MEI; but the same lyrics might be sung on other simultaneous notes (such as the TB notes in an SATB chord). Lyrics on those notes aren't currently handled.
@@ -1141,7 +1144,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
       meiChordElement: meiChordElement,
       meiBeamElement: meiBeamElement,
       meiMeasureElement: meiMeasureElement,
-      pitch: this._vrvToolkit.getMIDIValuesForElement(elementId).pitch,
+      pitch: this._getMeiPitch(meiElement),
       lyricSyllables: lyricSyllables,
       staffNumber: Number.parseInt(meiStaffElement.getAttribute('n')),
       layerNumber: Number.parseInt(meiLayerElement.getAttribute('n')),
@@ -1213,7 +1216,12 @@ ChScore.prototype._parseAndAnnotateMei = function () {
     return measureType;
   }
 
+  const staffPartIdsCache = new Map();
   function getStaffPartIds(staffNumber, chordPosition, parts) {
+    const cacheKey = `${chordPosition}:${staffNumber}`;
+    const cached = staffPartIdsCache.get(cacheKey);
+    if (cached) return [cached[0].map(staffPartIds => [...staffPartIds]), cached[1]];
+
     const partIdsDict = { 1: [], 2: [], 3: [], 4: [] };
     const fullPartIds = [];
     const melodyPartIds = [];
@@ -1222,10 +1230,10 @@ ChScore.prototype._parseAndAnnotateMei = function () {
     for (const part of parts) {
       const partId = part.partId;
       let chordPositionRefInfo = null;
-      const reversedChordPositions = Object.keys(part.chordPositionRefs).slice().reverse();
-      for (const previousChordPosition of reversedChordPositions) {
-        if (previousChordPosition <= chordPosition) {
-          chordPositionRefInfo = part.chordPositionRefs[previousChordPosition];
+      const refChordPositions = Object.keys(part.chordPositionRefs);
+      for (let rcp = refChordPositions.length - 1; rcp >= 0; rcp--) {
+        if (refChordPositions[rcp] <= chordPosition) {
+          chordPositionRefInfo = part.chordPositionRefs[refChordPositions[rcp]];
           break;
         }
       }
@@ -1255,7 +1263,15 @@ ChScore.prototype._parseAndAnnotateMei = function () {
     // Convert part IDs dict to a list of lists, and remove empty lists at the end
     let partIds = Object.values(partIdsDict);
     while (partIds.length > 1 && partIds.at(-1).length === 0) partIds.pop();
-    return [partIds, melodyPartIds];
+
+    staffPartIdsCache.set(cacheKey, [partIds, melodyPartIds]);
+    return [partIds.map(cachedPartIds => [...cachedPartIds]), melodyPartIds];
+  }
+
+  // Build an element ID index for faster repeated lookup
+  const elementsById = new Map();
+  for (const element of this._scoreData.meiParsed.querySelectorAll('[*|id]')) {
+    elementsById.set(element.getAttribute('xml:id'), element);
   }
 
   const vrvTimemap = this._vrvToolkit.renderToTimemap({ includeRests: true, includeMeasures: true, });
@@ -1285,7 +1301,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
       this._scoreData.measuresById[entry.measureOn].startQ = entry.qstamp;
       // Only set chord position if measure has notes. Empty measure example: last measure in "We Welcome You" (1989 CSB)
       if (onIds.length > 0) this._scoreData.measuresById[entry.measureOn].firstChordPosition = chordPositionCounter;
-      previousSectionElement = this._scoreData.meiParsed.querySelector(`[*|id="${entry.measureOn}"]`).closest('section, ending');
+      previousSectionElement = elementsById.get(entry.measureOn).closest('section, ending');
       if (!previousSectionElement.hasAttribute('ch-chord-position')) previousSectionElement.setAttribute('ch-chord-position', '')
       if (previousMeasureInfo) {
         previousMeasureInfo.endQ = entry.qstamp;
@@ -1447,7 +1463,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
         qstamp = Math.min(measureInfo.endQ, measureInfo.startQ + ((tstamp - 1) * quartersPerBeat));
         chordPosition = this._bisectLeft(chordPositionQstamps, qstamp);
       } else if (startid) {
-        const refNote = this._scoreData.meiParsed.querySelector(`[*|id="${startid}"]`);
+        const refNote = elementsById.get(startid);
         chordPosition = Number.parseInt(refNote.getAttribute('ch-chord-position'));
         qstamp = this._scoreData.chordPositions[chordPosition].startQ;
       }
@@ -1689,6 +1705,7 @@ ChScore.prototype._parseAndAnnotateMei = function () {
 
   // Save the complete MEI string
   this._scoreData.meiStringComplete = (new XMLSerializer()).serializeToString(this._scoreData.meiParsed);
+  this._scoreData.meiParsedComplete = this._scoreData.meiParsed;
   this._updateMei();
 }
 
@@ -1749,7 +1766,7 @@ ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
 
 // Clean up and add metadata to MEI document based on rendering options
 ChScore.prototype._updateMei = function () {
-  this._scoreData.meiParsed = (new DOMParser()).parseFromString(this._scoreData.meiStringComplete, 'text/xml');
+  this._scoreData.meiParsed = this._scoreData.meiParsedComplete.cloneNode(true);
 
   // Set chord set visibility
   // Add attributes to chord symbols: @ch-superscript
@@ -2119,6 +2136,11 @@ ChScore.prototype._updateMei = function () {
   this._vrvToolkit.loadData(this._scoreData.meiString);
 }
 
+// Create an SVG element
+ChScore.prototype._createSvgElement = function (svgParsed, tagName) {
+  return svgParsed.createElementNS('http://www.w3.org/2000/svg', tagName);
+}
+
 ChScore.prototype._updateSvg = function (svg) {
   const svgParsed = (new DOMParser()).parseFromString(svg, 'text/xml');
   const definitionScaleElement = svgParsed.querySelector('.definition-scale');
@@ -2228,10 +2250,10 @@ ChScore.prototype._updateSvg = function (svg) {
 
   // Set up background and foreground shape layers
   const pageMarginElement = svgParsed.querySelector('.page-margin');
-  const backgroundShapes = svgParsed.createElement('g');
+  const backgroundShapes = this._createSvgElement(svgParsed, 'g');
   backgroundShapes.classList.add('ch-shapes', 'ch-shapes-background');
   pageMarginElement.prepend(backgroundShapes);
-  const foregroundShapes = svgParsed.createElement('g');
+  const foregroundShapes = this._createSvgElement(svgParsed, 'g');
   foregroundShapes.classList.add('ch-shapes', 'ch-shapes-foreground');
   pageMarginElement.append(foregroundShapes);
 
@@ -2289,7 +2311,7 @@ ChScore.prototype._updateSvg = function (svg) {
       // Draw staff labels
       const staffLabelClassName = 'ch-staff-label';
       for (const shapeLayer of shapeLayersByClassName[staffLabelClassName]) {
-        const staffLabel = svgParsed.createElement('text');
+        const staffLabel = this._createSvgElement(svgParsed, 'text');
         staffLabel.setAttribute('x', systemX1 - 300);
         staffLabel.setAttribute('y', staffY1 + ((staffY2 - staffY1) / 2));
         staffLabel.setAttribute('font-size', 350);
@@ -2305,7 +2327,7 @@ ChScore.prototype._updateSvg = function (svg) {
       const staffRectClassName = 'ch-staff-rect';
       const leftExtension = shapeLayersByClassName['ch-chord-position-label'].length > 0 ? 1500 : 0;
       for (const shapeLayer of shapeLayersByClassName[staffRectClassName]) {
-        const staffRect = svgParsed.createElement('rect');
+        const staffRect = this._createSvgElement(svgParsed, 'rect');
         staffRect.setAttribute('x', systemX1 - leftExtension);
         staffRect.setAttribute('y', staffY1);
         staffRect.setAttribute('width', systemX2 - systemX1 + leftExtension);
@@ -2326,7 +2348,7 @@ ChScore.prototype._updateSvg = function (svg) {
     // Draw system rects
     const systemRectClassName = 'ch-system-rect';
     for (const shapeLayer of shapeLayersByClassName[systemRectClassName]) {
-      const systemRect = svgParsed.createElement('rect');
+      const systemRect = this._createSvgElement(svgParsed, 'rect');
       systemRect.setAttribute('x', systemX1);
       systemRect.setAttribute('y', systemY1);
       systemRect.setAttribute('width', systemX2 - systemX1);
@@ -2346,7 +2368,7 @@ ChScore.prototype._updateSvg = function (svg) {
       // Draw measure rects
       const measureRectClassName = 'ch-measure-rect';
       for (const shapeLayer of shapeLayersByClassName[measureRectClassName]) {
-        const measureRect = svgParsed.createElement('rect');
+        const measureRect = this._createSvgElement(svgParsed, 'rect');
         measureRect.setAttribute('x', measureX1);
         measureRect.setAttribute('y', systemY1);
         measureRect.setAttribute('width', measureX2 - measureX1);
@@ -2375,7 +2397,7 @@ ChScore.prototype._updateSvg = function (svg) {
         const noteCircleClassName = 'ch-note-circle';
         for (const shapeLayer of shapeLayersByClassName[noteCircleClassName]) {
           if (noteSymbol.parentElement.classList.contains('rest')) continue;
-          const noteCircle = svgParsed.createElement('circle');
+          const noteCircle = this._createSvgElement(svgParsed, 'circle');
           noteCircle.setAttribute('cx', noteX1 + (noteheadWidth / 2));
           noteCircle.setAttribute('cy', noteY1);
           noteCircle.setAttribute('r', 180);
@@ -2399,7 +2421,7 @@ ChScore.prototype._updateSvg = function (svg) {
         // Draw chord position labels
         const cpLabelClassName = 'ch-chord-position-label';
         for (const shapeLayer of shapeLayersByClassName[cpLabelClassName]) {
-          const cpLabel = svgParsed.createElement('text');
+          const cpLabel = this._createSvgElement(svgParsed, 'text');
           cpLabel.setAttribute('x', cpLineX);
           cpLabel.setAttribute('y', systemY2 + 800);
           cpLabel.setAttribute('font-size', 350);
@@ -2415,7 +2437,7 @@ ChScore.prototype._updateSvg = function (svg) {
         // Draw chord position lines
         const cpLineClassName = 'ch-chord-position-line';
         for (const shapeLayer of shapeLayersByClassName[cpLineClassName]) {
-          const cpLine = svgParsed.createElement('line');
+          const cpLine = this._createSvgElement(svgParsed, 'line');
           cpLine.setAttribute('x1', cpLineX);
           cpLine.setAttribute('y1', systemY1);
           cpLine.setAttribute('x2', cpLineX);
@@ -2431,7 +2453,7 @@ ChScore.prototype._updateSvg = function (svg) {
         const cpRectClassName = 'ch-chord-position-rect';
         const bottomExtension = shapeLayersByClassName['ch-chord-position-label'].length > 0 ? 1000 : 0;
         for (const shapeLayer of shapeLayersByClassName[cpRectClassName]) {
-          const cpRect = svgParsed.createElement('rect');
+          const cpRect = this._createSvgElement(svgParsed, 'rect');
           cpRect.setAttribute('x', cpRectX1);
           cpRect.setAttribute('y', systemY1);
           cpRect.setAttribute('width', measureX2 - cpRectX1); // Updated later if not the last chord position in the measure
@@ -2496,7 +2518,7 @@ ChScore.prototype._updateSvg = function (svg) {
           const lyricLineLabelClassName = 'ch-lyric-line-label';
           if (!addedLyricLabels.includes(lyric.dataset.chLyricLineId)) {
             for (const shapeLayer of shapeLayersByClassName[lyricLineLabelClassName]) {
-              const lyricLineLabel = svgParsed.createElement('text');
+              const lyricLineLabel = this._createSvgElement(svgParsed, 'text');
               lyricLineLabel.setAttribute('x', measureX1 - 300);
               lyricLineLabel.setAttribute('y', lyricY);
               lyricLineLabel.setAttribute('font-size', 350);
@@ -2515,7 +2537,7 @@ ChScore.prototype._updateSvg = function (svg) {
           const lyricRectClassName = 'ch-lyric-rect';
           for (const shapeLayer of shapeLayersByClassName[lyricRectClassName]) {
             if (lyric.classList.contains('label')) continue;
-            const lyricRect = svgParsed.createElement('rect');
+            const lyricRect = this._createSvgElement(svgParsed, 'rect');
             lyricRect.setAttribute('x', lyricX);
             lyricRect.setAttribute('y', lyricY - lyricFontSize + lyricPadding);
             lyricRect.setAttribute('width', measureX2 - lyricX); // Updated later
@@ -2607,7 +2629,7 @@ ChScore.prototype._updateSvg = function (svg) {
           const measure = harmElement.closest('.measure');
           let chordChartsGroup = measure.querySelector('.ch-chord-set-images');
           if (!chordChartsGroup) {
-            chordChartsGroup = svgParsed.createElement('g');
+            chordChartsGroup = this._createSvgElement(svgParsed, 'g');
             chordChartsGroup.classList.add('ch-chord-set-images');
             measure.append(chordChartsGroup);
           }
@@ -2626,7 +2648,7 @@ ChScore.prototype._updateSvg = function (svg) {
     }
   }
 
-  return (new XMLSerializer()).serializeToString(svgParsed);
+  return svgParsed;
 }
 
 ChScore.prototype._drawScore = function () {
@@ -2657,7 +2679,7 @@ ChScore.prototype._drawScore = function () {
     const innerContainer = document.createElement('div');
     innerContainer.setAttribute(`data-ch-${name}`, '');
     if (name === 'svg') {
-      innerContainer.innerHTML = content;
+      innerContainer.append(document.importNode(content.documentElement, true));
       this._pages.at(-1).insertBefore(innerContainer, lyricsBelowInnerContainer);
     } else {
       innerContainer.append(content);
@@ -2739,9 +2761,8 @@ ChScore.prototype._drawScore = function () {
   // Render SVG
   const numPages = this._vrvToolkit.getPageCount();
   for (let p = 1; p <= numPages; p++) {
-    let svg = this._vrvToolkit.renderToSVG(p);
-    svg = this._updateSvg(svg);
-    addInnerContainer('svg', svg);
+    const svgParsed = this._updateSvg(this._vrvToolkit.renderToSVG(p));
+    addInnerContainer('svg', svgParsed);
   }
 
   // If the score container has a fixed height that's not tall enough for the rendered score, add bottom margin to increase the available space. Setting container height directly is avoided, because that could trigger a redraw.
@@ -3157,22 +3178,14 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
 
   const introMeasureRanges = [];
   const introChordPositionRanges = [];
-  const introBrackets = meiParsed.querySelectorAll('[ch-intro-bracket]');
-  for (const introBracket of introBrackets) {
-    const type = introBracket.getAttribute('ch-intro-bracket');
-    const tstamp = Number.parseFloat(introBracket.getAttribute('tstamp'));
-    const chordPosition = Number.parseFloat(introBracket.getAttribute('ch-chord-position'));
-    const measureNumber = introBracket.closest('measure').getAttribute('n');
-
-    if (type === 'start') {
-      introMeasureRanges.push([[measureNumber, tstamp], null]);
-      introChordPositionRanges.push([chordPosition, null]);
-    } else {
-      introMeasureRanges.at(-1)[1] = [measureNumber, tstamp];
-      introChordPositionRanges.at(-1)[1] = chordPosition;
-    }
-    introBracket.remove();
+  for (const introBracket of this._getIntroBrackets(meiParsed)) {
+    introMeasureRanges.push([
+      [introBracket.start.measureNumber, introBracket.start.tstamp],
+      [introBracket.end.measureNumber, introBracket.end.tstamp],
+    ]);
+    introChordPositionRanges.push([introBracket.start.chordPosition, introBracket.end.chordPosition]);
   }
+  for (const element of meiParsed.querySelectorAll('[ch-intro-bracket]')) element.remove();
 
   const introChordPositions = [];
   for (const introChordPositionRange of introChordPositionRanges) {
@@ -3375,44 +3388,45 @@ ChScore.prototype._defaultOptions = {
   customEvents: ['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw', 'ch:pagechange'], // array of custom event types
 }
 
+ChScore.prototype._keySignatures = {
+  major: {
+    'g-flat-major':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'gf', midiPitch: 54, tonality: 'major', name: 'G♭ major' },
+    'g-major':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'major', name: 'G major'  },
+    'a-flat-major':  { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'af', midiPitch: 56, tonality: 'major', name: 'A♭ major' },
+    'a-major':       { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'a',  midiPitch: 57, tonality: 'major', name: 'A major'  },
+    'b-flat-major':  { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'major', name: 'B♭ major' },
+    'b-major':       { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'major', name: 'B major'  },
+    'c-flat-major':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'cf', midiPitch: 59, tonality: 'major', name: 'C♭ major' },
+    'c-major':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'c',  midiPitch: 60, tonality: 'major', name: 'C major'  },
+    'c-sharp-major': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'major', name: 'C# major' },
+    'd-flat-major':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'df', midiPitch: 61, tonality: 'major', name: 'D♭ major' },
+    'd-major':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'major', name: 'D major'  },
+    'e-flat-major':  { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'major', name: 'E♭ major' },
+    'e-major':       { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'major', name: 'E major'  },
+    'f-major':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'major', name: 'F major'  },
+    'f-sharp-major': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'major', name: 'F# major' },
+  },
+  minor: {
+    'g-minor':       { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'minor', name: 'G minor'  },
+    'g-sharp-minor': { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'gs', midiPitch: 56, tonality: 'minor', name: 'G# minor' },
+    'g-flat-minor':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'gf', midiPitch: 56, tonality: 'minor', name: 'A♭ minor' },
+    'a-minor':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'a',  midiPitch: 57, tonality: 'minor', name: 'A minor'  },
+    'a-sharp-minor': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'as', midiPitch: 58, tonality: 'minor', name: 'A# minor' },
+    'b-flat-minor':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'minor', name: 'B♭ minor' },
+    'b-minor':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'minor', name: 'B minor'  },
+    'c-minor':       { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'c',  midiPitch: 60, tonality: 'minor', name: 'C minor'  },
+    'c-sharp-minor': { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'minor', name: 'C# minor' },
+    'd-minor':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'minor', name: 'D minor'  },
+    'd-sharp-minor': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'ds', midiPitch: 63, tonality: 'minor', name: 'D# minor' },
+    'e-flat-minor':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'minor', name: 'E♭ minor' },
+    'e-minor':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'minor', name: 'E minor'  },
+    'f-minor':       { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'minor', name: 'F minor'  },
+    'f-sharp-minor': { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'minor', name: 'F# minor' },
+  },
+};
+
 ChScore.prototype._getKeySignatures = function (tonality = 'major') {
-  const keySignatures = {
-    major: {
-      'g-flat-major':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'gf', midiPitch: 54, tonality: 'major', name: 'G♭ major' },
-      'g-major':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'major', name: 'G major'  },
-      'a-flat-major':  { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'af', midiPitch: 56, tonality: 'major', name: 'A♭ major' },
-      'a-major':       { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'a',  midiPitch: 57, tonality: 'major', name: 'A major'  },
-      'b-flat-major':  { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'major', name: 'B♭ major' },
-      'b-major':       { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'major', name: 'B major'  },
-      'c-flat-major':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'cf', midiPitch: 59, tonality: 'major', name: 'C♭ major' },
-      'c-major':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'c',  midiPitch: 60, tonality: 'major', name: 'C major'  },
-      'c-sharp-major': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'major', name: 'C# major' },
-      'd-flat-major':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'df', midiPitch: 61, tonality: 'major', name: 'D♭ major' },
-      'd-major':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'major', name: 'D major'  },
-      'e-flat-major':  { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'major', name: 'E♭ major' },
-      'e-major':       { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'major', name: 'E major'  },
-      'f-major':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'major', name: 'F major'  },
-      'f-sharp-major': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'major', name: 'F# major' },
-    },
-    minor: {
-      'g-minor':       { mxlFifths: '-2', meiSig: '2f', meiPnameAccid: 'g',  midiPitch: 55, tonality: 'minor', name: 'G minor'  },
-      'g-sharp-minor': { mxlFifths: '5',  meiSig: '5s', meiPnameAccid: 'gs', midiPitch: 56, tonality: 'minor', name: 'G# minor' },
-      'g-flat-minor':  { mxlFifths: '-7', meiSig: '7f', meiPnameAccid: 'gf', midiPitch: 56, tonality: 'minor', name: 'A♭ minor' },
-      'a-minor':       { mxlFifths: '0',  meiSig: '0',  meiPnameAccid: 'a',  midiPitch: 57, tonality: 'minor', name: 'A minor'  },
-      'a-sharp-minor': { mxlFifths: '7',  meiSig: '7s', meiPnameAccid: 'as', midiPitch: 58, tonality: 'minor', name: 'A# minor' },
-      'b-flat-minor':  { mxlFifths: '-5', meiSig: '5f', meiPnameAccid: 'bf', midiPitch: 58, tonality: 'minor', name: 'B♭ minor' },
-      'b-minor':       { mxlFifths: '2',  meiSig: '2s', meiPnameAccid: 'b',  midiPitch: 59, tonality: 'minor', name: 'B minor'  },
-      'c-minor':       { mxlFifths: '-3', meiSig: '3f', meiPnameAccid: 'c',  midiPitch: 60, tonality: 'minor', name: 'C minor'  },
-      'c-sharp-minor': { mxlFifths: '4',  meiSig: '4s', meiPnameAccid: 'cs', midiPitch: 61, tonality: 'minor', name: 'C# minor' },
-      'd-minor':       { mxlFifths: '-1', meiSig: '1f', meiPnameAccid: 'd',  midiPitch: 62, tonality: 'minor', name: 'D minor'  },
-      'd-sharp-minor': { mxlFifths: '6',  meiSig: '6s', meiPnameAccid: 'ds', midiPitch: 63, tonality: 'minor', name: 'D# minor' },
-      'e-flat-minor':  { mxlFifths: '-6', meiSig: '6f', meiPnameAccid: 'ef', midiPitch: 63, tonality: 'minor', name: 'E♭ minor' },
-      'e-minor':       { mxlFifths: '1',  meiSig: '1s', meiPnameAccid: 'e',  midiPitch: 64, tonality: 'minor', name: 'E minor'  },
-      'f-minor':       { mxlFifths: '-4', meiSig: '4f', meiPnameAccid: 'f',  midiPitch: 65, tonality: 'minor', name: 'F minor'  },
-      'f-sharp-minor': { mxlFifths: '3',  meiSig: '3s', meiPnameAccid: 'fs', midiPitch: 66, tonality: 'minor', name: 'F# minor' },
-    },
-  };
-  return keySignatures[tonality];
+  return this._keySignatures[tonality];
 }
 
 
@@ -4326,8 +4340,8 @@ ChScore.prototype._normalizeSections = function () {
 
   let hasPrebuiltSections = this._scoreData.sections.length > 0;
   const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed);
-  const introBracketElements = this._scoreData.meiParsed.querySelectorAll('[ch-intro-bracket]');
-  const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionElement(this._scoreData.meiParsed, verseNumbers.length, introBracketElements.length > 0, this._scoreData.hasRepeatOrJump);
+  const hasIntroBrackets = this._getIntroBrackets(this._scoreData.meiParsed).length > 0;
+  const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionElement(this._scoreData.meiParsed, verseNumbers.length, hasIntroBrackets, this._scoreData.hasRepeatOrJump);
 
   let introSection;
   let otherSections = [];
@@ -4337,7 +4351,7 @@ ChScore.prototype._normalizeSections = function () {
     otherSections = introSection ? this._scoreData.sections.slice(1) : this._scoreData.sections;
   // Generate sections based on simple score structure
   } else {
-    introSection = this._getIntroSectionFromBrackets(introBracketElements, this._scoreData.staffNumbers);
+    introSection = this._getIntroSectionFromBrackets(this._scoreData.meiParsed, this._scoreData.staffNumbers);
     if (!hasComplexSections) otherSections = this._generateSectionsFromSimpleScore(verseNumbers, hasInitialChorus);
   }
 
@@ -4526,16 +4540,30 @@ ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasI
   return [hasComplexSections, hasInitialChorus, expansionIds];
 }
 
-ChScore.prototype._getIntroSectionFromBrackets = function (introBracketElements, staffNumbers) {
-  const introChordPositionRanges = [];
-  for (const introBracketElement of introBracketElements) {
-    const chordPosition = Number.parseInt(introBracketElement.getAttribute('ch-chord-position'));
-    if (introBracketElement.getAttribute('ch-intro-bracket') === 'start') {
-      introChordPositionRanges.push([chordPosition, chordPosition + 1]);
-    } else {
-      introChordPositionRanges.at(-1)[1] = chordPosition;
+// Get piano introduction brackets in a document, as { start, end } pairs with the element, chord position, tstamp and measure number. Incomplete bracket pairs are dropped, for example, in "The Lord's My Shepherd" (HHC).
+ChScore.prototype._getIntroBrackets = function (meiParsed) {
+  const introBrackets = [];
+  let openBracket = null;
+  for (const element of meiParsed.querySelectorAll('[ch-intro-bracket]')) {
+    const bracket = {
+      element: element,
+      chordPosition: Number.parseInt(element.getAttribute('ch-chord-position')),
+      tstamp: Number.parseFloat(element.getAttribute('tstamp')),
+      measureNumber: element.closest('measure')?.getAttribute('n') ?? null,
+    };
+    if (element.getAttribute('ch-intro-bracket') === 'start') {
+      openBracket = bracket;
+    } else if (openBracket) {
+      introBrackets.push({ start: openBracket, end: bracket });
+      openBracket = null;
     }
   }
+  return introBrackets;
+}
+
+ChScore.prototype._getIntroSectionFromBrackets = function (meiParsed, staffNumbers) {
+  const introChordPositionRanges = this._getIntroBrackets(meiParsed).map(
+    introBracket => [introBracket.start.chordPosition, introBracket.end.chordPosition]);
   return this._getIntroSectionFromChordPositions(introChordPositionRanges, staffNumbers, true);
 }
 
@@ -4625,10 +4653,10 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
 
   // Get line numbers from secondary lyrics
   const additionalSecondaryLyricLineNumbers = new Set();
-  const chorusChordPositions = chorusCpRanges.flat();
+  const chorusChordPositions = new Set(chorusCpRanges.flat());
   for (const lyric of meiParsed.querySelectorAll('verse[ch-secondary]')) {
     const lineNumber = Number.parseInt(lyric.getAttribute('n'));
-    if (chorusChordPositions.includes(lyric.closest('note, chord').getAttribute('ch-chord-position'))) {
+    if (chorusChordPositions.has(Number.parseInt(lyric.closest('note, chord').getAttribute('ch-chord-position')))) {
       chorusLineNumbers.add(lineNumber);
     } else if (!verseNumbers.includes(lineNumber)) {
       additionalSecondaryLyricLineNumbers.add(lineNumber);
@@ -4700,7 +4728,7 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
 
     for (let cpr = 0; cpr < chordPositionRanges.length; cpr++) {
       const chordPositionRange = chordPositionRanges[cpr];
-      if (chorusChordPositions.includes(chordPositionRange.start)) {
+      if (chorusChordPositions.has(chordPositionRange.start)) {
         sections.push({
           sectionId: `chorus-${verseCounter}`,
           type: 'chorus',
@@ -4807,6 +4835,25 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
 
 /********************** Private methods: normalize lyrics **********************/
 
+// Get lyric elements sung on the melody, grouped by chord position
+ChScore.prototype._getMelodyVerseElementsByChordPosition = function () {
+  const versesByChordPosition = new Map();
+  // Restricted to notes and chords on purpose. <section> also carries
+  // @ch-chord-position — as a space-separated list — so matching the attribute alone
+  // would sweep in every verse in the section, melody or not.
+  const verses = this._scoreData.meiParsed.querySelectorAll(
+    ':is(note[ch-melody], chord:has([ch-melody])) verse');
+  for (const verse of verses) {
+    // The note or chord the verse hangs off; both carry the same chord position
+    const chordPosition = Number.parseInt(
+      verse.closest('note, chord')?.getAttribute('ch-chord-position'));
+    if (Number.isNaN(chordPosition)) continue;
+    if (!versesByChordPosition.has(chordPosition)) versesByChordPosition.set(chordPosition, []);
+    versesByChordPosition.get(chordPosition).push(verse);
+  }
+  return versesByChordPosition;
+}
+
 ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecpStart) {
   const extractedLyricSyllables = [];
   extractedLyricSyllables.push({
@@ -4819,14 +4866,13 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
   });
   let ecpCounter = ecpStart;
   const lyricLineCounters = {};
+  const melodyVersesByChordPosition = this._getMelodyVerseElementsByChordPosition();
   for (const lyricChordPositionRange of lyricChordPositionRanges) {
     const [start, end, sectionType, startsSection] = lyricChordPositionRange;
     let isFirstSyllableOfSection = startsSection ?? false;
     let rangeHasSingleLine = true;
-    const verseElementsByChordPosition = {};
     for (let cp = start; cp < end; cp++) {
-      verseElementsByChordPosition[cp] = this._scoreData.meiParsed.querySelectorAll(`[ch-chord-position="${cp}"][ch-melody] verse, [ch-chord-position="${cp}"]:has([ch-melody]) verse`);
-      if (verseElementsByChordPosition[cp].length > 1) rangeHasSingleLine = false;
+      if ((melodyVersesByChordPosition.get(cp) ?? []).length > 1) rangeHasSingleLine = false;
     }
 
     // Test cases:
@@ -4837,7 +4883,7 @@ ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecp
       const chordPositionIsSingleLine = this._scoreData.chordPositions[cp].isSingleLine;
       if (!Object.hasOwn(lyricLineCounters, cp)) lyricLineCounters[cp] = 0;
       lyricLineCounters[cp] += 1;
-      const verseElements = verseElementsByChordPosition[cp];
+      const verseElements = melodyVersesByChordPosition.get(cp) ?? [];
       let verseElement;
       if (verseElements.length > 0) {
         if (chordPositionIsSingleLine || rangeHasSingleLine) {
@@ -5245,6 +5291,29 @@ ChScore.prototype._cleanMarker = function (marker) {
 
 
 /********************** Private methods: utilities **********************/
+
+// Semitones above C for each pitch name, and what each accidental adds to it
+ChScore.prototype._pitchClasses = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+ChScore.prototype._accidOffsets = {
+  n: 0, s: 1, f: -1, ss: 2, x: 2, ff: -2, sx: 3, xs: 3, ts: 3, tf: -3, ns: 1, nf: -1,
+};
+
+// Get MIDI pitch from note element attributes (Verovio provides this in getMIDIValuesForElement(), but calculating it here is more performant than many repeated requests across the WASM-boundary)
+ChScore.prototype._getMeiPitch = function (meiElement) {
+  const pname = meiElement.getAttribute('pname');
+  if (!pname) return undefined;
+  const pitchClass = this._pitchClasses[pname.toLowerCase()];
+  if (pitchClass === undefined) return undefined;
+  const octave = Number.parseInt(meiElement.getAttribute('oct.ges') ?? meiElement.getAttribute('oct'));
+  if (Number.isNaN(octave)) return undefined;
+  // The accidental can be written on the note or on a child <accid> element
+  const accidElement = meiElement.querySelector('accid');
+  const accid = meiElement.getAttribute('accid.ges')
+    ?? accidElement?.getAttribute('accid.ges')
+    ?? meiElement.getAttribute('accid')
+    ?? accidElement?.getAttribute('accid');
+  return 12 * (octave + 1) + pitchClass + (accid ? (this._accidOffsets[accid] ?? 0) : 0);
+}
 
 // Convert qstamp (0-based position in quarter notes, relative to song) to tstamp (1-based position in time signature denominator notes, relative to measure)
 ChScore.prototype._qstampToTstamp = function (startQ, measureStartQ, timeSignatureDenominator) {
