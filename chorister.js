@@ -5220,9 +5220,63 @@ ChScore.prototype._newLyricStanza = function (lyricLineId, type, marker, chordPo
   };
 }
 
+// Dictionary of known words with hyphens for lookup when extracting lyrics  ("latter-day"), by language
+ChScore.prototype._hyphenatedWords = {
+  en: [
+    'adam-ondi-ahman', 'all-gracious', 'all-pervading', 'birthday-time',
+    'day-dawn', 'death-beds', 'earth-stains', 'easter-time', 'ever-circling',
+    'ever-joyful', 'ever-living', 'ever-present', 'ever-sure', 'ever-tender',
+    'far-called', 'far-flung', 'firm-rooted', 'get-the-work-done', 'habit-free',
+    'heaven-born', 'heav’n-born', 'heav’n-rescued', 'heigh-dee-ho', 'latter-day',
+    'life-giving', 'light-mindedness', 'long-awaited', 'long-expected',
+    'love-light', 'nail-prints', 'never-fading', 'one-tenth', 'prayer-time',
+    'purple-headed', 're-echoes', 'safe-folded', 'self-control', 'soul-cheering',
+    'star-spangled', 'stepping-stones', 'storm-tossed', 'tempest-tossed',
+    'thank-off’rings', 'under-shepherds', 'valley-o', 'war-cry', 'well-fought',
+    'where-e’er', 'white-robed', 'zip-a-dee-ay',
+  ],
+};
+
+// Each language's dictionary, indexed by the word with its hyphens removed, to the
+// character positions (into that stripped word) a hyphen goes back at. Built once
+// per language and cached, since _wordBuilder consults it once per syllable.
+ChScore.prototype._hyphenPositionsByLanguage = {};
+
+ChScore.prototype._hyphenPositions = function (language) {
+  if (!this._hyphenPositionsByLanguage[language]) {
+    const positions = {};
+    for (const word of this._hyphenatedWords[language] ?? []) {
+      const hyphenPositions = [];
+      let position = 0;
+      for (const part of word.split('-').slice(0, -1)) {
+        position += part.length;
+        hyphenPositions.push(position);
+      }
+      positions[word.replace(/-/g, '')] = hyphenPositions;
+    }
+    this._hyphenPositionsByLanguage[language] = positions;
+  }
+  return this._hyphenPositionsByLanguage[language];
+}
+
+// Restore a known compound word's hyphen(s) once its syllables are rejoined, so
+// "latterday" becomes "latter-day" again. Case is left as the syllables spelled
+// it; only where the hyphens go is looked up.
+ChScore.prototype._insertKnownHyphens = function (word, language = 'en') {
+  const hyphenPositions = this._hyphenPositions(language)[word.toLowerCase()];
+  if (!hyphenPositions) return word;
+
+  let result = word;
+  for (const position of hyphenPositions.slice().reverse()) {
+    result = `${result.slice(0, position)}-${result.slice(position)}`;
+  }
+  return result;
+}
+
 // Joins syllables into words. MEI marks each syllable's position within its
 // word with @wordpos: i(nitial), m(edial), t(erminal), s(ingle).
 ChScore.prototype._wordBuilder = function () {
+  const self = this;
   const trailingHyphen = /[-‑\s]+$/;
   const words = [];
   let partial = '';
@@ -5236,13 +5290,16 @@ ChScore.prototype._wordBuilder = function () {
         // A hyphen means the word continues, even where a score marks the
         // continuing syllable inconsistently — @wordpos="s" in a second ending
         // where the first ending marks the same syllable "t".
-        words.push(partial + syllable);
+        words.push(self._insertKnownHyphens(partial + syllable));
         partial = '';
       } else {
-        words.push(syllable);
+        words.push(self._insertKnownHyphens(syllable));
       }
     },
-    text() { return (partial ? words.concat(partial) : words).join(' ').trim(); },
+    text() {
+      const all = partial ? words.concat(self._insertKnownHyphens(partial)) : words;
+      return all.join(' ').trim();
+    },
   };
 }
 
