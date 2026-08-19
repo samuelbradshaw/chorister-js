@@ -352,6 +352,7 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
       scoreContent = scoreContent.replace(/^\s+/gm, '');
     } else if (format === 'musicxml' || format === 'mxl') {
       scoreContent = this._fixIntroBrackets(scoreContent);
+      scoreContent = this._fixLyricStyling(scoreContent);
     }
     this._vrvToolkit.loadData(scoreContent);
   }
@@ -923,6 +924,29 @@ ChScore.prototype._loadMidi = function () {
       midiNoteSequence: midiNoteSequence,
     } }));
   }
+}
+
+// Convert bold and italic font names to standard font style and weight attributes
+ChScore.prototype._fixLyricStyling = function (musicXml) {
+  if (!musicXml.includes('<lyric')) return musicXml;
+
+  const parsed = (new DOMParser()).parseFromString(musicXml, 'text/xml');
+  if (parsed.querySelector('parsererror')) return musicXml;
+
+  let changed = false;
+  for (const text of parsed.querySelectorAll('lyric > text')) {
+    const fontFamily = (text.getAttribute('font-family') || '').toLowerCase();
+    if (!text.getAttribute('font-style') && fontFamily.includes('italic')) {
+      text.setAttribute('font-style', 'italic');
+      changed = true;
+    }
+    if (!text.getAttribute('font-weight') && fontFamily.includes('bold')) {
+      text.setAttribute('font-weight', 'bold');
+      changed = true;
+    }
+  }
+
+  return changed ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
 }
 
 // Move intro brackets (⌜ ⌝) to the correct document order (based on x-position) relative to surrounding notes. When converting MusicXML to MEI, Verovio uses document order to determine element position.
@@ -4419,18 +4443,32 @@ ChScore.prototype._normalizeSections = function () {
 
   // Add annotated lyrics to sections
   let sectionBelowCounter = 0;
-  if (lyricStanzas.length > 0) {
-    for (let ls = 0; ls < lyricStanzas.length; ls++) {
-      const lyricStanza = lyricStanzas[ls];
-      const section = otherSections[ls];
-      if (section?.type === lyricStanza.type && !section.annotatedLyrics) {
-        section.annotatedLyrics = lyricStanza.annotatedLyrics;
-      } else if (!section) {
-        otherSections.push(newSectionBelow(sectionBelowCounter, lyricStanza));
-        sectionBelowCounter += 1;
-      } else {
-        break;
-      }
+  let si = 0;
+  for (let ls = 0; ls < lyricStanzas.length; ls++) {
+    const lyricStanza = lyricStanzas[ls];
+    const stanzaStart = lyricStanza.chordPositionRanges[0]?.start;
+    // A stanza with no real range at all (e.g. text printed below the music, never
+    // sung from the staff) has no position to match — searching for `undefined`
+    // would coincidentally "match" another rangeless section already filled in an
+    // earlier iteration (undefined === undefined), so skip straight to the
+    // list-position fallback instead of searching.
+    let pi = stanzaStart !== undefined ? si : otherSections.length;
+    while (pi < otherSections.length && otherSections[pi].chordPositionRanges[0]?.start !== stanzaStart) pi += 1;
+    const foundByPosition = pi < otherSections.length;
+    const section = foundByPosition ? otherSections[pi] : otherSections[ls];
+
+    if (section?.type === lyricStanza.type && !section.annotatedLyrics) {
+      section.annotatedLyrics = lyricStanza.annotatedLyrics;
+      if (foundByPosition) si = pi + 1;
+    } else if (!section) {
+      otherSections.push(newSectionBelow(sectionBelowCounter, lyricStanza));
+      sectionBelowCounter += 1;
+    } else {
+      // A section exists here but doesn't match (already annotated some other
+      // way, or genuinely a different type) — sections were built by a path this
+      // stanza list isn't in step with, so stop rather than guess; this is the
+      // same bailout the original position-paired version used.
+      break;
     }
   }
 
@@ -4914,8 +4952,15 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
           label: label ? label.textContent.trim() : null,
           text: text,
           // The syllables as engraved, kept for _getLyricsFromSyllables: joining
-          // them back into words needs @wordpos, which the flattened text loses
-          syls: sylElements.map(syl => ({ text: syl.textContent.trim(), wordpos: syl.getAttribute('wordpos') })),
+          // them back into words needs @wordpos, which the flattened text loses.
+          // fontstyle/fontweight (set by _fixLyricStyling for MusicXML input, or
+          // native to MEI input) mark words to wrap in <em>/<strong>.
+          syls: sylElements.map(syl => ({
+            text: syl.textContent.trim(),
+            wordpos: syl.getAttribute('wordpos'),
+            italic: syl.getAttribute('fontstyle') === 'italic',
+            bold: syl.getAttribute('fontweight') === 'bold',
+          })),
           verseLabel: verseElement.getAttribute('label'),
           chordPositions: [cp],
           expandedChordPositions: [ecpCounter],
@@ -5179,9 +5224,9 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
     // read them off the verse element: @wordpos is what joins them into words
     const syls = syllable.syls ?? [];
     if (syls.length > 0) {
-      for (const syl of syls) builder.add(syl.text, syl.wordpos);
+      for (const syl of syls) builder.add(syl.text, syl.wordpos, syl.italic, syl.bold);
     } else {
-      builder.add(syllable.text, null);
+      builder.add(syllable.text, null, false, false);
     }
 
     // A label reached mid-stanza names the stanza; it doesn't start a new one
@@ -5278,27 +5323,58 @@ ChScore.prototype._insertKnownHyphens = function (word, language = 'en') {
 ChScore.prototype._wordBuilder = function () {
   const self = this;
   const trailingHyphen = /[-‑\s]+$/;
-  const words = [];
+  const words = []; // { text, italic, bold }, styling merged into <em>/<strong> spans in text()
   let partial = '';
+  let partialItalic = false;
+  let partialBold = false;
+
   return {
-    add(text, wordpos) {
+    add(text, wordpos, italic, bold) {
       const syllable = text.replace(trailingHyphen, '');
       if (!syllable) return;
       if (wordpos === 'i' || wordpos === 'm') {
         partial += syllable;
+        partialItalic = partialItalic || italic;
+        partialBold = partialBold || bold;
       } else if (partial) {
         // A hyphen means the word continues, even where a score marks the
         // continuing syllable inconsistently — @wordpos="s" in a second ending
         // where the first ending marks the same syllable "t".
-        words.push(self._insertKnownHyphens(partial + syllable));
+        words.push({
+          text: self._insertKnownHyphens(partial + syllable),
+          italic: partialItalic || italic,
+          bold: partialBold || bold,
+        });
         partial = '';
+        partialItalic = false;
+        partialBold = false;
       } else {
-        words.push(self._insertKnownHyphens(syllable));
+        words.push({ text: self._insertKnownHyphens(syllable), italic, bold });
       }
     },
     text() {
-      const all = partial ? words.concat(self._insertKnownHyphens(partial)) : words;
-      return all.join(' ').trim();
+      const all = partial
+        ? words.concat({ text: self._insertKnownHyphens(partial), italic: partialItalic, bold: partialBold })
+        : words;
+
+      // A styling change doesn't happen mid-word, so consecutive words with the
+      // same styling are one <em>/<strong> span — "one, two, three." stays a
+      // single run instead of three, matching how it's engraved.
+      const runs = [];
+      for (const word of all) {
+        const current = runs.at(-1);
+        if (current && current.italic === word.italic && current.bold === word.bold) {
+          current.text += ` ${word.text}`;
+        } else {
+          runs.push({ text: word.text, italic: word.italic, bold: word.bold });
+        }
+      }
+
+      return runs.map(({ text, italic, bold }) => {
+        if (bold) text = `<strong>${text}</strong>`;
+        if (italic) text = `<em>${text}</em>`;
+        return text;
+      }).join(' ').trim();
     },
   };
 }
