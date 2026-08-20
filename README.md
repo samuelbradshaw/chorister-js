@@ -590,6 +590,7 @@ Chorister.js adds the following data attributes to elements in Verovio’s SVG o
 - **@data-ch-expanded-chord-position** – Expanded chord position is similar to chord position, but it indicates relative position in the expanded score, or the order that notes are played. If the score has repeats or jumps, elements may have multiple expanded chord positions. Added to chord, note, rest, dir, harm, and fermata elements.
 - **@data-ch-lyric-line-id** – Indicates the lyric line ID. Can be used to highlight a specific verse in the score.
 - **@data-ch-intro-bracket** – Indicates an intro bracket (⌜ or ⌝). The attribute value is either `start` or `end`.
+- **@data-ch-round-marker** – Indicates a round marker (①, ②, ③, etc.), which marks where each voice enters in a round.
 - **@data-ch-part-id** – Indicates the vocal or instrumental part (if part information is provided). Added to note and rest elements.
 - **@data-ch-melody** – Indicates that the note or rest is part of the melody (if part information is provided). Added to note and rest elements.
 - **@data-ch-section-id** – Indicates the section ID for lyric text. Added to verse and label elements.

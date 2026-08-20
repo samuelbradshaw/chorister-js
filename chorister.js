@@ -1091,6 +1091,10 @@ ChScore.prototype._unzipMusicXml = async function (arrayBuffer) {
   return null;
 }
 
+// A round marks where each voice enters with a circled digit, engraved as a dingbat
+// circled digit (➀–➈). Not to be confused with a verse marker ("2.").
+ChScore.prototype._roundMarkerPattern = /^[➀-➈]$/;
+
 ChScore.prototype._parseAndAnnotateMei = function () {
   this._scoreData.meiParsed = (new DOMParser()).parseFromString(this._scoreData.meiStringOriginal, 'text/xml');
   this._scoreData.scoreMetadata = this._getScoreMetadata(this._scoreData.meiParsed);
@@ -1505,12 +1509,14 @@ ChScore.prototype._parseAndAnnotateMei = function () {
         }
       }
 
-      // Mark intro brackets
+      // Mark intro brackets and round markers
       const elementText = element.textContent.trim();
       if (elementText === '⌜') {
         element.setAttribute('ch-intro-bracket', 'start');
       } else if (elementText === '⌝') {
         element.setAttribute('ch-intro-bracket', 'end');
+      } else if (this._roundMarkerPattern.test(elementText)) {
+        element.setAttribute('ch-round-marker', '');
       }
 
       // If qstamp is at the end of the measure, right-align it to prevent it from sticking out too far
@@ -3383,7 +3389,7 @@ ChScore.prototype._defaultVerovioOptions = {
     'chord@ch-chord-position', 'note@ch-chord-position', 'rest@ch-chord-position',
     'dir@ch-chord-position', 'harm@ch-chord-position', 'fermata@ch-chord-position',
     'verse@ch-lyric-line-id',
-    'dir@ch-intro-bracket', 'rend@ch-superscript', 'syl@end-underscore',
+    'dir@ch-intro-bracket', 'dir@ch-round-marker', 'rend@ch-superscript', 'syl@end-underscore',
     // Chorister.js advanced attributes (based on parts and sections data)
     'chord@ch-expanded-chord-position', 'note@ch-expanded-chord-position', 'rest@ch-expanded-chord-position',
     'dir@ch-expanded-chord-position', 'harm@ch-expanded-chord-position', 'fermata@ch-expanded-chord-position',
@@ -4892,6 +4898,21 @@ ChScore.prototype._getMelodyVerseElementsByChordPosition = function () {
   return versesByChordPosition;
 }
 
+// Round markers, by the chord position they're engraved at. The marker is the dir's own
+// text; @ch-round-marker only flags which dirs are markers. Reading them by chord
+// position is what re-emits each one on every pass through a repeat.
+ChScore.prototype._getRoundMarkersByChordPosition = function () {
+  const roundMarkersByChordPosition = new Map();
+  for (const dir of this._scoreData.meiParsed.querySelectorAll('dir[ch-round-marker]')) {
+    const chordPosition = Number.parseInt(dir.getAttribute('ch-chord-position'));
+    if (Number.isNaN(chordPosition)) continue;
+    if (!roundMarkersByChordPosition.has(chordPosition)) {
+      roundMarkersByChordPosition.set(chordPosition, dir.textContent.trim());
+    }
+  }
+  return roundMarkersByChordPosition;
+}
+
 // Lyric stanzas as sung, read off the score. Lyrics given to align against decide
 // what the stanzas are; without them, the stanzas are read out of the score's own
 // syllables.
@@ -4918,6 +4939,8 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
   let ecpCounter = ecpStart;
   const lyricLineCounters = {};
   const melodyVersesByChordPosition = this._getMelodyVerseElementsByChordPosition();
+  const roundMarkersByChordPosition = this._getRoundMarkersByChordPosition();
+  let pendingRoundMarker = null;
   for (const lyricChordPositionRange of lyricChordPositionRanges) {
     const [start, end, sectionType, startsSection] = lyricChordPositionRange;
     let isFirstSyllableOfSection = startsSection ?? false;
@@ -4936,7 +4959,14 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
       lyricLineCounters[cp] += 1;
       const verseElements = melodyVersesByChordPosition.get(cp) ?? [];
       let verseElement;
-      if (verseElements.length > 0) {
+      // A pickup engraved inside a repeat carries only the verses it leads into, each
+      // labelled with its number ("2.", "3."), so @n doesn't line up with the pass
+      // count and neither rule below picks the right one — take them in engraved order
+      const isLabelledPickup = verseElements.length > 1
+        && verseElements.every(ve => ve.querySelector('label'));
+      if (isLabelledPickup) {
+        verseElement = verseElements[lyricLineCounters[cp] - 1];
+      } else if (verseElements.length > 0) {
         if (chordPositionIsSingleLine || rangeHasSingleLine) {
           verseElement = verseElements[0];
         } else {
@@ -4944,10 +4974,20 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
         }
       }
 
+      // A round marker is engraved where the voice enters, which isn't always the chord
+      // position its word starts on — it can land on a held note with no lyric, or on
+      // the tail syllable of the word before. It belongs to the next word start.
+      if (roundMarkersByChordPosition.has(cp) && !pendingRoundMarker) {
+        pendingRoundMarker = roundMarkersByChordPosition.get(cp);
+      }
+
       if (verseElement) {
         const label = verseElement.querySelector('label');
         const sylElements = Array.from(verseElement.querySelectorAll('syl'));
         const text = sylElements.map(syl => (syl.textContent.replace(/[\-\‑\s]+$/, '').trim() + ' ').trim()).join(' ').trim() || null;
+        const startsWord = !['m', 't'].includes(sylElements[0]?.getAttribute('wordpos'));
+        const roundMarker = startsWord ? pendingRoundMarker : null;
+        if (roundMarker) pendingRoundMarker = null;
         extractedLyricSyllables.push({
           label: label ? label.textContent.trim() : null,
           text: text,
@@ -4962,6 +5002,9 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
             bold: syl.getAttribute('fontweight') === 'bold',
           })),
           verseLabel: verseElement.getAttribute('label'),
+          // Kept out of text so _alignSyllablesToLyrics, which matches these against
+          // lyrics that already carry their own markers, is unaffected
+          roundMarker: roundMarker,
           chordPositions: [cp],
           expandedChordPositions: [ecpCounter],
           lyricLineIds: [verseElement.getAttribute('ch-lyric-line-id')],
@@ -5086,7 +5129,7 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
 
   const stanzasText = expandedLyrics.split('\n\n');
   for (let sz = 0; sz < stanzas.length; sz++) {
-    stanzas[sz].annotatedLyrics = stanzasText[sz].trim();
+    stanzas[sz].annotatedLyrics = this._applyFindReplace(stanzasText[sz].trim());
   }
 
   return stanzas;
@@ -5220,6 +5263,8 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
       built.push({ stanza: current, builder: builder });
     }
 
+    if (syllable.roundMarker) builder.addRoundMarker(syllable.roundMarker);
+
     // The syllables as engraved, carried over from _extractLyricStanzas, which
     // read them off the verse element: @wordpos is what joins them into words
     const syls = syllable.syls ?? [];
@@ -5237,7 +5282,9 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   }
 
   // Join each stanza's words once it's complete, rather than on every syllable
-  for (const { stanza, builder: words } of built) stanza.annotatedLyrics = words.text();
+  for (const { stanza, builder: words } of built) {
+    stanza.annotatedLyrics = this._applyFindReplace(words.text());
+  }
 
   const stanzas = this._mergePickupStanzas(built.map(entry => entry.stanza));
   for (const stanza of stanzas) stanza.name = this._stanzaName(stanza);
@@ -5263,6 +5310,22 @@ ChScore.prototype._newLyricStanza = function (lyricLineId, type, marker, chordPo
     expandedChordPositions: expandedChordPosition == null ? [] : [expandedChordPosition, expandedChordPosition + 1],
     lyricLineIds: lyricLineId ? [lyricLineId] : [],
   };
+}
+
+// Characters swapped out of derived lyrics once a stanza is assembled, so what a score
+// engraves in a display font comes out as its canonical equivalent. Dingbat circled
+// digits are how round markers are engraved; circled digits are what lyrics carry.
+ChScore.prototype._findReplace = {
+  '➀': '①', '➁': '②', '➂': '③', '➃': '④', '➄': '⑤',
+  '➅': '⑥', '➆': '⑦', '➇': '⑧', '➈': '⑨',
+};
+
+ChScore.prototype._applyFindReplace = function (text) {
+  let result = text;
+  for (const [find, replace] of Object.entries(this._findReplace)) {
+    result = result.replaceAll(find, replace);
+  }
+  return result;
 }
 
 // Dictionary of known words with hyphens for lookup when extracting lyrics  ("latter-day"), by language
@@ -5351,6 +5414,13 @@ ChScore.prototype._wordBuilder = function () {
       } else {
         words.push({ text: self._insertKnownHyphens(syllable), italic, bold });
       }
+    },
+    // A round marker stands on its own before the word it marks, and is never styled
+    // with it
+    addRoundMarker(text) {
+      if (!text) return;
+      if (partial) partial = `${text} ${partial}`;
+      else words.push({ text: text, italic: false, bold: false });
     },
     text() {
       const all = partial
