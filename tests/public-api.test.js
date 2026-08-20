@@ -2450,7 +2450,7 @@ describe('_generateSectionsFromSimpleScore', () => {
   describe('chorus detection from single-line gap', () => {
     let sections;
     beforeAll(() => {
-      // 12 CPs: 0-5 verse (lines 1,2), 6-11 chorus (line 3 only, gap=6 > maxAllowedGap=3)
+      // 12 CPs: 0-5 verse (lines 1,2), 6-11 chorus (line 3 only, gap=6 > maxLyricGap=3)
       const notes = [
         ...Array.from({ length: 6 }, (_, i) => ({
           pos: i, melody: true, dur: 8,
@@ -2492,7 +2492,7 @@ describe('_generateSectionsFromSimpleScore', () => {
   });
 
   // ── Gap threshold boundary ──
-  it('single-line gap of exactly 3 (= maxAllowedGap) should NOT detect a chorus', () => {
+  it('single-line gap of exactly 3 (= maxLyricGap) should NOT detect a chorus', () => {
     // 10 CPs: 0-3 (2 lines), 4-6 (1 line, gap=3 ≤ 3), 7-9 (2 lines)
     const notes = [
       ...Array.from({ length: 4 }, (_, i) => ({ pos: i, melody: true, dur: 8, lyrics: [{ n: 1 }, { n: 2 }] })),
@@ -2504,7 +2504,7 @@ describe('_generateSectionsFromSimpleScore', () => {
     expect(sections.every(s => s.type === 'verse')).toBe(true);
   });
 
-  it('single-line gap of 4 (> maxAllowedGap) SHOULD detect a chorus', () => {
+  it('single-line gap of 4 (> maxLyricGap) SHOULD detect a chorus', () => {
     // 12 CPs: 0-3 (2 lines), 4-7 (1 line, gap=4 > 3), 8-11 (2 lines)
     const notes = [
       ...Array.from({ length: 4 }, (_, i) => ({ pos: i, melody: true, dur: 8, lyrics: [{ n: 1 }, { n: 2 }] })),

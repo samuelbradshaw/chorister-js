@@ -4676,17 +4676,38 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
   const chorusCpRanges = [];
   const chorusLineNumbers = new Set();
   if (meiParsed.querySelector('verse:not([n="1"])')) {
-    const maxAllowedGap = 3;
+    // How long a run of single-line lyrics has to be to read as a chorus rather than a
+    // verse carrying an extra syllable or two. Counted in melody syllables, not chord
+    // positions: a position with no lyric on it isn't part of any run.
+    const maxLyricGap = 3;
+    // A chorus range snaps to the start or end of the song when only notes without
+    // lyrics separate it from there — a verse can end in the last measure with a few
+    // piano notes after it. Asking whether anything sung lies in between says what a
+    // distance in chord positions only approximates, and can never swallow a syllable.
+    const hasLyrics = (chordPosition) => String(chordPosition) in lineNumbersByCp;
+    const nothingSungBefore = (chordPosition) => {
+      for (let cp = 0; cp < chordPosition; cp++) if (hasLyrics(cp)) return false;
+      return true;
+    };
+    const nothingSungAfter = (chordPosition) => {
+      for (let cp = chordPosition + 1; cp < this._scoreData.numChordPositions; cp++) {
+        if (hasLyrics(cp)) return false;
+      }
+      return true;
+    };
     const lyricGaps = [[]];
     const lineNumbersByCp = {};
+    const versesByCp = {};
     const lyrics = meiParsed.querySelectorAll(':is(note[ch-melody], chord:has([ch-melody])) verse:has(syl:not(:empty))');
     for (const lyric of lyrics) {
       const chordPosition = lyric.closest('note, chord').getAttribute('ch-chord-position');
       if (!(chordPosition in lineNumbersByCp)) {
         lineNumbersByCp[chordPosition] = [];
+        versesByCp[chordPosition] = [];
       }
       const lineNumber = Number.parseInt(lyric.getAttribute('n'));
       lineNumbersByCp[chordPosition].push(lineNumber);
+      versesByCp[chordPosition].push(lyric);
     }
     for (const [chordPosition, lineNumbers] of Object.entries(lineNumbersByCp)) {
       if (lineNumbers.length === 1) {
@@ -4695,8 +4716,19 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
         lyricGaps.push([]);
       }
     }
+    // A capitalized syllable opening a word starts a new phrase, which is a second,
+    // weaker signal that a run of single-line lyrics is a chorus rather than a verse
+    // carrying an extra syllable or two. It only ever relaxes the gap threshold, so a
+    // language that doesn't mark phrases with case is simply left on the threshold.
+    const startsNewPhrase = (chordPosition) => {
+      const syl = versesByCp[chordPosition]?.[0]?.querySelector('syl');
+      if (!syl || ['m', 't'].includes(syl.getAttribute('wordpos'))) return false;
+      return /^\p{Lu}/u.test(syl.textContent.trim());
+    };
+
     for (const lyricGap of lyricGaps) {
-      if (lyricGap.length > maxAllowedGap) {
+      const allowedGap = startsNewPhrase(lyricGap[0]) ? maxLyricGap - 1 : maxLyricGap;
+      if (lyricGap.length > allowedGap) {
         // Save chorus line numbers
         for (const chordPosition of lyricGap) {
           const lineNumbers = lineNumbersByCp[chordPosition];
@@ -4705,10 +4737,10 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
           }
         }
         // Handle notes without lyrics at the beginning or end of the song
-        if (Number.parseInt(lyricGap[0]) - maxAllowedGap <= 0) {
+        if (nothingSungBefore(Number.parseInt(lyricGap[0]))) {
           lyricGap[0] = '0';
         }
-        if (Number.parseInt(lyricGap.at(-1)) + maxAllowedGap > this._scoreData.numChordPositions - 1) {
+        if (nothingSungAfter(Number.parseInt(lyricGap.at(-1)))) {
           lyricGap[lyricGap.length - 1] = String(this._scoreData.numChordPositions - 1);
         }
         // Save chorus chord position ranges
@@ -4985,9 +5017,15 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
       let verseElement;
       // A pickup engraved inside a repeat carries only the verses it leads into, each
       // labelled with its number ("2.", "3."), so @n doesn't line up with the pass
-      // count and neither rule below picks the right one — take them in engraved order
-      const isLabelledPickup = verseElements.length > 1
+      // count and neither rule below picks the right one — take them in engraved order.
+      // One labelled verse counts too, but only when its label names a verse other than
+      // its own lyric line: a plain "1." on line 1 just names the line it sits on.
+      const allLabelled = verseElements.length > 0
         && verseElements.every(ve => ve.querySelector('label'));
+      const namesAnotherVerse = verseElements.length === 1
+        && this._markerNumber(verseElements[0].querySelector('label')?.textContent)
+          !== Number.parseInt(verseElements[0].getAttribute('n'));
+      const isLabelledPickup = allLabelled && (verseElements.length > 1 || namesAnotherVerse);
       if (isLabelledPickup) {
         verseElement = verseElements[lyricLineCounters[cp] - 1];
       } else if (verseElements.length > 0) {
