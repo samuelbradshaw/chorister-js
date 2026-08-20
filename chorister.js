@@ -353,6 +353,7 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
     } else if (format === 'musicxml' || format === 'mxl') {
       scoreContent = this._fixIntroBrackets(scoreContent);
       scoreContent = this._fixLyricStyling(scoreContent);
+      scoreContent = this._fixCreditPages(scoreContent);
     }
     this._vrvToolkit.loadData(scoreContent);
   }
@@ -924,6 +925,26 @@ ChScore.prototype._loadMidi = function () {
       midiNoteSequence: midiNoteSequence,
     } }));
   }
+}
+
+// Move credits onto page 1. Verovio only turns page 1 credits into <pgHead>/<pgFoot>
+// and drops the rest, which loses verses printed below the music on a later page.
+// Chorister reads those verses out of the metadata and then removes pgHead and pgFoot
+// before drawing, so nothing is rendered twice.
+ChScore.prototype._fixCreditPages = function (musicXml) {
+  if (!musicXml.includes('<credit')) return musicXml;
+
+  const parsed = (new DOMParser()).parseFromString(musicXml, 'text/xml');
+  if (parsed.querySelector('parsererror')) return musicXml;
+
+  let changed = false;
+  for (const credit of parsed.querySelectorAll('credit')) {
+    if (credit.getAttribute('page') === '1') continue;
+    credit.setAttribute('page', '1');
+    changed = true;
+  }
+
+  return changed ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
 }
 
 // Convert bold and italic font names to standard font style and weight attributes
@@ -4481,21 +4502,24 @@ ChScore.prototype._normalizeSections = function () {
   // Add verses printed below the music (from <pgHead> or <pgFoot>) that aren't
   // sung from the staff. Example: "Redeemer of Israel" (1985 Hymns), where
   // verses 5 and 6 appear as text under the score.
-  for (const stanzaText of this._scoreData.scoreMetadata?.stanzas ?? []) {
-    const [, marker, annotatedLyrics] = /^\s*(\d+)\s*[.)]\s*([\s\S]*)$/.exec(stanzaText) ?? [];
-    if (!annotatedLyrics) continue;
+  for (const textBlock of this._scoreData.scoreMetadata?.stanzas ?? []) {
+    // One block of text can hold several verses, separated by blank lines
+    for (const stanzaText of textBlock.split(/\n\s*\n/)) {
+      const [, marker, annotatedLyrics] = /^\s*(\d+)\s*[.)]\s*([\s\S]*)$/.exec(stanzaText) ?? [];
+      if (!annotatedLyrics) continue;
 
-    // Skip verses that are already sung from the staff
-    const alreadyPresent = otherSections.some(section => this._cleanMarker(section.marker) === marker);
-    if (alreadyPresent) continue;
+      // Skip verses that are already sung from the staff
+      const alreadyPresent = otherSections.some(section => this._cleanMarker(section.marker) === marker);
+      if (alreadyPresent) continue;
 
-    otherSections.push(newSectionBelow(sectionBelowCounter, {
-      type: 'verse',
-      name: `Verse ${marker}`,
-      marker: marker,
-      annotatedLyrics: annotatedLyrics,
-    }));
-    sectionBelowCounter += 1;
+      otherSections.push(newSectionBelow(sectionBelowCounter, {
+        type: 'verse',
+        name: `Verse ${marker}`,
+        marker: marker,
+        annotatedLyrics: annotatedLyrics,
+      }));
+      sectionBelowCounter += 1;
+    }
   }
 
   this._scoreData.sections = [];
