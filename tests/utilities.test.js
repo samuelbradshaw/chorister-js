@@ -1148,10 +1148,10 @@ describe('_markSingleLineChordPositions()', () => {
   function callMark(meiParsed, chordPositions, lyricCpRanges, maxAllowedGap) {
     const args = [lyricCpRanges];
     if (maxAllowedGap != null) args.push(maxAllowedGap);
-    return ChScore.prototype._markSingleLineChordPositions.apply(
-      { _scoreData: { meiParsed, chordPositions } },
-      args,
-    );
+    // Inherit the prototype: the function leans on _walkSungChordPositions, not just _scoreData
+    const context = Object.assign(Object.create(ChScore.prototype),
+      { _scoreData: { meiParsed, chordPositions } });
+    return ChScore.prototype._markSingleLineChordPositions.apply(context, args);
   }
 
   /** Shorthand: melody notes on staff 1 with N lyric lines. */
@@ -1167,7 +1167,7 @@ describe('_markSingleLineChordPositions()', () => {
     // CPs 0-4, each with lines 1 and 2 on staff 1
     const notes = s1Notes(5, () => [{ staff: 1, line: 1 }, { staff: 1, line: 2 }]);
     const cps = makeCPs(5);
-    const result = callMark(buildMEI(notes), cps, [[0, 5]]);
+    const result = callMark(buildMEI(notes), cps, [{ start: 0, end: 5 }]);
     expect(cps.every(cp => cp.isSingleLine === null)).toBe(true);
     expect(result['1']).toEqual([]);
   });
@@ -1182,7 +1182,7 @@ describe('_markSingleLineChordPositions()', () => {
       })),
     ];
     const cps = makeCPs(6);
-    callMark(buildMEI(notes), cps, [[0, 6]]);
+    callMark(buildMEI(notes), cps, [{ start: 0, end: 6 }]);
     expect(cps[0].isSingleLine).toBeNull();
     for (let i = 1; i <= 5; i++) {
       expect(cps[i].isSingleLine).toBe(true);
@@ -1199,7 +1199,7 @@ describe('_markSingleLineChordPositions()', () => {
       })),
     ];
     const cps = makeCPs(4);
-    callMark(buildMEI(notes), cps, [[0, 4]]);
+    callMark(buildMEI(notes), cps, [{ start: 0, end: 4 }]);
     expect(cps.every(cp => cp.isSingleLine === null)).toBe(true);
   });
 
@@ -1212,7 +1212,7 @@ describe('_markSingleLineChordPositions()', () => {
       })),
     ];
     const cps = makeCPs(5);
-    callMark(buildMEI(notes), cps, [[0, 5]]);
+    callMark(buildMEI(notes), cps, [{ start: 0, end: 5 }]);
     for (let i = 1; i <= 4; i++) {
       expect(cps[i].isSingleLine).toBe(true);
     }
@@ -1227,7 +1227,7 @@ describe('_markSingleLineChordPositions()', () => {
       })),
     ];
     const cps = makeCPs(6);
-    callMark(buildMEI(notes), cps, [[0, 6]], 5);
+    callMark(buildMEI(notes), cps, [{ start: 0, end: 6 }], 5);
     expect(cps.every(cp => cp.isSingleLine === null)).toBe(true);
   });
 
@@ -1242,7 +1242,7 @@ describe('_markSingleLineChordPositions()', () => {
       // CP 6 intentionally omitted → no-lyric ECP
     ];
     const cps = makeCPs(7);
-    callMark(buildMEI(notes), cps, [[0, 7]]);
+    callMark(buildMEI(notes), cps, [{ start: 0, end: 7 }]);
     // CPs 1-5 from single-line range + CP 6 from forward expansion
     for (let i = 1; i <= 6; i++) {
       expect(cps[i].isSingleLine).toBe(true);
@@ -1256,7 +1256,7 @@ describe('_markSingleLineChordPositions()', () => {
       cp: i + 1, lyricLines: [{ staff: 1, line: 1 }],
     }));
     const cps = makeCPs(6);
-    callMark(buildMEI(notes), cps, [[0, 6]]);
+    callMark(buildMEI(notes), cps, [{ start: 0, end: 6 }]);
     // CP 0 included via backward expansion, CPs 1-5 from single-line range
     for (let i = 0; i <= 5; i++) {
       expect(cps[i].isSingleLine).toBe(true);
@@ -1273,7 +1273,7 @@ describe('_markSingleLineChordPositions()', () => {
       })),
     ];
     const cps = makeCPs(11);
-    callMark(buildMEI(notes), cps, [[0, 11]]);
+    callMark(buildMEI(notes), cps, [{ start: 0, end: 11 }]);
     // firstLyricEcp = 0 (CP 0 has lyrics). Single-line range starts at ECP 6 ≠ firstLyricEcp.
     // CP 5 should NOT be included (no backward expansion for non-first ranges)
     expect(cps[5].isSingleLine).toBeNull();
@@ -1294,7 +1294,7 @@ describe('_markSingleLineChordPositions()', () => {
       ...Array.from({ length: 4 }, (_, i) => ({ cp: i + 11, lyricLines: [{ staff: 1, line: 1 }] })),
     ];
     const cps = makeCPs(15);
-    callMark(buildMEI(notes), cps, [[0, 5], [10, 15]]);
+    callMark(buildMEI(notes), cps, [{ start: 0, end: 5 }, { start: 10, end: 15 }]);
     // Both ranges have 4 single-line ECPs (> gap 3)
     for (const cp of [1, 2, 3, 4]) expect(cps[cp].isSingleLine).toBe(true);
     for (const cp of [11, 12, 13, 14]) expect(cps[cp].isSingleLine).toBe(true);
@@ -1316,7 +1316,7 @@ describe('_markSingleLineChordPositions()', () => {
       })),
     ];
     const cps = makeCPs(5);
-    const result = callMark(buildMEI(notes), cps, [[0, 5]]);
+    const result = callMark(buildMEI(notes), cps, [{ start: 0, end: 5 }]);
     expect(result).toHaveProperty('1');
     expect(result).toHaveProperty('2');
     expect(result['1'].length).toBe(1); // one single-line range for staff 1
@@ -1332,7 +1332,7 @@ describe('_markSingleLineChordPositions()', () => {
       })),
     ];
     const cps = makeCPs(6);
-    const result = callMark(buildMEI(notes), cps, [[0, 6]]);
+    const result = callMark(buildMEI(notes), cps, [{ start: 0, end: 6 }]);
     const range = result['1'][0];
     expect(range).toHaveProperty('start');
     expect(range).toHaveProperty('end');
@@ -1353,7 +1353,7 @@ describe('_markSingleLineChordPositions()', () => {
       'text/xml',
     );
     const cps = makeCPs(5);
-    const result = callMark(mei, cps, [[0, 5]]);
+    const result = callMark(mei, cps, [{ start: 0, end: 5 }]);
     expect(Object.keys(result).length).toBe(0);
     expect(cps.every(cp => cp.isSingleLine === null)).toBe(true);
   });
@@ -1368,7 +1368,7 @@ describe('_markSingleLineChordPositions()', () => {
       ...Array.from({ length: 5 }, (_, i) => ({ cp: i + 7, lyricLines: [{ staff: 1, line: 1 }] })),
     ];
     const cps = makeCPs(12);
-    const result = callMark(buildMEI(notes), cps, [[0, 12]]);
+    const result = callMark(buildMEI(notes), cps, [{ start: 0, end: 12 }]);
     expect(result['1'].length).toBe(2);
     expect(result['1'][0]).toMatchObject({ start: 1, end: 6 });
     expect(result['1'][1]).toMatchObject({ start: 7, end: 12 });
@@ -1872,5 +1872,86 @@ describe('_getInlineVerseNumbers()', () => {
       { n: 2, labelText: '3.' },
     ]);
     expect(score._getInlineVerseNumbers(mei)).toEqual([1, 2, 3]);
+  });
+});
+
+// ============================================================
+// _walkSungChordPositions / _consecutiveRuns
+// ============================================================
+describe('_walkSungChordPositions()', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  /** Collect the walk into plain tuples for readable assertions. */
+  function walk(ranges, options) {
+    return Array.from(score._walkSungChordPositions(ranges, options))
+      .map(entry => [entry.chordPosition, entry.expandedChordPosition, entry.passNumber]);
+  }
+
+  it('should number chord positions sequentially across ranges', () => {
+    expect(walk([{ start: 0, end: 3 }, { start: 10, end: 12 }])).toEqual([
+      [0, 0, 1], [1, 1, 1], [2, 2, 1],
+      [10, 3, 1], [11, 4, 1],
+    ]);
+  });
+
+  it('should start numbering at ecpStart', () => {
+    expect(walk([{ start: 5, end: 7 }], { ecpStart: 100 })).toEqual([
+      [5, 100, 1], [6, 101, 1],
+    ]);
+  });
+
+  it('should give a repeated chord position a new number and the next pass count', () => {
+    // The same range twice, as a repeat renders it
+    expect(walk([{ start: 0, end: 2 }, { start: 0, end: 2 }])).toEqual([
+      [0, 0, 1], [1, 1, 1],
+      [0, 2, 2], [1, 3, 2],
+    ]);
+  });
+
+  it('should number a countPass:false range without advancing the pass count', () => {
+    // An introduction is usually an excerpt of the song's own opening; counting it would
+    // make the verse that reuses those positions look like a second pass
+    expect(walk([{ start: 0, end: 2, countPass: false }, { start: 0, end: 2 }])).toEqual([
+      [0, 0, 0], [1, 1, 0],
+      [0, 2, 1], [1, 3, 1],
+    ]);
+  });
+
+  it('should yield nothing for empty or backwards ranges', () => {
+    expect(walk([{ start: 4, end: 4 }, { start: 9, end: 2 }])).toEqual([]);
+  });
+
+  it('should hand back the caller own range object on every entry', () => {
+    const range = { start: 0, end: 2, sectionInfo: { sectionId: 'verse-1' } };
+    const entries = Array.from(score._walkSungChordPositions([range]));
+    expect(entries.map(entry => entry.range)).toEqual([range, range]);
+    expect(entries.map(entry => entry.chordPosition)).toEqual([0, 1]);
+  });
+});
+
+describe('_consecutiveRuns()', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  it('should return one run for consecutive positions', () => {
+    expect(score._consecutiveRuns([4, 5, 6])).toEqual([[4, 7]]);
+  });
+
+  it('should split where playback jumped over a first ending', () => {
+    expect(score._consecutiveRuns([68, 69, 74, 75])).toEqual([[68, 70], [74, 76]]);
+  });
+
+  it('should handle a single position and an empty list', () => {
+    expect(score._consecutiveRuns([3])).toEqual([[3, 4]]);
+    expect(score._consecutiveRuns([])).toEqual([]);
   });
 });

@@ -1608,89 +1608,91 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   // Add attributes to verse elements: @ch-section-id, @ch-chorus
   this._scoreData.expandedChordPositions = [];
   this._scoreData.audibleExpandedChordPositions = [];
-  let expandedChordPositionCounter = 0;
   let expandedChordPositionQStartCounter = 0;
+  // A range left without an end runs to the end of the score; settle that before walking.
   for (const sectionInfo of this._scoreData.sections) {
     for (const chordPositionRange of sectionInfo.chordPositionRanges) {
       if (!chordPositionRange.end) chordPositionRange.end = chordPositionCounter;
-      const staffNumbers = chordPositionRange.staffNumbers ?? this._scoreData.staffNumbers;
-      for (let chordPosition = chordPositionRange.start; chordPosition < chordPositionRange.end; chordPosition++) {
-        if (!this._scoreData.chordPositions[chordPosition]) {
-          continue;
-        }
+    }
+  }
+  // Records the numbering `ch-expanded-chord-position` indexes into; expansion replays
+  // this sequence rather than deriving it again.
+  for (const { range, chordPosition, expandedChordPosition: expandedChordPositionCounter, passNumber }
+    of this._walkSungChordPositions(this._sectionChordPositionRanges())) {
+    const sectionInfo = range.sectionInfo;
+    const staffNumbers = range.staffNumbers ?? this._scoreData.staffNumbers;
 
-        const lyricSelectors = [];
-        if (chordPositionRange.lyricLineIds) {
-          for (const lyricLineId of chordPositionRange.lyricLineIds) {
-            lyricSelectors.push(`[ch-chord-position="${chordPosition}"] verse[ch-lyric-line-id="${lyricLineId}"]`);
-          }
-        }
-
-        const lyricLabels = [];
-        const lyricSyllables = [];
-        if (lyricSelectors.length > 0) {
-          const lyricElements = this._scoreData.meiParsed.querySelectorAll(lyricSelectors.join(', '))
-          for (const lyricElement of lyricElements) {
-            // Add attribute: verse@ch-section-id
-            const sectionIdsString = lyricElement.getAttribute('ch-section-id') ?? '';
-            const newSectionIdsString = `${sectionIdsString} ${sectionInfo.sectionId}`.trim();
-            lyricElement.setAttribute('ch-section-id', newSectionIdsString);
-
-            // Add attribute: verse@ch-chorus
-            if (sectionInfo.type === 'chorus' || lyricElement.getAttribute('label') === 'chorus') {
-              lyricElement.setAttribute('ch-chorus', '');
-              lyricElement.removeAttribute('label');
-            }
-
-            for (const label of lyricElement.querySelectorAll('label')) {
-              const text = label.textContent.trim();
-              if (text) lyricLabels.push(text);
-            }
-            for (const syl of lyricElement.querySelectorAll('syl')) {
-              const text = syl.textContent.trim();
-              if (text) lyricSyllables.push(text);
-            }
-          }
-        }
-
-        // Get expanded chord position info
-        const expandedChordPositionInfo = {
-          chordPositionInfo: this._scoreData.chordPositions[chordPosition],
-          startQ: expandedChordPositionQStartCounter,
-          endQ: expandedChordPositionQStartCounter + this._scoreData.chordPositions[chordPosition].durationQ,
-          sectionId: sectionInfo.sectionId,
-          staffNumbers: staffNumbers,
-          lyricLabels: lyricLabels,
-          lyricSyllables: lyricSyllables,
-          lyricIsSkipSymbol: ['—'].includes(lyricSyllables.join()),
-          midiNotes: [], // Added later
-          midiStartTime: null, // Added later
-          midiEndTime: null, // Added later
-        }
-        this._scoreData.expandedChordPositions.push(expandedChordPositionInfo);
-        if (this._scoreData.chordPositions[chordPosition].isAudible) {
-          this._scoreData.audibleExpandedChordPositions.push(expandedChordPositionCounter);
-        }
-
-        // Add expanded chord position info to chord position info
-        if (!this._scoreData.chordPositions[chordPosition].expandedChordPositions) {
-          this._scoreData.chordPositions[chordPosition].expandedChordPositions = {};
-        }
-        if (!this._scoreData.chordPositions[chordPosition].expandedChordPositions[sectionInfo.sectionId]) {
-          this._scoreData.chordPositions[chordPosition].expandedChordPositions[sectionInfo.sectionId] = [];
-        }
-        this._scoreData.chordPositions[chordPosition].expandedChordPositions[sectionInfo.sectionId].push(expandedChordPositionCounter);
-
-        // Add expanded chord positions to section info
-        if (sectionInfo.expandedChordPositionStart == null) {
-          sectionInfo.expandedChordPositionStart = expandedChordPositionCounter;
-        }
-        sectionInfo.expandedChordPositionEnd = expandedChordPositionCounter;
-
-        expandedChordPositionCounter += 1;
-        expandedChordPositionQStartCounter += this._scoreData.chordPositions[chordPosition].durationQ;
+    const lyricSelectors = [];
+    if (range.lyricLineIds) {
+      for (const lyricLineId of range.lyricLineIds) {
+        lyricSelectors.push(`[ch-chord-position="${chordPosition}"] verse[ch-lyric-line-id="${lyricLineId}"]`);
       }
     }
+
+    const lyricLabels = [];
+    const lyricSyllables = [];
+    if (lyricSelectors.length > 0) {
+      const lyricElements = this._scoreData.meiParsed.querySelectorAll(lyricSelectors.join(', '))
+      for (const lyricElement of lyricElements) {
+        // Add attribute: verse@ch-section-id
+        const sectionIdsString = lyricElement.getAttribute('ch-section-id') ?? '';
+        const newSectionIdsString = `${sectionIdsString} ${sectionInfo.sectionId}`.trim();
+        lyricElement.setAttribute('ch-section-id', newSectionIdsString);
+
+        // Add attribute: verse@ch-chorus
+        if (sectionInfo.type === 'chorus' || lyricElement.getAttribute('label') === 'chorus') {
+          lyricElement.setAttribute('ch-chorus', '');
+          lyricElement.removeAttribute('label');
+        }
+
+        for (const label of lyricElement.querySelectorAll('label')) {
+          const text = label.textContent.trim();
+          if (text) lyricLabels.push(text);
+        }
+        for (const syl of lyricElement.querySelectorAll('syl')) {
+          const text = syl.textContent.trim();
+          if (text) lyricSyllables.push(text);
+        }
+      }
+    }
+
+    // Get expanded chord position info
+    const expandedChordPositionInfo = {
+      chordPositionInfo: this._scoreData.chordPositions[chordPosition],
+      startQ: expandedChordPositionQStartCounter,
+      endQ: expandedChordPositionQStartCounter + this._scoreData.chordPositions[chordPosition].durationQ,
+      sectionId: sectionInfo.sectionId,
+      // Passes over this chord position so far; lets expansion replay the sequence.
+      passNumber: passNumber,
+      staffNumbers: staffNumbers,
+      lyricLabels: lyricLabels,
+      lyricSyllables: lyricSyllables,
+      lyricIsSkipSymbol: ['—'].includes(lyricSyllables.join()),
+      midiNotes: [], // Added later
+      midiStartTime: null, // Added later
+      midiEndTime: null, // Added later
+    }
+    this._scoreData.expandedChordPositions.push(expandedChordPositionInfo);
+    if (this._scoreData.chordPositions[chordPosition].isAudible) {
+      this._scoreData.audibleExpandedChordPositions.push(expandedChordPositionCounter);
+    }
+
+    // Add expanded chord position info to chord position info
+    if (!this._scoreData.chordPositions[chordPosition].expandedChordPositions) {
+      this._scoreData.chordPositions[chordPosition].expandedChordPositions = {};
+    }
+    if (!this._scoreData.chordPositions[chordPosition].expandedChordPositions[sectionInfo.sectionId]) {
+      this._scoreData.chordPositions[chordPosition].expandedChordPositions[sectionInfo.sectionId] = [];
+    }
+    this._scoreData.chordPositions[chordPosition].expandedChordPositions[sectionInfo.sectionId].push(expandedChordPositionCounter);
+
+    // Add expanded chord positions to section info
+    if (sectionInfo.expandedChordPositionStart == null) {
+      sectionInfo.expandedChordPositionStart = expandedChordPositionCounter;
+    }
+    sectionInfo.expandedChordPositionEnd = expandedChordPositionCounter;
+
+    expandedChordPositionQStartCounter += this._scoreData.chordPositions[chordPosition].durationQ;
   }
 
   // Improve appearance of secondary chorus lines (shift to line 2)
@@ -1729,10 +1731,12 @@ ChScore.prototype._parseAndAnnotateMei = function () {
   // This allows slurs to remain visible if notes are removed from the chord (such as when showing/hiding parts). This also makes the start and end points more precise (for example, in "The Morning Breaks" (1985 Hymns), without this change, the slur above "shadows" starts at the top of the note stem instead of close to the notehead).
   for (const slur of this._scoreData.meiParsed.querySelectorAll('slur')) {
     const measure = slur.parentElement;
-    const startId = slur.getAttribute('startid').substring(1);
-    const endId = slur.getAttribute('endid').substring(1);
-    const startElement = measure.querySelector(`[*|id="${startId}"]`);
-    const endElement = measure.querySelector(`[*|id="${endId}"]`);
+    // A slur can be missing an end — one starting on a rest, for example — and a
+    // slur attached by timestamp has neither
+    const startId = slur.getAttribute('startid')?.substring(1);
+    const endId = slur.getAttribute('endid')?.substring(1);
+    const startElement = startId && measure.querySelector(`[*|id="${startId}"]`);
+    const endElement = endId && measure.querySelector(`[*|id="${endId}"]`);
     if (startElement && startElement.parentElement.matches('chord')) {
       slur.setAttribute('startid', '#' + startElement.parentElement.getAttribute('xml:id'));
     }
@@ -1930,31 +1934,26 @@ ChScore.prototype._updateMei = function () {
 
   // Identify visible section IDs, chord positions, and staff numbers
   const sectionIdsToKeep = new Set();
-  const chordPositionsToKeep = new Set();
   const expandedChordPositionsToKeep = new Set();
   const staffNumbersToKeep = new Set();
-  let ecpCounter = 0;
   if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0) {
+    const hiddenSectionIds = new Set(this._currentOptions.hideSectionIds);
+    const isHidden = (sectionId) => hiddenSectionIds.has(sectionId);
     for (const sectionInfo of this._scoreData.sections) {
-      const sectionChordPositions = [];
-      const sectionExpandedChordPositions = [];
+      if (isHidden(sectionInfo.sectionId)) continue;
+      sectionIdsToKeep.add(sectionInfo.sectionId);
+      // Off the range, not the recorded entry, which falls back to every staff
       for (const chordPositionRange of sectionInfo.chordPositionRanges) {
-        if (!this._currentOptions.hideSectionIds.includes(sectionInfo.sectionId)) {
-          for (const staffNumber of chordPositionRange.staffNumbers ?? []) {
-            staffNumbersToKeep.add(staffNumber);
-          }
-        }
-        for (let cp = chordPositionRange.start; cp < chordPositionRange.end; cp++) {
-          if (!this._currentOptions.hideSectionIds.includes(sectionInfo.sectionId)) {
-            chordPositionsToKeep.add(cp);
-            expandedChordPositionsToKeep.add(ecpCounter);
-          }
-          ecpCounter += 1;
+        for (const staffNumber of chordPositionRange.staffNumbers ?? []) {
+          staffNumbersToKeep.add(staffNumber);
         }
       }
-      if (!this._currentOptions.hideSectionIds.includes(sectionInfo.sectionId)) {
-        sectionIdsToKeep.add(sectionInfo.sectionId);
-      }
+    }
+    // Read from the recorded sequence: these numbers are matched below against the
+    // @ch-expanded-chord-position attributes written from that same sequence.
+    for (const [ecp, expandedChordPositionInfo] of this._scoreData.expandedChordPositions.entries()) {
+      if (isHidden(expandedChordPositionInfo.sectionId)) continue;
+      expandedChordPositionsToKeep.add(ecp);
     }
   }
 
@@ -1969,7 +1968,7 @@ ChScore.prototype._updateMei = function () {
     // TODO: Look into using Verovio's built-in expansion option (get expanded MEI, then edit to clean up endings, barlines, lyrics, etc.). Potential benefits would be automatic handling for cross-section ties (potentially – need to test), automatic generation of unique IDs, etc. The downside is less control over the output.
     const sectionIds = expansion.getAttribute('plist').split(' ').map(ref => ref.substring(1));
     if (this._currentOptions.expandScore === 'full-score' && this._scoreData.hasExpansion) {
-      const singleLineSectionIds = [];
+      const singleLineSectionIds = new Set();
 
       // Gather section contents
       // TODO: No need to get previous element siblings if this is fixed in Verovio code. Example: "This Is the Christ" (Hymns—For Home and Church)
@@ -1982,7 +1981,7 @@ ChScore.prototype._updateMei = function () {
 
         // Check if section element has multiple simultaneous lyric lines
         if (!section.querySelector(':is(note[ch-melody], chord:has([ch-melody])) verse:nth-of-type(2)')) {
-          singleLineSectionIds.push(sectionId);
+          singleLineSectionIds.add(sectionId);
         }
 
         sectionsById[sectionId] = [];
@@ -2001,19 +2000,7 @@ ChScore.prototype._updateMei = function () {
         sectionIdCounter[sectionId] += 1;
         for (const element of sectionsById[sectionId]) {
           const newElement = element.cloneNode(true);
-          // Make IDs unique by appending '-rend1', '-rend2', etc.
-          newElement.setAttribute('xml:id', newElement.getAttribute('xml:id') + `-rend${sectionIdCounter[sectionId]}`);
-          for (const el of newElement.querySelectorAll('[*|id]')) {
-            const previousId = el.getAttribute('xml:id');
-            const newId = `${previousId}-rend${sectionIdCounter[sectionId]}`;
-            el.setAttribute('xml:id', newId);
-            for (const referencingEl of newElement.querySelectorAll(`[startid="#${previousId}"]`)) {
-              referencingEl.setAttribute('startid', `#${newId}`);
-            }
-            for (const referencingEl of newElement.querySelectorAll(`[endid="#${previousId}"]`)) {
-              referencingEl.setAttribute('endid', `#${newId}`);
-            }
-          }
+          this._suffixIds(newElement, `-rend${sectionIdCounter[sectionId]}`);
           parentSection.append(newElement);
         }
       }
@@ -2051,58 +2038,60 @@ ChScore.prototype._updateMei = function () {
       }
 
       // Add expanded chord positions and clean up lyrics
-      let ecpCounter = 0;
       let currentSectionIndex = -1;
       let currentSectionChordPositions = null;
       let currentExpandedChordPositions = null;
-      const lyricLineCounters = {};
+      let currentSectionOriginalId = null;
       const sectionElements = this._scoreData.meiParsed.querySelectorAll('section[type="introduction"], section:not([type="introduction"]) > section');
-      for (const sectionInfo of this._scoreData.sections) {
-        for (const chordPositionRange of sectionInfo.chordPositionRanges) {
-          for (let chordPosition = chordPositionRange.start; chordPosition < chordPositionRange.end; chordPosition++) {
-            // Move to next section if needed
-            const firstElement = sectionElements[currentSectionIndex]?.querySelector(`[ch-chord-position="${chordPosition}"]`);
-            if (currentSectionChordPositions == null || !currentSectionChordPositions.includes(chordPosition) || firstElement?.hasAttribute('ch-expanded-chord-position')) {
-              if (currentExpandedChordPositions) {
-                sectionElements[currentSectionIndex].setAttribute('ch-expanded-chord-position', currentExpandedChordPositions.join(' '));
+      // Replay the sequence recorded at parse time rather than walking it again.
+      // `ch-expanded-chord-position` indexes into this very array, so writing it while
+      // reading it keeps the two in step by construction.
+      for (const [ecpCounter, expandedChordPositionInfo] of this._scoreData.expandedChordPositions.entries()) {
+        const chordPosition = expandedChordPositionInfo.chordPositionInfo.chordPosition;
+        const sectionInfo = this._scoreData.sectionsById[expandedChordPositionInfo.sectionId];
+        const passNumber = expandedChordPositionInfo.passNumber;
+
+        // Move to next section if needed. The elements at this chord position are found
+        // once and reused for the advance test and the tagging below.
+        const selector = `[ch-chord-position="${chordPosition}"]`;
+        let elements = sectionElements[currentSectionIndex]?.querySelectorAll(selector);
+        if (currentSectionChordPositions == null || !currentSectionChordPositions.has(chordPosition) || elements?.[0]?.hasAttribute('ch-expanded-chord-position')) {
+          if (currentExpandedChordPositions) {
+            sectionElements[currentSectionIndex].setAttribute('ch-expanded-chord-position', currentExpandedChordPositions.join(' '));
+          }
+          currentSectionIndex++;
+          const currentSection = sectionElements[currentSectionIndex];
+          currentSectionChordPositions = new Set(currentSection
+            .getAttribute('ch-chord-position').trim().split(' ').map(cp => Number.parseInt(cp)));
+          currentExpandedChordPositions = [];
+          // The extracted introduction section carries no xml:id
+          currentSectionOriginalId = currentSection.getAttribute('xml:id')?.split('-rend')[0] ?? null;
+          elements = currentSection.querySelectorAll(selector);
+        }
+        currentExpandedChordPositions.push(ecpCounter);
+
+        // Add expanded chord positions and remove unneeded lyrics
+        const isIntroduction = sectionInfo.type === 'introduction';
+        const isSingleLine = isIntroduction ? false
+          : expandedChordPositionInfo.chordPositionInfo.isSingleLine
+            || singleLineSectionIds.has(currentSectionOriginalId);
+        for (const element of elements) {
+          element.setAttribute('ch-expanded-chord-position', ecpCounter);
+          const verseElements = element.querySelectorAll('verse');
+          if (verseElements.length > 0 && !isIntroduction) {
+            const keptVerseIndex = this._verseSoundingAt(verseElements, passNumber, isSingleLine);
+            for (let i = 0; i < verseElements.length; i++) {
+              const verseElement = verseElements[i];
+              if (i === keptVerseIndex) {
+                verseElement.setAttribute('n', 1);
+                verseElement.setAttribute('ch-section-id', sectionInfo.sectionId);
+              } else if (verseElement.hasAttribute('ch-secondary')) {
+                verseElement.setAttribute('n', 2);
+                verseElement.setAttribute('ch-section-id', sectionInfo.sectionId);
+              } else {
+                verseElement.remove();
               }
-              currentSectionIndex++;
-              currentSectionChordPositions = sectionElements[currentSectionIndex].getAttribute('ch-chord-position').trim().split(' ').map(cp => Number.parseInt(cp));
-              currentExpandedChordPositions = [];
             }
-            currentExpandedChordPositions.push(ecpCounter);
-
-            // Process chord position elements (add expanded chord positions and remove unneeded lyrics)
-            const currentSection = sectionElements[currentSectionIndex];
-
-            let originalSectionId, isSingleLine;
-            if (sectionInfo.type !== 'introduction') {
-              originalSectionId = currentSection.getAttribute('xml:id').split('-rend')[0];
-              isSingleLine = this._scoreData.chordPositions[chordPosition].isSingleLine;
-              lyricLineCounters[chordPosition] = (lyricLineCounters[chordPosition] ?? 0) + 1;
-            }
-            for (const element of currentSection.querySelectorAll(`[ch-chord-position="${chordPosition}"]`)) {
-              element.setAttribute('ch-expanded-chord-position', ecpCounter);
-              const verseElements = element.querySelectorAll('verse');
-              if (verseElements.length > 0 && sectionInfo.type !== 'introduction') {
-                const keptVerseIndex = (isSingleLine || singleLineSectionIds.includes(originalSectionId)) ? 0
-                  : Array.from(verseElements).findIndex(ve => Number.parseInt(ve.getAttribute('n')) === lyricLineCounters[chordPosition]);
-                for (let i = 0; i < verseElements.length; i++) {
-                  const verseElement = verseElements[i];
-                  if (i === keptVerseIndex) {
-                    verseElement.setAttribute('n', 1);
-                    verseElement.setAttribute('ch-section-id', sectionInfo.sectionId);
-                  } else if (verseElement.hasAttribute('ch-secondary')) {
-                    verseElement.setAttribute('n', 2);
-                    verseElement.setAttribute('ch-section-id', sectionInfo.sectionId);
-                  } else {
-                    verseElement.remove();
-                  }
-                }
-              }
-            }
-
-            ecpCounter++;
           }
         }
       }
@@ -4366,7 +4355,7 @@ ChScore.prototype._normalizeSections = function () {
   const generateDefaultSection = (lyricChordPositionRanges, staffNumbers) => {
     const sections = [];
     const chordPositionRanges = [];
-    for (const [start, end] of lyricChordPositionRanges) {
+    for (const { start, end } of lyricChordPositionRanges) {
       chordPositionRanges.push({
         start: start,
         end: end,
@@ -4422,7 +4411,12 @@ ChScore.prototype._normalizeSections = function () {
     for (const sectionInfo of otherSections) {
       for (let cpr = 0; cpr < sectionInfo.chordPositionRanges.length; cpr++) {
         const chordPositionRange = sectionInfo.chordPositionRanges[cpr];
-        lyricChordPositionRanges.push([chordPositionRange.start, chordPositionRange.end, sectionInfo.type, cpr === 0]);
+        lyricChordPositionRanges.push({
+          start: chordPositionRange.start,
+          end: chordPositionRange.end,
+          sectionType: sectionInfo.type,
+          startsSection: cpr === 0,
+        });
       }
     }
   } else if (this._scoreData.hasExpansion) {
@@ -4431,10 +4425,13 @@ ChScore.prototype._normalizeSections = function () {
     for (const expansionSectionElementId of expansionSectionElementIds) {
       const sectionElement = this._scoreData.meiParsed.querySelector(`[*|id="${expansionSectionElementId}"]`);
       const sectionElementChordPositions = sectionElement.getAttribute('ch-chord-position').trim().split(' ').map(cp => Number.parseInt(cp));
-      lyricChordPositionRanges.push([sectionElementChordPositions[0], sectionElementChordPositions.at(-1) + 1]);
+      lyricChordPositionRanges.push({
+        start: sectionElementChordPositions[0],
+        end: sectionElementChordPositions.at(-1) + 1,
+      });
     }
   } else {
-    lyricChordPositionRanges.push([0, this._scoreData.numChordPositions]);
+    lyricChordPositionRanges.push({ start: 0, end: this._scoreData.numChordPositions });
   }
 
   // Get annotated lyric stanzas
@@ -4871,13 +4868,9 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
     lyricLinesByStaffAndCp[staffNumber][chordPosition].add(lineNumber);
   }
 
-  let ecpCounter = 0;
-  const ecpToCp = {};
-  for (const lyricChordPositionRange of lyricChordPositionRanges) {
-    for (let cp = lyricChordPositionRange[0]; cp < lyricChordPositionRange[1]; cp++) {
-      ecpToCp[ecpCounter] = cp;
-      ecpCounter += 1;
-    }
+  const ecpToCp = [];
+  for (const { chordPosition } of this._walkSungChordPositions(lyricChordPositionRanges)) {
+    ecpToCp.push(chordPosition);
   }
 
   const singleLineCpRangesByStaff = {}
@@ -4885,7 +4878,7 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
     let firstLyricEcp;
     const noLyricEcps = [];
     const oneLyricEcpRanges = [];
-    const expandedChordPositions = Object.keys(ecpToCp).map(ecp => Number.parseInt(ecp));
+    const expandedChordPositions = [...ecpToCp.keys()];
     for (const ecp of expandedChordPositions) {
       const cp = ecpToCp[ecp];
       if (Object.hasOwn(lyricLinesByStaffAndCp[staffNumber], cp)) {
@@ -4954,6 +4947,33 @@ ChScore.prototype._getMelodyVerseElementsByChordPosition = function () {
   return versesByChordPosition;
 }
 
+// Which verse element engraved at one chord position is sounding on this pass, as an
+// index into the list (-1 for none). Score expansion and lyric extraction both need this
+// answer, so it lives in one place. Pure over its arguments: expansion calls it over the
+// cloned, expanded MEI, where the per-chord-position maps no longer line up.
+// isSingleLine is caller-supplied because the two derive it differently.
+ChScore.prototype._verseSoundingAt = function (verseElements, passNumber, isSingleLine) {
+  const verses = Array.from(verseElements);
+  if (verses.length === 0) return -1;
+
+  // A pickup engraved inside a repeat carries only the verses it leads into, each
+  // labelled ("2.", "3."), so @n doesn't line up with the pass count — take them in
+  // engraved order. One labelled verse counts too, but only when its label names a verse
+  // other than its own lyric line. Checked before the single-line rule, which would
+  // otherwise always win and return 0.
+  const allLabelled = verses.every(ve => ve.querySelector('label'));
+  const namesAnotherVerse = () => this._markerNumber(verses[0].querySelector('label')?.textContent)
+    !== Number.parseInt(verses[0].getAttribute('n'));
+  if (allLabelled && (verses.length > 1 || namesAnotherVerse())) {
+    // Out of range on later passes, which is correct: the pickup is sung once per verse
+    const index = passNumber - 1;
+    return index < verses.length ? index : -1;
+  }
+
+  if (isSingleLine) return 0;
+  return verses.findIndex(ve => Number.parseInt(ve.getAttribute('n')) === passNumber);
+}
+
 // Round markers, by the chord position they're engraved at. The marker is the dir's own
 // text; @ch-round-marker only flags which dirs are markers. Reading them by chord
 // position is what re-emits each one on every pass through a repeat.
@@ -4992,93 +5012,74 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
     expandedChordPositions: [],
     lyricLineIds: [],
   });
-  let ecpCounter = ecpStart;
-  const lyricLineCounters = {};
   const melodyVersesByChordPosition = this._getMelodyVerseElementsByChordPosition();
   const roundMarkersByChordPosition = this._getRoundMarkersByChordPosition();
   let pendingRoundMarker = null;
-  for (const lyricChordPositionRange of lyricChordPositionRanges) {
-    const [start, end, sectionType, startsSection] = lyricChordPositionRange;
-    let isFirstSyllableOfSection = startsSection ?? false;
-    let rangeHasSingleLine = true;
-    for (let cp = start; cp < end; cp++) {
-      if ((melodyVersesByChordPosition.get(cp) ?? []).length > 1) rangeHasSingleLine = false;
+
+  // Single-line when no chord position in the range carries more than one melody verse;
+  // computed up front because the walk below is flat.
+  for (const range of lyricChordPositionRanges) {
+    range.hasSingleLine = true;
+    for (let cp = range.start; cp < range.end; cp++) {
+      if ((melodyVersesByChordPosition.get(cp) ?? []).length > 1) range.hasSingleLine = false;
+    }
+  }
+  let isFirstSyllableOfSection = false;
+
+  // Test cases:
+  // "Gethsemane" (Hymns—For Home and Church), "This Is the Christ" (Hymns—For Home and Church), "Beautiful Savior" (1989 CSB) – complex sections
+  // Japanese "When the Savior Comes Again" (Hymns—For Home and Church) – ruby text
+  // "Have I Done Any Good?" (1985 Hymns) – simple verses and chorus, but verses have chord positions with only one lyric syllable. When there's only one lyric syllable, it should be extracted only in the correct verse.
+  for (const { range, chordPosition: cp, expandedChordPosition: ecpCounter, passNumber }
+    of this._walkSungChordPositions(lyricChordPositionRanges, { ecpStart })) {
+    if (cp === range.start) isFirstSyllableOfSection = range.startsSection ?? false;
+    const chordPositionIsSingleLine = this._scoreData.chordPositions[cp].isSingleLine;
+    const verseElements = melodyVersesByChordPosition.get(cp) ?? [];
+    const verseIndex = this._verseSoundingAt(verseElements, passNumber,
+      chordPositionIsSingleLine || range.hasSingleLine);
+    const verseElement = verseElements[verseIndex]; // undefined when -1
+
+    // A round marker is engraved where the voice enters, which isn't always the chord
+    // position its word starts on — it can land on a held note with no lyric, or on
+    // the tail syllable of the word before. It belongs to the next word start.
+    if (roundMarkersByChordPosition.has(cp) && !pendingRoundMarker) {
+      pendingRoundMarker = roundMarkersByChordPosition.get(cp);
     }
 
-    // Test cases:
-    // "Gethsemane" (Hymns—For Home and Church), "This Is the Christ" (Hymns—For Home and Church), "Beautiful Savior" (1989 CSB) – complex sections
-    // Japanese "When the Savior Comes Again" (Hymns—For Home and Church) – ruby text
-    // "Have I Done Any Good?" (1985 Hymns) – simple verses and chorus, but verses have chord positions with only one lyric syllable. When there's only one lyric syllable, it should be extracted only in the correct verse.
-    for (let cp = start; cp < end; cp++) {
-      const chordPositionIsSingleLine = this._scoreData.chordPositions[cp].isSingleLine;
-      if (!Object.hasOwn(lyricLineCounters, cp)) lyricLineCounters[cp] = 0;
-      lyricLineCounters[cp] += 1;
-      const verseElements = melodyVersesByChordPosition.get(cp) ?? [];
-      let verseElement;
-      // A pickup engraved inside a repeat carries only the verses it leads into, each
-      // labelled with its number ("2.", "3."), so @n doesn't line up with the pass
-      // count and neither rule below picks the right one — take them in engraved order.
-      // One labelled verse counts too, but only when its label names a verse other than
-      // its own lyric line: a plain "1." on line 1 just names the line it sits on.
-      const allLabelled = verseElements.length > 0
-        && verseElements.every(ve => ve.querySelector('label'));
-      const namesAnotherVerse = verseElements.length === 1
-        && this._markerNumber(verseElements[0].querySelector('label')?.textContent)
-          !== Number.parseInt(verseElements[0].getAttribute('n'));
-      const isLabelledPickup = allLabelled && (verseElements.length > 1 || namesAnotherVerse);
-      if (isLabelledPickup) {
-        verseElement = verseElements[lyricLineCounters[cp] - 1];
-      } else if (verseElements.length > 0) {
-        if (chordPositionIsSingleLine || rangeHasSingleLine) {
-          verseElement = verseElements[0];
-        } else {
-          verseElement = Array.from(verseElements).filter(ve => Number.parseInt(ve.getAttribute('n')) === lyricLineCounters[cp])[0];
-        }
-      }
-
-      // A round marker is engraved where the voice enters, which isn't always the chord
-      // position its word starts on — it can land on a held note with no lyric, or on
-      // the tail syllable of the word before. It belongs to the next word start.
-      if (roundMarkersByChordPosition.has(cp) && !pendingRoundMarker) {
-        pendingRoundMarker = roundMarkersByChordPosition.get(cp);
-      }
-
-      if (verseElement) {
-        const label = verseElement.querySelector('label');
-        const sylElements = Array.from(verseElement.querySelectorAll('syl'));
-        const text = sylElements.map(syl => (syl.textContent.replace(/[\-\‑\s]+$/, '').trim() + ' ').trim()).join(' ').trim() || null;
-        const startsWord = !['m', 't'].includes(sylElements[0]?.getAttribute('wordpos'));
-        const roundMarker = startsWord ? pendingRoundMarker : null;
-        if (roundMarker) pendingRoundMarker = null;
-        extractedLyricSyllables.push({
-          label: label ? label.textContent.trim() : null,
-          text: text,
-          // The syllables as engraved, kept for _getLyricsFromSyllables: joining
-          // them back into words needs @wordpos, which the flattened text loses.
-          // fontstyle/fontweight (set by _fixLyricStyling for MusicXML input, or
-          // native to MEI input) mark words to wrap in <em>/<strong>.
-          syls: sylElements.map(syl => ({
-            text: syl.textContent.trim(),
-            wordpos: syl.getAttribute('wordpos'),
-            italic: syl.getAttribute('fontstyle') === 'italic',
-            bold: syl.getAttribute('fontweight') === 'bold',
-          })),
-          verseLabel: verseElement.getAttribute('label'),
-          // Kept out of text so _alignSyllablesToLyrics, which matches these against
-          // lyrics that already carry their own markers, is unaffected
-          roundMarker: roundMarker,
-          chordPositions: [cp],
-          expandedChordPositions: [ecpCounter],
-          lyricLineIds: [verseElement.getAttribute('ch-lyric-line-id')],
-          startsSection: isFirstSyllableOfSection,
-          sectionType: sectionType ?? null,
-        });
-        isFirstSyllableOfSection = false;
-      } else {
-        extractedLyricSyllables.at(-1).chordPositions.push(cp);
-        extractedLyricSyllables.at(-1).expandedChordPositions.push(ecpCounter);
-      }
-      ecpCounter += 1;
+    if (verseElement) {
+      const label = verseElement.querySelector('label');
+      const sylElements = Array.from(verseElement.querySelectorAll('syl'));
+      const text = sylElements.map(syl => (syl.textContent.replace(/[\-\‑\s]+$/, '').trim() + ' ').trim()).join(' ').trim() || null;
+      const startsWord = !['m', 't'].includes(sylElements[0]?.getAttribute('wordpos'));
+      const roundMarker = startsWord ? pendingRoundMarker : null;
+      if (roundMarker) pendingRoundMarker = null;
+      extractedLyricSyllables.push({
+        label: label ? label.textContent.trim() : null,
+        text: text,
+        // The syllables as engraved, kept for _getLyricsFromSyllables: joining
+        // them back into words needs @wordpos, which the flattened text loses.
+        // fontstyle/fontweight (set by _fixLyricStyling for MusicXML input, or
+        // native to MEI input) mark words to wrap in <em>/<strong>.
+        syls: sylElements.map(syl => ({
+          text: syl.textContent.trim(),
+          wordpos: syl.getAttribute('wordpos'),
+          italic: syl.getAttribute('fontstyle') === 'italic',
+          bold: syl.getAttribute('fontweight') === 'bold',
+        })),
+        verseLabel: verseElement.getAttribute('label'),
+        // Kept out of text so _alignSyllablesToLyrics, which matches these against
+        // lyrics that already carry their own markers, is unaffected
+        roundMarker: roundMarker,
+        chordPositions: [cp],
+        expandedChordPositions: [ecpCounter],
+        lyricLineIds: [verseElement.getAttribute('ch-lyric-line-id')],
+        startsSection: isFirstSyllableOfSection,
+        sectionType: range.sectionType ?? null,
+      });
+      isFirstSyllableOfSection = false;
+    } else {
+      extractedLyricSyllables.at(-1).chordPositions.push(cp);
+      extractedLyricSyllables.at(-1).expandedChordPositions.push(ecpCounter);
     }
   }
   return extractedLyricSyllables;
@@ -5157,19 +5158,13 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
 
       // Add chord positions to current stanza
       if (currentStanzaIndex < stanzas.length) {
-        let previousChordPosition;
-        for (const chordPosition of syllable.chordPositions) {
-          if (previousChordPosition == null || previousChordPosition + 1 != chordPosition) {
-            stanzas[currentStanzaIndex].chordPositionRanges.push({
-              start: chordPosition,
-              end: chordPosition + 1,
-              lyricLineIds: syllable.lyricLineIds,
-              staffNumbers: staffNumbers,
-            });
-          } else {
-            stanzas[currentStanzaIndex].chordPositionRanges.at(-1).end = chordPosition + 1;
-          }
-          previousChordPosition = chordPosition;
+        for (const [start, end] of this._consecutiveRuns(syllable.chordPositions)) {
+          stanzas[currentStanzaIndex].chordPositionRanges.push({
+            start: start,
+            end: end,
+            lyricLineIds: syllable.lyricLineIds,
+            staffNumbers: staffNumbers,
+          });
         }
         stanzas[currentStanzaIndex].expandedChordPositions.push(...syllable.expandedChordPositions);
       }
@@ -5339,7 +5334,26 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
     // A label reached mid-stanza names the stanza; it doesn't start a new one
     if (label && !current.marker) current.marker = label;
 
-    current.chordPositionRanges.at(-1).end = syllable.chordPositions.at(-1) + 1;
+    // Record where the stanza is actually sung. A syllable carries the lyric-less chord
+    // positions held after it, so a jump puts both of its sides in one syllable: walk
+    // them as consecutive runs, and let a run starting past the current range open a new
+    // one. A single range stretched to the last position would swallow the gap, which on
+    // a repeat is the other ending. Only forward gaps split; backward jumps keep the old
+    // behaviour, since some scores rely on the degenerate (start === end) ranges.
+    for (const [runStart, runEnd] of this._consecutiveRuns(syllable.chordPositions)) {
+      const lastRange = current.chordPositionRanges.at(-1);
+      if (runStart > lastRange.end) {
+        current.chordPositionRanges.push({
+          start: runStart,
+          end: runEnd,
+          staffNumbers: lastRange.staffNumbers,
+          // Copied, not shared: _consolidateChordPositionRanges pushes into this
+          lyricLineIds: [...lastRange.lyricLineIds],
+        });
+      } else {
+        lastRange.end = runEnd;
+      }
+    }
     current.expandedChordPositions[1] = syllable.expandedChordPositions.at(-1) + 1;
   }
 
@@ -5351,6 +5365,82 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   const stanzas = this._mergePickupStanzas(built.map(entry => entry.stanza));
   for (const stanza of stanzas) stanza.name = this._stanzaName(stanza);
   return stanzas;
+}
+
+// Walk the song in sung order — through repeats, endings and jumps — yielding one entry
+// per chord position visited, so the numbering is defined once. It's load-bearing:
+// `ch-expanded-chord-position` indexes into `_scoreData.expandedChordPositions`.
+//
+// Ranges are passed in rather than read from `_scoreData.sections`, because extraction
+// runs before those sections exist — the stanzas it produces are what create them. Each
+// `{ start, end, ... }` range is handed back on every entry, so callers can carry their
+// own payload. `countPass: false` numbers a range without advancing `passNumber`: an
+// intro repeats the song's opening positions, and counting it would shift the verse that
+// reuses them.
+ChScore.prototype._walkSungChordPositions = function* (ranges, { ecpStart = 0 } = {}) {
+  let expandedChordPosition = ecpStart;
+  const passCounts = {};
+  for (const range of ranges) {
+    for (let chordPosition = range.start; chordPosition < range.end; chordPosition++) {
+      let passNumber = passCounts[chordPosition] ?? 0;
+      if (range.countPass !== false) {
+        passNumber += 1;
+        passCounts[chordPosition] = passNumber;
+      }
+      yield { range, chordPosition, expandedChordPosition, passNumber };
+      expandedChordPosition += 1;
+    }
+  }
+}
+
+// Make every xml:id in a cloned subtree unique by appending a suffix, repointing the
+// @startid/@endid references that follow it. References are indexed once up front:
+// querying per ID instead costs a full subtree scan each time, which is quadratic.
+ChScore.prototype._suffixIds = function (element, suffix) {
+  const referencesByTargetId = new Map();
+  for (const attribute of ['startid', 'endid']) {
+    for (const referencingEl of element.querySelectorAll(`[${attribute}]`)) {
+      const target = referencingEl.getAttribute(attribute);
+      if (!target.startsWith('#')) continue;
+      const targetId = target.substring(1);
+      if (!referencesByTargetId.has(targetId)) referencesByTargetId.set(targetId, []);
+      referencesByTargetId.get(targetId).push([referencingEl, attribute]);
+    }
+  }
+  element.setAttribute('xml:id', element.getAttribute('xml:id') + suffix);
+  for (const el of element.querySelectorAll('[*|id]')) {
+    const previousId = el.getAttribute('xml:id');
+    const newId = previousId + suffix;
+    el.setAttribute('xml:id', newId);
+    for (const [referencingEl, attribute] of referencesByTargetId.get(previousId) ?? []) {
+      referencingEl.setAttribute(attribute, `#${newId}`);
+    }
+  }
+}
+
+// The sung sequence as the finished sections describe it, ready for
+// _walkSungChordPositions. Each range carries the section it came from. An introduction
+// doesn't advance the pass counter — it repeats the song's own opening positions.
+ChScore.prototype._sectionChordPositionRanges = function () {
+  const ranges = [];
+  for (const sectionInfo of this._scoreData.sections) {
+    for (const chordPositionRange of sectionInfo.chordPositionRanges) {
+      ranges.push({ ...chordPositionRange, sectionInfo, countPass: sectionInfo.type !== 'introduction' });
+    }
+  }
+  return ranges;
+}
+
+// Split chord positions into runs of consecutive values, as [start, endExclusive]
+// pairs. A run break means playback jumped — over a first ending, for example.
+ChScore.prototype._consecutiveRuns = function (chordPositions) {
+  const runs = [];
+  for (const chordPosition of chordPositions) {
+    const lastRun = runs.at(-1);
+    if (lastRun && chordPosition === lastRun[1]) lastRun[1] = chordPosition + 1;
+    else runs.push([chordPosition, chordPosition + 1]);
+  }
+  return runs;
 }
 
 // Chord position ranges carry the lyric line and staves they belong to, the same

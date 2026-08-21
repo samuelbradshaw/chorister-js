@@ -765,7 +765,7 @@ describe('_gatherSyllables — How Great the Wisdom', { timeout: 30000 }, () => 
       partsTemplate: hgwPartsTemplate,
       fermatas: hgwFermatas,
     });
-    syllables = score._gatherSyllables([[0, score._scoreData.numChordPositions]], 0);
+    syllables = score._gatherSyllables([{ start: 0, end: score._scoreData.numChordPositions }], 0);
   });
 
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
@@ -797,7 +797,7 @@ describe('_gatherSyllables — How Great the Wisdom', { timeout: 30000 }, () => 
   });
 
   it('should offset expanded chord positions by ecpStart', () => {
-    const offset = score._gatherSyllables([[0, score._scoreData.numChordPositions]], 100);
+    const offset = score._gatherSyllables([{ start: 0, end: score._scoreData.numChordPositions }], 100);
     expect(offset[1].expandedChordPositions[0]).toBe(syllables[1].expandedChordPositions[0] + 100);
   });
 });
