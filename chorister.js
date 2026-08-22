@@ -4499,10 +4499,27 @@ ChScore.prototype._normalizeSections = function () {
   // Add verses printed below the music (from <pgHead> or <pgFoot>) that aren't
   // sung from the staff. Example: "Redeemer of Israel" (1985 Hymns), where
   // verses 5 and 6 appear as text under the score.
+  //
+  // A below-music verse has no staff of its own to repeat the chorus, so it's added
+  // back here, reusing the sung chorus's wording. Found by repeated text, not
+  // `type === 'chorus'`: complex-sections songs skip the type detection that would set it.
+  const annotatedLyricsCounts = new Map();
+  for (const section of otherSections) {
+    if (!section.annotatedLyrics) continue;
+    annotatedLyricsCounts.set(section.annotatedLyrics, (annotatedLyricsCounts.get(section.annotatedLyrics) ?? 0) + 1);
+  }
+  const referenceChorus = otherSections.find(section => annotatedLyricsCounts.get(section.annotatedLyrics) > 1);
+  // For comparing against a below verse's own text, which keeps the page's own line
+  // breaks rather than the sung chorus's normalized single line ("nearer-my-god-to-thee",
+  // where the printed verse already ends with its own copy of the refrain).
+  const foldWords = text => text?.replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase() ?? '';
+  const foldedReferenceChorus = foldWords(referenceChorus?.annotatedLyrics);
   for (const textBlock of this._scoreData.scoreMetadata?.stanzas ?? []) {
     // One block of text can hold several verses, separated by blank lines
     for (const stanzaText of textBlock.split(/\n\s*\n/)) {
-      const [, marker, annotatedLyrics] = /^\s*(\d+)\s*[.)]\s*([\s\S]*)$/.exec(stanzaText) ?? [];
+      // A verse marker is 1 or 2 digits — a longer run is something else printed the
+      // same way, like a copyright year ("1982. Text © ...") in an attribution block.
+      const [, marker, annotatedLyrics] = /^\s*(\d{1,2})\s*[.)]\s*([\s\S]*)$/.exec(stanzaText) ?? [];
       if (!annotatedLyrics) continue;
 
       // Skip verses that are already sung from the staff
@@ -4516,6 +4533,18 @@ ChScore.prototype._normalizeSections = function () {
         annotatedLyrics: annotatedLyrics,
       }));
       sectionBelowCounter += 1;
+
+      // Some hymns print each verse below the music with its own copy of the refrain
+      // already at the end (its "chorus" isn't a separate section at all, sung or
+      // printed); don't add a second one on top of it.
+      if (referenceChorus && !foldWords(annotatedLyrics).endsWith(foldedReferenceChorus)) {
+        otherSections.push(newSectionBelow(sectionBelowCounter, {
+          type: 'chorus',
+          name: referenceChorus.name,
+          annotatedLyrics: referenceChorus.annotatedLyrics,
+        }));
+        sectionBelowCounter += 1;
+      }
     }
   }
 
@@ -5009,6 +5038,7 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
     text: '',
     suffix: '',
     chordPositions: [],
+    chordPositionRuns: [],
     expandedChordPositions: [],
     lyricLineIds: [],
   });
@@ -5071,6 +5101,7 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
         // lyrics that already carry their own markers, is unaffected
         roundMarker: roundMarker,
         chordPositions: [cp],
+        chordPositionRuns: [[cp, cp + 1]],
         expandedChordPositions: [ecpCounter],
         lyricLineIds: [verseElement.getAttribute('ch-lyric-line-id')],
         startsSection: isFirstSyllableOfSection,
@@ -5078,8 +5109,15 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
       });
       isFirstSyllableOfSection = false;
     } else {
-      extractedLyricSyllables.at(-1).chordPositions.push(cp);
-      extractedLyricSyllables.at(-1).expandedChordPositions.push(ecpCounter);
+      const currentSyllable = extractedLyricSyllables.at(-1);
+      currentSyllable.chordPositions.push(cp);
+      currentSyllable.expandedChordPositions.push(ecpCounter);
+      // The walk already knows whether this position continues the run or starts a
+      // new one — record that now rather than re-deriving it later by rescanning
+      // chordPositions for gaps (see _getLyricsFromSyllables' use of this).
+      const lastRun = currentSyllable.chordPositionRuns.at(-1);
+      if (lastRun && cp === lastRun[1]) lastRun[1] = cp + 1;
+      else currentSyllable.chordPositionRuns.push([cp, cp + 1]);
     }
   }
   return extractedLyricSyllables;
@@ -5158,7 +5196,7 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
 
       // Add chord positions to current stanza
       if (currentStanzaIndex < stanzas.length) {
-        for (const [start, end] of this._consecutiveRuns(syllable.chordPositions)) {
+        for (const [start, end] of syllable.chordPositionRuns) {
           stanzas[currentStanzaIndex].chordPositionRanges.push({
             start: start,
             end: end,
@@ -5334,13 +5372,11 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
     // A label reached mid-stanza names the stanza; it doesn't start a new one
     if (label && !current.marker) current.marker = label;
 
-    // Record where the stanza is actually sung. A syllable carries the lyric-less chord
-    // positions held after it, so a jump puts both of its sides in one syllable: walk
-    // them as consecutive runs, and let a run starting past the current range open a new
-    // one. A single range stretched to the last position would swallow the gap, which on
-    // a repeat is the other ending. Only forward gaps split; backward jumps keep the old
+    // Record where the stanza is actually sung. chordPositionRuns already has a jump
+    // (e.g. over a repeat's other ending) split out; a run starting past the current
+    // range opens a new one. Only forward gaps split; backward jumps keep the old
     // behaviour, since some scores rely on the degenerate (start === end) ranges.
-    for (const [runStart, runEnd] of this._consecutiveRuns(syllable.chordPositions)) {
+    for (const [runStart, runEnd] of syllable.chordPositionRuns) {
       const lastRange = current.chordPositionRanges.at(-1);
       if (runStart > lastRange.end) {
         current.chordPositionRanges.push({
@@ -5394,17 +5430,22 @@ ChScore.prototype._walkSungChordPositions = function* (ranges, { ecpStart = 0 } 
 }
 
 // Make every xml:id in a cloned subtree unique by appending a suffix, repointing the
-// @startid/@endid references that follow it. References are indexed once up front:
-// querying per ID instead costs a full subtree scan each time, which is quadratic.
+// @startid/@endid/@plist references that follow it. References are indexed once up
+// front: querying per ID instead costs a full subtree scan each time, which is
+// quadratic. @plist (arpeg, beamSpan, etc.) holds a space-separated list rather than a
+// single id, so references are tracked per token rather than per whole attribute value —
+// @startid/@endid are just the one-token case of the same shape.
 ChScore.prototype._suffixIds = function (element, suffix) {
   const referencesByTargetId = new Map();
-  for (const attribute of ['startid', 'endid']) {
+  for (const attribute of ['startid', 'endid', 'plist']) {
     for (const referencingEl of element.querySelectorAll(`[${attribute}]`)) {
-      const target = referencingEl.getAttribute(attribute);
-      if (!target.startsWith('#')) continue;
-      const targetId = target.substring(1);
-      if (!referencesByTargetId.has(targetId)) referencesByTargetId.set(targetId, []);
-      referencesByTargetId.get(targetId).push([referencingEl, attribute]);
+      const tokens = referencingEl.getAttribute(attribute).split(/\s+/);
+      tokens.forEach((token, tokenIndex) => {
+        if (!token.startsWith('#')) return;
+        const targetId = token.substring(1);
+        if (!referencesByTargetId.has(targetId)) referencesByTargetId.set(targetId, []);
+        referencesByTargetId.get(targetId).push([referencingEl, attribute, tokens, tokenIndex]);
+      });
     }
   }
   element.setAttribute('xml:id', element.getAttribute('xml:id') + suffix);
@@ -5412,8 +5453,9 @@ ChScore.prototype._suffixIds = function (element, suffix) {
     const previousId = el.getAttribute('xml:id');
     const newId = previousId + suffix;
     el.setAttribute('xml:id', newId);
-    for (const [referencingEl, attribute] of referencesByTargetId.get(previousId) ?? []) {
-      referencingEl.setAttribute(attribute, `#${newId}`);
+    for (const [referencingEl, attribute, tokens, tokenIndex] of referencesByTargetId.get(previousId) ?? []) {
+      tokens[tokenIndex] = `#${newId}`;
+      referencingEl.setAttribute(attribute, tokens.join(' '));
     }
   }
 }
@@ -5424,23 +5466,16 @@ ChScore.prototype._suffixIds = function (element, suffix) {
 ChScore.prototype._sectionChordPositionRanges = function () {
   const ranges = [];
   for (const sectionInfo of this._scoreData.sections) {
+    // Below-sections (verses printed under the music, or a lyric line playback never
+    // reached) aren't sung from the staff, even when they carry real chord-position
+    // ranges — including them here fed phantom entries into the sung-order walk and
+    // ran the full-score expansion replay off the end of its section list.
+    if (sectionInfo.placement === 'below') continue;
     for (const chordPositionRange of sectionInfo.chordPositionRanges) {
       ranges.push({ ...chordPositionRange, sectionInfo, countPass: sectionInfo.type !== 'introduction' });
     }
   }
   return ranges;
-}
-
-// Split chord positions into runs of consecutive values, as [start, endExclusive]
-// pairs. A run break means playback jumped — over a first ending, for example.
-ChScore.prototype._consecutiveRuns = function (chordPositions) {
-  const runs = [];
-  for (const chordPosition of chordPositions) {
-    const lastRun = runs.at(-1);
-    if (lastRun && chordPosition === lastRun[1]) lastRun[1] = chordPosition + 1;
-    else runs.push([chordPosition, chordPosition + 1]);
-  }
-  return runs;
 }
 
 // Chord position ranges carry the lyric line and staves they belong to, the same

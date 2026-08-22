@@ -42,7 +42,15 @@ setupStandardHooks();
 function syl(text, cp, ecp, lyricLineIds = ['1.1'], label = null) {
   const cpArr = Array.isArray(cp) ? cp : [cp];
   const ecpArr = Array.isArray(ecp) ? ecp : [ecp];
-  return { label, text, chordPositions: cpArr, expandedChordPositions: ecpArr, lyricLineIds };
+  // Mirrors how _gatherSyllables builds chordPositionRuns as it walks, so hand-built
+  // fixtures here carry the same shape _alignSyllablesToLyrics sees in production.
+  const chordPositionRuns = [];
+  for (const chordPosition of cpArr) {
+    const lastRun = chordPositionRuns.at(-1);
+    if (lastRun && chordPosition === lastRun[1]) lastRun[1] = chordPosition + 1;
+    else chordPositionRuns.push([chordPosition, chordPosition + 1]);
+  }
+  return { label, text, chordPositions: cpArr, chordPositionRuns, expandedChordPositions: ecpArr, lyricLineIds };
 }
 
 const STAFF_NUMBERS = [1, 2];

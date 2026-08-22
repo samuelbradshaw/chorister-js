@@ -1876,7 +1876,7 @@ describe('_getInlineVerseNumbers()', () => {
 });
 
 // ============================================================
-// _walkSungChordPositions / _consecutiveRuns
+// _walkSungChordPositions
 // ============================================================
 describe('_walkSungChordPositions()', () => {
   let score;
@@ -1931,27 +1931,5 @@ describe('_walkSungChordPositions()', () => {
     const entries = Array.from(score._walkSungChordPositions([range]));
     expect(entries.map(entry => entry.range)).toEqual([range, range]);
     expect(entries.map(entry => entry.chordPosition)).toEqual([0, 1]);
-  });
-});
-
-describe('_consecutiveRuns()', () => {
-  let score;
-
-  beforeAll(() => {
-    document.body.innerHTML = '<div id="score-container"></div>';
-    score = new ChScore('#score-container');
-  });
-
-  it('should return one run for consecutive positions', () => {
-    expect(score._consecutiveRuns([4, 5, 6])).toEqual([[4, 7]]);
-  });
-
-  it('should split where playback jumped over a first ending', () => {
-    expect(score._consecutiveRuns([68, 69, 74, 75])).toEqual([[68, 70], [74, 76]]);
-  });
-
-  it('should handle a single position and an empty list', () => {
-    expect(score._consecutiveRuns([3])).toEqual([[3, 4]]);
-    expect(score._consecutiveRuns([])).toEqual([]);
   });
 });
