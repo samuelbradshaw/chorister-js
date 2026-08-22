@@ -31,6 +31,7 @@ import {
   sampleMusicXmlHGW, sampleLyricsHGW, hgwPartsTemplate, hgwFermatas,
   sampleMusicXmlIIW, sampleLyricsIIW, iiwParts, iiwSections, iiwFermatas,
   sampleMusicXmlTLL, sampleLyricsTLL, tllPartsTemplate, tllFermatas,
+  sampleMusicXmlTwoPart,
 } from './song-data.js';
 
 let ChScore, origDrawScore;
@@ -145,6 +146,151 @@ for (const song of songs) {
     });
   });
 }
+
+// ============================================================
+// Two-part scores: each part's own words, on its own pass
+// ============================================================
+
+/**
+ * A 'Two-Part' score (partsTemplate 'P+P') is two independent melody lines on separate
+ * staves, each carrying its own complete verse, sung together — see
+ * corpus/lyric-extraction-notes.md, "Two-part songs". The fixture is synthetic, built to
+ * the shape of "A Child’s Prayer" (1989 CSB), the corpus song this was written for. Both
+ * staves are tagged ch-melody, so every chord position offers two verses at once and the
+ * rendition picks between them: rendition 1 sings Part 1's words, rendition 2 Part 2's,
+ * and from there on they sing together.
+ *
+ * The whole-song equality the fixtures above assert deliberately does NOT hold here:
+ * extraction emits one verse per part (plus a trailing tag where the score has one), while
+ * expansion renders every engraved rendition. So this block asserts what does hold — each
+ * expanded section carries its own part's words and no other's.
+ *
+ * Known gap, deliberately not asserted: a verse section's expanded text repeats its own
+ * body, because the stanza's chordPositionRange is one solid interval spanning both repeat
+ * endings while the MEI holds a clone per rendition — the same class of bug the notes
+ * describe under "What snapshotting the whole of _scoreData turned up".
+ */
+describe('Expansion keeps each part to its own words — two-part score', { timeout: 30000 }, () => {
+  let score, expected, actual;
+
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    score = new ChScore('#score-container');
+    await score.load('musicxml', {
+      scoreContent: sampleMusicXmlTwoPart,
+      partsTemplate: 'Two-Part',
+    });
+    expected = sungLyricsBySection(score);
+    score.setOptions({ expandScore: 'full-score' });
+    actual = expandedLyricsBySection(score);
+  });
+
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  it('should detect the score as two-part', () => {
+    expect(score._scoreData.hasTwoPartMelody).toBe(true);
+  });
+
+  it('should extract one verse per part, each with that part own words', () => {
+    const verses = Array.from(expected.values());
+    expect(verses).toHaveLength(2);
+    expect(verses[0]).toContain('wesingasongofpraisetoday');
+    expect(verses[1]).toContain('youhearourcallandknoweachname');
+  });
+
+  it('should render each expanded section with only its own part words', () => {
+    expect(actual.size).toBe(expected.size);
+    for (const [sectionId, text] of actual) {
+      // Every section the walk stamped is one it also extracted lyrics for
+      expect(expected.has(sectionId)).toBe(true);
+      // The rendered text is built from that section's own verse and nothing else, so it
+      // starts where the extracted verse starts (repetition of its own body aside — see
+      // the known gap above)
+      expect(text.startsWith(expected.get(sectionId).slice(0, 30))).toBe(true);
+    }
+  });
+
+  it('should not leak the other part words into a section', () => {
+    const [verse1, verse2] = Array.from(expected.values());
+    expect(actual.get('section-0')).not.toContain(verse2.slice(0, 30));
+    expect(actual.get('section-1')).not.toContain(verse1.slice(0, 30));
+  });
+
+  // The part that isn't singing this rendition is rested out, not just stripped of its
+  // words — otherwise both parts' notes are engraved on every pass and only the lyrics
+  // alternate. A rendition where a part sings nothing at all becomes measure rests.
+  it('should rest out the part that is not singing in each rendition', () => {
+    const renditions = Array.from(score._scoreData.meiParsed.querySelectorAll(
+      'section:not([type="introduction"]) > section'))
+      .map(section => {
+        const count = selector => {
+          const perStaff = {};
+          for (const element of section.querySelectorAll(selector)) {
+            const staffNumber = element.closest('staff')?.getAttribute('n');
+            perStaff[staffNumber] = (perStaff[staffNumber] ?? 0) + 1;
+          }
+          return perStaff;
+        };
+        return { notes: count('note'), measureRests: count('mRest') };
+      })
+      // The verse renditions are the substantial ones — the fixture's body carries 12 notes
+      // per part, while an ending clone carries at most the pickup's 3 plus a tail word
+      .filter(rendition => (rendition.notes['1'] ?? 0) + (rendition.notes['2'] ?? 0) > 8);
+
+    expect(renditions).toHaveLength(3);
+    // Pass 1 — Part 1 sings, Part 2 rests
+    expect(renditions[0].notes['2']).toBeUndefined();
+    expect(renditions[0].measureRests['2']).toBeGreaterThan(0);
+    // Pass 2 — the mirror image
+    expect(renditions[1].notes['1']).toBeUndefined();
+    expect(renditions[1].measureRests['1']).toBeGreaterThan(0);
+    // Pass 3 — both parts sound together, so neither is rested out
+    expect(renditions[2].notes['1']).toBeGreaterThan(0);
+    expect(renditions[2].notes['2']).toBeGreaterThan(0);
+    expect(renditions[2].measureRests['1']).toBeUndefined();
+    expect(renditions[2].measureRests['2']).toBeUndefined();
+  });
+
+  // "(3.)" is printed on Part 1's line inside the repeat ending (as "A Child’s Prayer"
+  // does): a pickup *into* verse 3, so it is sung at the end of rendition 2 and nowhere else
+  it('should place a labelled pickup in the rendition that leads into the verse it names', () => {
+    const renditionsShowingPickup = Array.from(score._scoreData.meiParsed
+      .querySelectorAll('verse label'))
+      .filter(label => label.textContent.includes('3'))
+      .map(label => label.closest('section[ch-rendition]')?.getAttribute('ch-rendition'));
+    expect(renditionsShowingPickup.length).toBeGreaterThan(0);
+    for (const rendition of renditionsShowingPickup) expect(rendition).toBe('2');
+  });
+
+  // The "(3.)" pickup is engraved as a triplet, so silencing it note by note leaves three
+  // triplet rests where a single quarter rest says the same thing
+  it('should collapse a beam or tuplet left holding only rests into one rest', () => {
+    for (const container of score._scoreData.meiParsed.querySelectorAll('beam, tuplet')) {
+      const events = Array.from(container.querySelectorAll('note, chord, rest, mRest, space'));
+      if (events.length === 0) continue;
+      expect(events.every(event => event.matches('rest'))).toBe(false);
+    }
+  });
+
+  // MEI elements built with createElement rather than createElementNS land outside the
+  // document's namespace and serialize as <rest xmlns="">
+  it('should create rests in the MEI namespace', () => {
+    const meiNamespace = score._scoreData.meiParsed.documentElement.namespaceURI;
+    const rests = score._scoreData.meiParsed.querySelectorAll('rest, mRest');
+    expect(rests.length).toBeGreaterThan(0);
+    for (const rest of rests) expect(rest.namespaceURI).toBe(meiNamespace);
+  });
+
+  // A verse left on the lyric line number it was engraved with renders as a second line of
+  // words under the staff, so a verse's tail sits below the words it belongs beside
+  it('should put every surviving melody verse on the first lyric line', () => {
+    const verses = score._scoreData.meiParsed.querySelectorAll(
+      ':is(note[ch-melody], chord:has([ch-melody])) verse:not([ch-secondary])');
+    expect(verses.length).toBeGreaterThan(0);
+    for (const verse of verses) expect(verse.getAttribute('n')).toBe('1');
+  });
+});
 
 // ============================================================
 // Expanded chord position numbering

@@ -28,6 +28,15 @@ export const sampleMusicXmlIIW = readFileSync(
 export const sampleMusicXmlTLL = readFileSync(
   resolve(resourcesDir, 'this-little-light-of-mine.musicxml'), 'utf-8'
 );
+// Synthetic, so no copyrighted score is redistributed here. Built to the same shape as
+// "A Child’s Prayer" (1989 CSB), the corpus song this support was written for: two
+// independent melody parts on separate staves each carrying a full lyric line
+// (partsTemplate 'Two-Part'), a repeat with a combined 1st/2nd ending and a separate 3rd
+// ending, and a labelled "(3.)" pickup engraved as a triplet inside the shared ending.
+// See corpus/lyric-extraction-notes.md, "Two-part songs".
+export const sampleMusicXmlTwoPart = readFileSync(
+  resolve(resourcesDir, 'two-part-test-song.musicxml'), 'utf-8'
+);
 
 // ── Lyrics text file contents ─────────────────────────────────
 

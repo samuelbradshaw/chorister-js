@@ -2711,6 +2711,7 @@ describe('_extractPianoIntroduction', () => {
       _scoreData: { meiParsed, hasRepeatOrJump, sections },
       _getInlineVerseNumbers: () => verseNumbers,
       _getIntroBrackets: ChScore.prototype._getIntroBrackets,
+      _createMeiElement: ChScore.prototype._createMeiElement,
     };
     return ChScore.prototype._extractPianoIntroduction.call(ctx, meiParsed);
   }

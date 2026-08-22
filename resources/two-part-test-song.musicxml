@@ -1,0 +1,431 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
+<score-partwise version="4.0">
+  <movement-title>Two-Part Test Song</movement-title>
+  <part-list>
+    <score-part id="P1"><part-name>Voice 1</part-name></score-part>
+    <score-part id="P2"><part-name>Voice 2</part-name></score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>12</divisions>
+        <key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef>
+      </attributes>
+      <barline location="left">
+        <bar-style>heavy-light</bar-style>
+        <repeat direction="forward"/>
+      </barline>
+      <note>
+        <pitch><step>C</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>1.</text>
+          <elision> </elision>
+          <syllabic>single</syllabic>
+          <text>We</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>D</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>sing</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>E</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>a</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>F</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>song</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="2">
+      <note>
+        <pitch><step>C</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>of</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>D</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>praise</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>E</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>to</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>F</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>day</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="3">
+      <note>
+        <pitch><step>C</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>with</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>D</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>heart</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>E</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>and</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>F</step><octave>5</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>voice</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="4">
+      <barline location="left">
+        <ending number="1, 2" type="start"/>
+      </barline>
+      <note>
+        <pitch><step>G</step><octave>5</octave></pitch>
+        <duration>24</duration>
+        <voice>1</voice>
+        <type>half</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>Amen.</text>
+        </lyric>
+      </note>
+      <note>
+        <rest/>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+      </note>
+      <note>
+        <pitch><step>D</step><octave>5</octave></pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <time-modification>
+          <actual-notes>3</actual-notes>
+          <normal-notes>2</normal-notes>
+        </time-modification>
+        <beam number="1">begin</beam>
+        <notations><tuplet number="1" type="start" placement="above"/></notations>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>(3.)</text>
+          <elision> </elision>
+          <syllabic>begin</syllabic>
+          <text>Ho</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>E</step><octave>5</octave></pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <time-modification>
+          <actual-notes>3</actual-notes>
+          <normal-notes>2</normal-notes>
+        </time-modification>
+        <beam number="1">continue</beam>
+        <lyric number="1">
+          <syllabic>middle</syllabic>
+          <text>san</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>F</step><octave>5</octave></pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <time-modification>
+          <actual-notes>3</actual-notes>
+          <normal-notes>2</normal-notes>
+        </time-modification>
+        <beam number="1">end</beam>
+        <notations><tuplet number="1" type="stop"/></notations>
+        <lyric number="1">
+          <syllabic>end</syllabic>
+          <text>na</text>
+        </lyric>
+      </note>
+      <barline location="right">
+        <bar-style>light-heavy</bar-style>
+        <ending number="1, 2" type="stop"/>
+        <repeat direction="backward"/>
+      </barline>
+    </measure>
+    <measure number="5">
+      <barline location="left">
+        <ending number="3" type="start"/>
+      </barline>
+      <note>
+        <pitch><step>C</step><octave>5</octave></pitch>
+        <duration>48</duration>
+        <voice>1</voice>
+        <type>whole</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>Amen.</text>
+        </lyric>
+      </note>
+      <barline location="right">
+        <bar-style>light-heavy</bar-style>
+        <ending number="3" type="discontinue"/>
+      </barline>
+    </measure>
+  </part>
+  <part id="P2">
+    <measure number="1">
+      <attributes>
+        <divisions>12</divisions>
+        <key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef>
+      </attributes>
+      <barline location="left">
+        <bar-style>heavy-light</bar-style>
+        <repeat direction="forward"/>
+      </barline>
+      <note>
+        <pitch><step>E</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>2.</text>
+          <elision> </elision>
+          <syllabic>single</syllabic>
+          <text>You</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>F</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>hear</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>G</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>our</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>A</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>call</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="2">
+      <note>
+        <pitch><step>E</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>and</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>F</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>know</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>G</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>each</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>A</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>name</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="3">
+      <note>
+        <pitch><step>E</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>in</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>F</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>begin</syllabic>
+          <text>ev</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>G</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>end</syllabic>
+          <text>ery</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch><step>A</step><octave>4</octave></pitch>
+        <duration>12</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>place</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="4">
+      <barline location="left">
+        <ending number="1, 2" type="start"/>
+      </barline>
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>24</duration>
+        <voice>1</voice>
+        <type>half</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>Amen.</text>
+        </lyric>
+      </note>
+      <note>
+        <rest/>
+        <duration>24</duration>
+        <voice>1</voice>
+        <type>half</type>
+      </note>
+      <barline location="right">
+        <bar-style>light-heavy</bar-style>
+        <ending number="1, 2" type="stop"/>
+        <repeat direction="backward"/>
+      </barline>
+    </measure>
+    <measure number="5">
+      <barline location="left">
+        <ending number="3" type="start"/>
+      </barline>
+      <note>
+        <pitch><step>E</step><octave>4</octave></pitch>
+        <duration>48</duration>
+        <voice>1</voice>
+        <type>whole</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>Amen.</text>
+        </lyric>
+      </note>
+      <barline location="right">
+        <bar-style>light-heavy</bar-style>
+        <ending number="3" type="discontinue"/>
+      </barline>
+    </measure>
+  </part>
+</score-partwise>

@@ -9,6 +9,7 @@ import './setup.js';
 import { initChScore, setupStandardHooks, resetScoreState } from './helpers.js';
 import {
   sampleMusicXmlHGW as sampleMusicXml, sampleMusicXmlTLL as sampleMusicXml2,
+  sampleMusicXmlTwoPart,
 } from './song-data.js';
 
 let ChScore, origDrawScore;
@@ -559,6 +560,63 @@ describe('ch-melody — MEI annotation', () => {
       expect(staff.getAttribute('n')).toBe('1');
       const layer = note.closest('layer');
       expect(layer.getAttribute('n')).toBe('1');
+    }
+  });
+});
+
+
+// ============================================================
+// ch-melody — 'Two-Part' template, two independent melody lines ("A Child’s Prayer")
+// ============================================================
+describe("ch-melody — with partsTemplate 'Two-Part'", () => {
+  let score;
+
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    score = new ChScore('#score-container');
+    await score.load('musicxml', {
+      scoreContent: sampleMusicXmlTwoPart,
+      partsTemplate: 'Two-Part',
+    });
+  });
+
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+  afterEach(() => { resetScoreState(score); });
+
+  it('should set hasTwoPartMelody', () => {
+    expect(score._scoreData.hasTwoPartMelody).toBe(true);
+  });
+
+  it('should tag both part-1 and part-2 notes ch-melody at shared chord positions', () => {
+    const byChordPosition = new Map();
+    for (const note of score._scoreData.meiParsed.querySelectorAll('note[ch-melody]')) {
+      const cp = note.getAttribute('ch-chord-position');
+      const partIds = note.getAttribute('ch-part-id').split(' ');
+      if (!byChordPosition.has(cp)) byChordPosition.set(cp, new Set());
+      for (const partId of partIds) byChordPosition.get(cp).add(partId);
+    }
+    const withBothParts = [...byChordPosition.values()].filter(
+      parts => parts.has('part-1') && parts.has('part-2')
+    );
+    expect(withBothParts.length).toBeGreaterThan(0);
+  });
+
+  it('should not mark part-1/part-2 verses ch-secondary', () => {
+    const secondaryVerses = score._scoreData.meiParsed.querySelectorAll('verse[ch-secondary]');
+    for (const verse of secondaryVerses) {
+      const parent = verse.closest('[ch-chord-position]');
+      const partIds = (parent.getAttribute('ch-part-id') ?? '').split(' ');
+      expect(partIds).not.toContain('part-1');
+      expect(partIds).not.toContain('part-2');
+    }
+  });
+
+  it('should keep chordPositionInfo.melodyNote singular (first found)', () => {
+    for (const chordPositionInfo of score._scoreData.chordPositions) {
+      if (chordPositionInfo.melodyNote) {
+        expect(Array.isArray(chordPositionInfo.melodyNote)).toBe(false);
+      }
     }
   });
 });
