@@ -84,7 +84,7 @@ describe('load()', () => {
       scoreContent: sampleMusicXml,
       scoreId: 'my-score-123',
     });
-    expect(scoreData.scoreId).toBe('my-score-123');
+    expect(scoreData.scoreMetadata.scoreId).toBe('my-score-123');
   });
 
   it('should store lyricsText when provided', async () => {
@@ -826,7 +826,7 @@ describe('Edge Cases', () => {
       fermatas: null,
     });
     expect(scoreData).toBeDefined();
-    expect(scoreData.scoreId).toBeNull();
+    expect(scoreData.scoreMetadata.scoreId).toBeNull();
     expect(scoreData.lyricsText).toBeNull();
   });
 

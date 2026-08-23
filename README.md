@@ -172,6 +172,7 @@ Input data is provided to Chorister.js when loading the score (see “Methods”
 - **sections** – Sections object (more details below). Optional.
 - **chordSets** – Chord sets object (more details below). Optional.
 - **fermatas** – Fermatas object (more details below). Optional.
+- **lang** – Language code (e.g. `'en'`) selecting the hard-coded dictionary of known hyphenated words used when extracting lyrics from the score's own syllables. Optional, defaults to `'en'`. A score's own printed title/lyrics (if present) are also used and take priority over the hard-coded dictionary, regardless of `lang`.
 
 `scoreUrl`, `midiUrl`, and `lyricsUrl` may be subject to [CORS restrictions](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS) depending on where the files are hosted.
 

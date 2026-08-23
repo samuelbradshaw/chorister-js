@@ -283,7 +283,7 @@ ChScore.prototype._loadEventListeners = function () {
 
 /********************** Public methods **********************/
 
-ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = null, midiUrl = null, lyricsUrl = null, scoreContent = null, midiNoteSequence = null, lyricsText = null, parts = null, partsTemplate = null, sections = null, chordSets = null, fermatas = null }, options = this._defaultOptions) {
+ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = null, midiUrl = null, lyricsUrl = null, scoreContent = null, midiNoteSequence = null, lyricsText = null, parts = null, partsTemplate = null, sections = null, chordSets = null, fermatas = null, lang = 'en' }, options = this._defaultOptions) {
   this._container.dataset.chStatus = 'preparing';
   if (!format || !(scoreUrl || scoreContent)) {
     console.error(`Score data is incomplete: format and scoreUrl (or scoreContent) are required. Loading default score.`);
@@ -367,7 +367,7 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
 
   // Create scoreData object
   this._scoreData = {
-    scoreId: scoreId,
+    scoreMetadata: {},
     meiStringOriginal: this._vrvToolkit.getMEI(),
     midiNoteSequence: midiNoteSequence ?? core.midiToSequenceProto(midiArray),
     midiType: midiType ?? null,
@@ -383,7 +383,7 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
   };
 
   // Process MEI, draw SVG, and load MIDI
-  this._parseAndAnnotateMei();
+  this._parseAndAnnotateMei(scoreId, lang);
   // TODO: Transposition doesn't take effect when setOptions is called above, because the MEI isn't parsed yet. Calling setOptions again here fixes it, but I'd like to find a cleaner fix.
   if (this._currentOptions.keySignatureId) this.setOptions(this._currentOptions, false);
   this._drawScore();
@@ -1006,7 +1006,7 @@ ChScore.prototype._fixIntroBrackets = function (musicXml) {
 }
 
 // Get metadata from the MEI fileDesc, pgHead, and pgFoot elements
-ChScore.prototype._getScoreMetadata = function (meiParsed) {
+ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
 
   // <lb> is a line break; other elements (<rend>, <ref>, ...) only wrap text
   const getText = (element) => {
@@ -1050,17 +1050,37 @@ ChScore.prototype._getScoreMetadata = function (meiParsed) {
   const header = getTextBlocks('pgHead');
   const footer = getTextBlocks('pgFoot');
 
+  // The printed title is usually the topmost text on page 1: centered, and a single
+  // printed line (no <lb/>) rather than a multi-line lyrics/credits block. Prefer it
+  // over titleStmt/title, which Finale-derived MEI frequently leaves empty.
+  const printedTitle = header.find(block => block.halign === 'center' && !block.text.includes('\n'));
+
+  // A paragraph that opens with a digit run longer than 2 followed by "." or ")" is
+  // something else printed the same way as a verse marker, e.g. a copyright year
+  // ("1982. Text © ..." in an attribution block) -- drop it up front rather than
+  // leaving it in scoreMetadata.stanzas for every consumer to filter out again.
+  const looksLikeNonVerseMarker = paragraph => /^\s*\d{3,}\s*[.)]/.test(paragraph);
+  const looksLikeVerseMarker = paragraph => /^\s*\d{1,2}\s*[.)]/.test(paragraph);
+  // One item per verse/chorus, not per printed block: a block can hold several,
+  // separated by blank lines. A block only counts if at least one of its paragraphs
+  // carries a verse marker -- a block can open with an unmarked chorus before its
+  // first numbered verse.
+  const stanzas = header.concat(footer)
+    .map(block => block.text.split(/\n\s*\n/).filter(paragraph => !looksLikeNonVerseMarker(paragraph)))
+    .filter(paragraphs => paragraphs.some(looksLikeVerseMarker))
+    .flat();
+
   return {
-    title: getText(meiParsed.querySelector('fileDesc titleStmt title')) || null,
+    scoreId: scoreId,
+    lang: lang,
+    title: printedTitle?.text ?? (getText(meiParsed.querySelector('fileDesc titleStmt title')) || null),
     contributors: contributors,
     date: date ? (date.getAttribute('isodate') ?? getText(date)) : null,
     distributor: getText(meiParsed.querySelector('fileDesc pubStmt distributor')) || null,
     availability: getText(meiParsed.querySelector('fileDesc pubStmt availability')) || null,
     header: header,
     footer: footer,
-    stanzas: header.concat(footer)
-      .filter(block => /^\s*\d+\s*[.)]/.test(block.text))
-      .map(block => block.text),
+    stanzas: stanzas,
   };
 }
 
@@ -1116,9 +1136,18 @@ ChScore.prototype._unzipMusicXml = async function (arrayBuffer) {
 // circled digit (➀–➈). Not to be confused with a verse marker ("2.").
 ChScore.prototype._roundMarkerPattern = /^[➀-➈]$/;
 
-ChScore.prototype._parseAndAnnotateMei = function () {
+ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   this._scoreData.meiParsed = (new DOMParser()).parseFromString(this._scoreData.meiStringOriginal, 'text/xml');
-  this._scoreData.scoreMetadata = this._getScoreMetadata(this._scoreData.meiParsed);
+  this._scoreData.scoreMetadata = this._getScoreMetadata(this._scoreData.meiParsed, scoreId, lang);
+
+  // The hard-coded dictionary for this score's language (`lang` above, "en" by
+  // default) plus its own printed title/lyrics (if any), so _insertKnownHyphens can
+  // fix words the hard-coded list alone doesn't know -- built before any lyric
+  // derivation runs later in load().
+  this._scoreData.hyphenPositions = this._hyphenPositionsTable(
+    this._hyphenatedWords[lang] ?? [],
+    [this._scoreData.scoreMetadata.title, ...this._scoreData.scoreMetadata.stanzas].filter(Boolean)
+  );
 
   // Enable collapsing empty staves. Example: "True to the Faith" (1985 Hymns).
   for (const scoreDef of this._scoreData.meiParsed.querySelectorAll('scoreDef')) {
@@ -4755,37 +4784,36 @@ ChScore.prototype._normalizeSections = function () {
   // where the printed verse already ends with its own copy of the refrain).
   const foldWords = text => text?.replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase() ?? '';
   const foldedReferenceChorus = foldWords(referenceChorus?.annotatedLyrics);
-  for (const textBlock of this._scoreData.scoreMetadata?.stanzas ?? []) {
-    // One block of text can hold several verses, separated by blank lines
-    for (const stanzaText of textBlock.split(/\n\s*\n/)) {
-      // A verse marker is 1 or 2 digits — a longer run is something else printed the
-      // same way, like a copyright year ("1982. Text © ...") in an attribution block.
-      const [, marker, annotatedLyrics] = /^\s*(\d{1,2})\s*[.)]\s*([\s\S]*)$/.exec(stanzaText) ?? [];
-      if (!annotatedLyrics) continue;
+  for (const stanzaText of this._scoreData.scoreMetadata?.stanzas ?? []) {
+    // A verse marker is 1 or 2 digits (a longer run, e.g. a copyright year, is
+    // already excluded from scoreMetadata.stanzas -- see looksLikeNonVerseMarker in
+    // _getScoreMetadata). Text with no marker at all -- an unmarked lead-in chorus
+    // -- is skipped here rather than upstream, since it isn't a verse itself.
+    const [, marker, annotatedLyrics] = /^\s*(\d{1,2})\s*[.)]\s*([\s\S]*)$/.exec(stanzaText) ?? [];
+    if (!annotatedLyrics) continue;
 
-      // Skip verses that are already sung from the staff
-      const alreadyPresent = otherSections.some(section => this._cleanMarker(section.marker) === marker);
-      if (alreadyPresent) continue;
+    // Skip verses that are already sung from the staff
+    const alreadyPresent = otherSections.some(section => this._cleanMarker(section.marker) === marker);
+    if (alreadyPresent) continue;
 
+    otherSections.push(newSectionBelow(sectionBelowCounter, {
+      type: 'verse',
+      name: `Verse ${marker}`,
+      marker: marker,
+      annotatedLyrics: annotatedLyrics,
+    }));
+    sectionBelowCounter += 1;
+
+    // Some hymns print each verse below the music with its own copy of the refrain
+    // already at the end (its "chorus" isn't a separate section at all, sung or
+    // printed); don't add a second one on top of it.
+    if (referenceChorus && !foldWords(annotatedLyrics).endsWith(foldedReferenceChorus)) {
       otherSections.push(newSectionBelow(sectionBelowCounter, {
-        type: 'verse',
-        name: `Verse ${marker}`,
-        marker: marker,
-        annotatedLyrics: annotatedLyrics,
+        type: 'chorus',
+        name: referenceChorus.name,
+        annotatedLyrics: referenceChorus.annotatedLyrics,
       }));
       sectionBelowCounter += 1;
-
-      // Some hymns print each verse below the music with its own copy of the refrain
-      // already at the end (its "chorus" isn't a separate section at all, sung or
-      // printed); don't add a second one on top of it.
-      if (referenceChorus && !foldWords(annotatedLyrics).endsWith(foldedReferenceChorus)) {
-        otherSections.push(newSectionBelow(sectionBelowCounter, {
-          type: 'chorus',
-          name: referenceChorus.name,
-          annotatedLyrics: referenceChorus.annotatedLyrics,
-        }));
-        sectionBelowCounter += 1;
-      }
     }
   }
 
@@ -5822,7 +5850,10 @@ ChScore.prototype._applyFindReplace = function (text) {
   return result;
 }
 
-// Dictionary of known words with hyphens for lookup when extracting lyrics  ("latter-day"), by language
+// Known words with hyphens for lookup when extracting lyrics ("latter-day"), by
+// language (see the `lang` input-data field in ChScore.prototype.load). A score's
+// own printed lyrics (see _parseAndAnnotateMei) cover words this hard-coded list
+// doesn't, in any language.
 ChScore.prototype._hyphenatedWords = {
   en: [
     'adam-ondi-ahman', 'all-gracious', 'all-pervading', 'birthday-time',
@@ -5839,33 +5870,52 @@ ChScore.prototype._hyphenatedWords = {
   ],
 };
 
-// Each language's dictionary, indexed by the word with its hyphens removed, to the
-// character positions (into that stripped word) a hyphen goes back at. Built once
-// per language and cached, since _wordBuilder consults it once per syllable.
-ChScore.prototype._hyphenPositionsByLanguage = {};
+// Hyphen-like characters seen in Finale-exported MEI: plain hyphen-minus, plus the
+// typographic and non-breaking variants -- a compound word can land whole on one
+// note (keeping its own hyphen character) or get split across several (see
+// _wordBuilder's trailingHyphen below, built from this same set).
+ChScore.prototype._hyphenCharacters = '-‐‑';
 
-ChScore.prototype._hyphenPositions = function (language) {
-  if (!this._hyphenPositionsByLanguage[language]) {
-    const positions = {};
-    for (const word of this._hyphenatedWords[language] ?? []) {
-      const hyphenPositions = [];
-      let position = 0;
-      for (const part of word.split('-').slice(0, -1)) {
-        position += part.length;
-        hyphenPositions.push(position);
-      }
-      positions[word.replace(/-/g, '')] = hyphenPositions;
+// A dictionary of hyphenated words, indexed by the word with its hyphens removed and
+// lowercased, to the character positions (into that stripped word) a hyphen goes
+// back at. `words` are already-hyphenated tokens (e.g. the hard-coded list below);
+// `texts` are printed prose to scan for hyphenated words instead (e.g. a score's own
+// title/lyrics). Leading/trailing punctuation is trimmed off each scanned token so a
+// word inside quotes/guillemets or followed by sentence punctuation (e.g.
+// "« Ében-Ézer »,") is still found.
+ChScore.prototype._hyphenPositionsTable = function (words, texts = []) {
+  const punctuationAtEdges = /^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu;
+  const hyphenChars = new RegExp(`[${ChScore.prototype._hyphenCharacters}]`);
+  const scannedWords = texts.flatMap(text => text.split(/\s+/)).map(token => token.replace(punctuationAtEdges, ''));
+
+  // Scanned words first, so a score's own printed hyphenation wins over the
+  // hard-coded list on a conflict -- whichever is seen first for a given word claims
+  // the table entry, and everything after (a repeated chorus, or a hard-coded word
+  // the score's own text already covers) is skipped rather than recomputed.
+  const table = {};
+  for (const word of [...scannedWords, ...words]) {
+    if (!hyphenChars.test(word)) continue;
+
+    const parts = word.split(hyphenChars);
+    const dehyphenated = parts.join('').toLowerCase();
+    if (Object.hasOwn(table, dehyphenated)) continue;
+
+    const positions = [];
+    let position = 0;
+    for (const part of parts.slice(0, -1)) {
+      position += part.length;
+      positions.push(position);
     }
-    this._hyphenPositionsByLanguage[language] = positions;
+    table[dehyphenated] = positions;
   }
-  return this._hyphenPositionsByLanguage[language];
+  return table;
 }
 
 // Restore a known compound word's hyphen(s) once its syllables are rejoined, so
 // "latterday" becomes "latter-day" again. Case is left as the syllables spelled
 // it; only where the hyphens go is looked up.
-ChScore.prototype._insertKnownHyphens = function (word, language = 'en') {
-  const hyphenPositions = this._hyphenPositions(language)[word.toLowerCase()];
+ChScore.prototype._insertKnownHyphens = function (word) {
+  const hyphenPositions = this._scoreData?.hyphenPositions?.[word.toLowerCase()];
   if (!hyphenPositions) return word;
 
   let result = word;
@@ -5879,7 +5929,7 @@ ChScore.prototype._insertKnownHyphens = function (word, language = 'en') {
 // word with @wordpos: i(nitial), m(edial), t(erminal), s(ingle).
 ChScore.prototype._wordBuilder = function () {
   const self = this;
-  const trailingHyphen = /[-‑\s]+$/;
+  const trailingHyphen = new RegExp(`[${self._hyphenCharacters}\\s]+$`);
   const words = []; // { text, italic, bold }, styling merged into <em>/<strong> spans in text()
   let partial = '';
   let partialItalic = false;

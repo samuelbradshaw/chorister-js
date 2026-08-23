@@ -1594,6 +1594,145 @@ describe('_getScoreMetadata()', () => {
     expect(metadata.stanzas[0]).toBe('5. Prayer is the soul\u2019s sincere desire\nUttered or unexpressed');
     expect(metadata.stanzas[1]).toBe('6. The saints, in prayer, appear as one');
   });
+
+  it('should collect a stanza block that opens with an unmarked chorus, one item per verse/chorus', () => {
+    // "He Is Born, the Divine Christ Child" prints its chorus before "1." \u2014 the whole
+    // block still counts as a stanza block, chorus included, but each blank-line-
+    // separated verse/chorus becomes its own stanzas entry.
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend>He is born, the Child divine,<lb/>' +
+              'Sing all around and pipe and reed;<lb/><lb/>' +
+              '1. For long ago the prophets said<lb/>He would come to bless us all.</rend></pgHead>',
+    }));
+
+    expect(metadata.stanzas).toEqual([
+      'He is born, the Child divine,\nSing all around and pipe and reed;',
+      '1. For long ago the prophets said\nHe would come to bless us all.',
+    ]);
+  });
+
+  it('should drop a paragraph that opens with a year, not a verse marker, even inside a qualifying block', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgFoot: '<pgFoot><rend>1. Prayer is the soul’s sincere desire<lb/><lb/>' +
+              '1982. Text © Hymnal Committee</rend></pgFoot>',
+    }));
+
+    expect(metadata.stanzas).toEqual(['1. Prayer is the soul’s sincere desire']);
+  });
+
+  it('should prefer a centered, single-line printed title over titleStmt/title', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      fileDesc: '<titleStmt><title>Come, Follow Me</title></titleStmt>',
+      pgHead: '<pgHead><rend halign="center" valign="top">His Eye Is on the Sparrow</rend></pgHead>',
+    }));
+
+    expect(metadata.title).toBe('His Eye Is on the Sparrow');
+  });
+
+  it('should fall back to titleStmt/title when no centered single-line block exists', () => {
+    const withNoHeader = score._getScoreMetadata(buildMei({
+      fileDesc: '<titleStmt><title>Come, Follow Me</title></titleStmt>',
+    }));
+    expect(withNoHeader.title).toBe('Come, Follow Me');
+
+    // A centered block with a line break isn't a printed title -- it reads like a
+    // multi-line lyrics/credits block instead
+    const withMultilineCentered = score._getScoreMetadata(buildMei({
+      fileDesc: '<titleStmt><title>Come, Follow Me</title></titleStmt>',
+      pgHead: '<pgHead><rend halign="center">Come, Follow Me<lb/>a hymn</rend></pgHead>',
+    }));
+    expect(withMultilineCentered.title).toBe('Come, Follow Me');
+
+    // A left-aligned single-line block isn't a printed title either
+    const withLeftAligned = score._getScoreMetadata(buildMei({
+      fileDesc: '<titleStmt><title>Come, Follow Me</title></titleStmt>',
+      pgHead: '<pgHead><rend halign="left">Capo 3:</rend></pgHead>',
+    }));
+    expect(withLeftAligned.title).toBe('Come, Follow Me');
+  });
+});
+
+
+// ============================================================
+// _hyphenPositionsTable / _insertKnownHyphens
+// ============================================================
+describe('_hyphenPositionsTable() and _insertKnownHyphens()', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  afterEach(() => {
+    score._scoreData = null;
+  });
+
+  it('should learn a hyphenated word, lowercased, from printed text', () => {
+    const table = score._hyphenPositionsTable([], ['Pourquoi serais-je abattu ?']);
+    expect(table).toEqual({ seraisje: [6] });
+  });
+
+  it('should strip leading/trailing punctuation before matching a hyphenated word', () => {
+    const table = score._hyphenPositionsTable([], ['« Ében-Ézer »,']);
+    expect(table).toEqual({ 'ébenézer': [4] });
+  });
+
+  it('should recognize the typographic and non-breaking hyphen variants Finale prints', () => {
+    expect(score._hyphenPositionsTable([], ['rais‐je'])).toEqual({ raisje: [4] });
+    expect(score._hyphenPositionsTable([], ['rais‑je'])).toEqual({ raisje: [4] });
+  });
+
+  it('should ignore tokens with no hyphen', () => {
+    expect(score._hyphenPositionsTable([], ['Pourquoi baisser les bras ?'])).toEqual({});
+  });
+
+  it('should gather words from every text given', () => {
+    const table = score._hyphenPositionsTable([], ['latter-day', 'all-gracious']);
+    expect(table).toEqual({ latterday: [6], allgracious: [3] });
+  });
+
+  it('should learn already-hyphenated words passed directly, not just scanned from texts', () => {
+    const table = score._hyphenPositionsTable(['latter-day', 'all-gracious']);
+    expect(table).toEqual({ latterday: [6], allgracious: [3] });
+  });
+
+  it('should let a word found in printed text override the hard-coded list', () => {
+    const table = score._hyphenPositionsTable(['latter-day'], ['lat-terday']);
+    expect(table).toEqual({ latterday: [3] });
+  });
+
+  it('should keep a hard-coded entry that printed text does not mention', () => {
+    const table = score._hyphenPositionsTable(['latter-day'], ['nothing relevant here']);
+    expect(table).toEqual({ latterday: [6] });
+  });
+
+  it('should insert hyphens at the score’s looked-up positions', () => {
+    score._scoreData = { hyphenPositions: { latterday: [6] } };
+    expect(score._insertKnownHyphens('latterday')).toBe('latter-day');
+  });
+
+  it('should return the word unchanged when it is not in the table', () => {
+    score._scoreData = { hyphenPositions: {} };
+    expect(score._insertKnownHyphens('latterday')).toBe('latterday');
+  });
+
+  it('should return the word unchanged with no score loaded (no _scoreData at all)', () => {
+    expect(score._scoreData).toBeNull();
+    expect(score._insertKnownHyphens('latterday')).toBe('latterday');
+  });
+
+  it('should fix a word the score splits differently than its printed lyrics', () => {
+    // "serais-je" lands whole on one note the first time it is sung, so its hyphen
+    // (embedded directly in that syllable text) already survives untouched -- but the
+    // second time, the melody splits it "se" + "rais" + "je", and _wordBuilder rejoins
+    // those with no hyphen at all: _insertKnownHyphens("seraisje") is what it actually
+    // calls. The score's own printed lyrics, merged into hyphenPositions, fix that case.
+    score._scoreData = {
+      hyphenPositions: score._hyphenPositionsTable([], ['1. Pourquoi serais-je abattu ?']),
+    };
+    expect(score._insertKnownHyphens('seraisje')).toBe('serais-je');
+  });
 });
 
 
