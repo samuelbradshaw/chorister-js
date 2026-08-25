@@ -59,7 +59,7 @@ ChScore.prototype._loadStyles = function () {
       overflow: scroll hidden;
       scroll-snap-type: x mandatory;
       display: flex;
-      column-gap: 2em;
+      column-gap: 0.8em;
     }
     [data-ch-layout="paginated"] [data-ch-page] {
       flex: 0 0 auto;
@@ -343,6 +343,7 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
   }
 
   // Load score into Verovio
+  this._creditStyles = new Map(); // only MusicXML fills this in; see _fixCreditStyling
   if (scoreContent instanceof ArrayBuffer) {
     // MXL (compressed MusicXML)
     this._vrvToolkit.loadZipDataBuffer(scoreContent);
@@ -353,6 +354,7 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
     } else if (format === 'musicxml' || format === 'mxl') {
       scoreContent = this._fixIntroBrackets(scoreContent);
       scoreContent = this._fixLyricStyling(scoreContent);
+      scoreContent = this._fixCreditStyling(scoreContent);
       scoreContent = this._fixCreditPages(scoreContent);
     }
     this._vrvToolkit.loadData(scoreContent);
@@ -947,7 +949,44 @@ ChScore.prototype._fixCreditPages = function (musicXml) {
   return changed ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
 }
 
-// Convert bold and italic font names to standard font style and weight attributes
+// Convert bold and italic font names to standard font style and weight attributes.
+// Finale spells styling into the font name ("McKay Neue ldsLat Italic") and Verovio
+// only carries the standard attributes through to MEI, so the styling is lost without
+// this.
+ChScore.prototype._normalizeFontStyling = function (element) {
+  const fontFamily = (element.getAttribute('font-family') || '').toLowerCase();
+  let changed = false;
+  if (!element.getAttribute('font-style') && fontFamily.includes('italic')) {
+    element.setAttribute('font-style', 'italic');
+    changed = true;
+  }
+  if (!element.getAttribute('font-weight') && fontFamily.includes('bold')) {
+    element.setAttribute('font-weight', 'bold');
+    changed = true;
+  }
+  return changed;
+}
+
+// The font name with the styling words taken back out, once they are carried by
+// font-style/font-weight: "McKay Neue ldsLat Italic, text" names the same family as
+// "McKay Neue ldsLat, text" and shouldn't sort as a family of its own.
+ChScore.prototype._fontFamilyWithoutStyling = function (fontFamily) {
+  if (!fontFamily) return null;
+  return fontFamily
+    .split(',')
+    .map(name => name.replace(/\s*\b(italic|bold)\b/gi, '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(', ') || null;
+}
+
+// Collapse each line's runs of whitespace and trim it, then drop leading and trailing
+// blank lines. Printed text blocks are wrapped for the page, not for a reader.
+ChScore.prototype._cleanBlockWhitespace = function (text) {
+  return text
+    .split('\n').map(line => line.replace(/[^\S\n]+/g, ' ').trim()).join('\n')
+    .replace(/^\n+|\n+$/g, '');
+}
+
 ChScore.prototype._fixLyricStyling = function (musicXml) {
   if (!musicXml.includes('<lyric')) return musicXml;
 
@@ -956,18 +995,75 @@ ChScore.prototype._fixLyricStyling = function (musicXml) {
 
   let changed = false;
   for (const text of parsed.querySelectorAll('lyric > text')) {
-    const fontFamily = (text.getAttribute('font-family') || '').toLowerCase();
-    if (!text.getAttribute('font-style') && fontFamily.includes('italic')) {
-      text.setAttribute('font-style', 'italic');
-      changed = true;
-    }
-    if (!text.getAttribute('font-weight') && fontFamily.includes('bold')) {
-      text.setAttribute('font-weight', 'bold');
-      changed = true;
-    }
+    changed = this._normalizeFontStyling(text) || changed;
   }
 
   return changed ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
+}
+
+// Keep a credit's styled runs together, marked up the way lyric syllables are.
+//
+// A credit printed as one paragraph ("Words: Anon.") is written as several
+// <credit-words>, one per styling change, and only the first carries default-x and
+// default-y. Verovio places each run by its own position, so the unpositioned
+// continuations are scattered into <pgFoot>, away from the run they belong to --
+// "Air from " is left in the header while its italic "Orpheus" lands in the footer.
+// Merging the runs before conversion keeps the paragraph whole; since MusicXML has
+// nowhere to put per-run styling once they are one element, the styled runs carry
+// <em>/<strong> instead, which is what _wordBuilder gives lyrics too.
+ChScore.prototype._fixCreditStyling = function (musicXml) {
+  this._creditStyles = new Map();
+  if (!musicXml.includes('<credit')) return musicXml;
+
+  const parsed = (new DOMParser()).parseFromString(musicXml, 'text/xml');
+  if (parsed.querySelector('parsererror')) return musicXml;
+
+  const markUpRun = (run) => {
+    let text = run.textContent;
+    if (run.getAttribute('font-weight') === 'bold') text = `<strong>${text}</strong>`;
+    if (run.getAttribute('font-style') === 'italic') text = `<em>${text}</em>`;
+    return text;
+  };
+
+  let changed = false;
+  for (const credit of parsed.querySelectorAll('credit')) {
+    const runs = [...credit.querySelectorAll('credit-words')];
+    if (!runs.length) continue;
+    for (const run of runs) changed = this._normalizeFontStyling(run) || changed;
+
+    // A credit of one run needs no markup: its styling stays on the element, and
+    // Verovio carries it to the <rend> the block is read from.
+    if (runs.length > 1) {
+      runs[0].textContent = this._normalizeMarkupWhitespace(runs.map(markUpRun).join(''));
+      // The merged element now spans runs of mixed styling, so its own attributes can
+      // no longer describe them.
+      runs[0].setAttribute('font-style', 'normal');
+      runs[0].setAttribute('font-weight', 'normal');
+      for (const run of runs.slice(1)) run.remove();
+      changed = true;
+    }
+
+    // Verovio carries neither font-family nor font-size onto the <rend>, so keep them
+    // here, keyed by the text they belong to -- the same text the block is read from,
+    // which is what _getScoreMetadata matches them back up by. The first run names the
+    // block's font: a later run changing font is what made it a run of its own.
+    this._creditStyles.set(this._cleanBlockWhitespace(runs[0].textContent), {
+      fontFamily: this._fontFamilyWithoutStyling(runs[0].getAttribute('font-family')),
+      fontSize: runs[0].getAttribute('font-size') || null,
+    });
+  }
+
+  return changed ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
+}
+
+// Keep styling whitespace outside its markup, so a run's tags sit against the words
+// they style: "<em>Words: </em>Anon." reads as "<em>Words:</em> Anon.". Scores put the
+// separating space inside the styled run as often as not, and where the tags fall
+// shouldn't depend on that.
+ChScore.prototype._normalizeMarkupWhitespace = function (text) {
+  return text
+    .replace(/<(em|strong)>([^\S\n]+)/g, '$2<$1>')
+    .replace(/([^\S\n]+)<\/(em|strong)>/g, '</$2>$1');
 }
 
 // Move intro brackets (⌜ ⌝) to the correct document order (based on x-position) relative to surrounding notes. When converting MusicXML to MEI, Verovio uses document order to determine element position.
@@ -1005,8 +1101,24 @@ ChScore.prototype._fixIntroBrackets = function (musicXml) {
   return moved ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
 }
 
+// A printed verse marker ("3.", "12)"), and a digit run too long to be one -- both
+// allowing the <em>/<strong> a styled paragraph now opens with. See _getScoreMetadata.
+ChScore.prototype._verseMarker = /^(?:<(?:em|strong)>)*\s*\d{1,2}\s*[.)]/;
+ChScore.prototype._nonVerseMarker = /^(?:<(?:em|strong)>)*\s*\d{3,}\s*[.)]/;
+
 // Get metadata from the MEI fileDesc, pgHead, and pgFoot elements
 ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
+
+  // Styling a <rend> carries, as the <em>/<strong> markup lyrics use. A credit of
+  // mixed runs was marked up before conversion instead (see _fixCreditStyling), so
+  // this covers what stays on the element: a credit styled as a whole, and the nested
+  // <rend> of MEI-native input.
+  const styleText = (text, rend) => {
+    if (!text) return text;
+    if (rend.getAttribute('fontweight') === 'bold') text = `<strong>${text}</strong>`;
+    if (rend.getAttribute('fontstyle') === 'italic') text = `<em>${text}</em>`;
+    return text;
+  }
 
   // <lb> is a line break; other elements (<rend>, <ref>, ...) only wrap text
   const getText = (element) => {
@@ -1015,12 +1127,10 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
     for (const node of element.childNodes) {
       if (node.nodeType === Node.TEXT_NODE) text += node.textContent;
       else if (node.nodeName === 'lb') text += '\n';
+      else if (node.nodeName === 'rend') text += styleText(getText(node), node);
       else text += getText(node);
     }
-    // Clean up whitespace
-    return text
-      .split('\n').map(line => line.replace(/[^\S\n]+/g, ' ').trim()).join('\n')
-      .replace(/^\n+|\n+$/g, '');
+    return this._cleanBlockWhitespace(text);
   }
 
   const getTextBlocks = (containerName) => {
@@ -1029,10 +1139,17 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
       for (const rend of container.querySelectorAll(':scope > rend')) {
         const text = getText(rend);
         if (!text) continue;
+        // MEI-native input carries the font on the <rend>; MusicXML's was set aside
+        // before conversion, since Verovio drops it (see _fixCreditStyling).
+        const creditStyle = this._creditStyles?.get(text);
         blocks.push({
-          text: text,
+          // Per line, not around the block: a run never spans a line break in lyrics
+          // either, which keeps the markup usable line by line.
+          text: text.split('\n').map(line => styleText(line, rend)).join('\n'),
           halign: rend.getAttribute('halign'),
           valign: rend.getAttribute('valign'),
+          fontFamily: rend.getAttribute('fontfam') ?? creditStyle?.fontFamily ?? null,
+          fontSize: rend.getAttribute('fontsize') ?? creditStyle?.fontSize ?? null,
           elementId: rend.getAttribute('xml:id'),
         });
       }
@@ -1059,8 +1176,10 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
   // something else printed the same way as a verse marker, e.g. a copyright year
   // ("1982. Text © ..." in an attribution block) -- drop it up front rather than
   // leaving it in scoreMetadata.stanzas for every consumer to filter out again.
-  const looksLikeNonVerseMarker = paragraph => /^\s*\d{3,}\s*[.)]/.test(paragraph);
-  const looksLikeVerseMarker = paragraph => /^\s*\d{1,2}\s*[.)]/.test(paragraph);
+  // A paragraph printed in italics opens with the <em> its styling became, so the
+  // marker isn't the first thing in the string any more.
+  const looksLikeNonVerseMarker = paragraph => this._nonVerseMarker.test(paragraph);
+  const looksLikeVerseMarker = paragraph => this._verseMarker.test(paragraph);
   // One item per verse/chorus, not per printed block: a block can hold several,
   // separated by blank lines. A block only counts if at least one of its paragraphs
   // carries a verse marker -- a block can open with an unmarked chorus before its
@@ -5488,7 +5607,7 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
 
   // Match each syllable
   for (const syllable of syllables) {
-    const normSylText = syllable.text?.normalize('NFD').replace(/[\u0300-\u036f\p{P}\p{N}]/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const normSylText = this._foldForMatching(syllable.text);
     if (!normSylText) continue;
 
     const windowEnd = Math.min(pos + 20, normText.length);
@@ -5565,6 +5684,39 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
   return stanzas;
 }
 
+// One text fold, its policy named by the caller: `strip` is a character class to drop,
+// `edges` trims all but letters and digits off both ends, `whitespace` is 'keep',
+// 'collapse' or 'remove'. The two policies in use are _foldForMatching and _foldWord.
+ChScore.prototype._foldText = function (text, { strip = null, edges = false, whitespace = 'keep' } = {}) {
+  // NFD first, so a combining mark is its own character for `strip` to drop; what
+  // survives is recomposed, keeping an accent the fold was told to keep.
+  let folded = (text ?? '').normalize('NFD');
+  if (strip) folded = folded.replace(new RegExp(strip.source, 'gu'), '');
+  folded = folded.normalize('NFC');
+  if (edges) folded = folded.replace(this._punctuationAtEdges, '');
+  if (whitespace === 'collapse') folded = folded.replace(/\s+/g, ' ').trim();
+  else if (whitespace === 'remove') folded = folded.replace(/\s+/g, '');
+  return folded.toLowerCase();
+}
+
+// Fold for matching one source's text against another's -- printed lyrics against sung
+// syllables. Folds hard, since the two are typeset by different hands: only letters are
+// left. Runs through _normalizeLyricsForMatching, not _foldText, so this policy has one
+// implementation -- that one is also HTML-aware and maps each character back to its source.
+ChScore.prototype._foldForMatching = function (text, whitespace = 'collapse') {
+  const folded = this._normalizeLyricsForMatching(text ?? '').normText;
+  return whitespace === 'remove' ? folded.replace(/\s+/g, '') : folded.trim();
+}
+
+// Fold one word for looking up in a word list -- _hyphenatedWords, _phraseFunctionWords.
+// Trims the edges only, leaving the spelling as engraved: it can't fold like
+// _foldForMatching, because accents tell hyphen-table entries apart ("ében-ézer") and
+// dropping the apostrophe would collapse "we'll" onto "well" and "I'll" onto "ill".
+ChScore.prototype._foldWord = function (word) {
+  const bare = (word ?? '').split(this._hyphenPattern).join('').replace(this._apostrophes, '’');
+  return this._foldText(bare, { edges: true });
+}
+
 // Build a match-friendly version of the lyrics, with a map back to where each
 // normalized character came from in the original text (HTML-aware).
 // For <ruby> blocks, use the <rt> reading text for matching and map to the <ruby> tag position.
@@ -5574,14 +5726,14 @@ ChScore.prototype._normalizeLyricsForMatching = function (expandedLyrics) {
   const normChars = [];
   const posMap = [];
   const rubyRegex = /<ruby[^>]*>[\s\S]*?<\/ruby>/gi;
-  const stripRe = /[\u0300-\u036f\p{P}\p{N}]/u;
+  const stripRe = this._matchingStrip;
   let lastPlainIndex = 0;
   let rubyMatch;
 
   // Normalize a single character into normChars/posMap.
   // When collapseWhitespace is true, runs of whitespace become a single space.
   function addNormChar(char, position, collapseWhitespace) {
-    const norm = char.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const norm = char.normalize('NFD').replace(ChScore.prototype._diacriticMarks, '').toLowerCase();
     if (norm && !/\s/.test(norm)) {
       for (const ch of norm) {
         normChars.push(ch);
@@ -5659,38 +5811,58 @@ ChScore.prototype._consolidateChordPositionRanges = function (ranges) {
   return result;
 }
 
+// Group syllables into the runs that become stanzas: one lyric line, one section, one
+// verse type, up to a label or a jump back into a repeat. Split out so phrase-start
+// detection and stanza building can't drift apart about where a stanza begins.
+ChScore.prototype._syllableStanzaRuns = function (syllables) {
+  const runs = [];
+  let current = null;
+  for (const syllable of syllables) {
+    const lyricLineId = syllable.lyricLineIds?.[0] ?? null;
+    if (!lyricLineId || !syllable.text) continue;
+    // A section says what it is; fall back to the verse element's own label for
+    // scores walked without sections to align to
+    const type = syllable.sectionType ?? syllable.verseLabel ?? null;
+
+    const startsNewRun = !current
+      || syllable.startsSection
+      || current.lyricLineId !== lyricLineId
+      || current.type !== type
+      || Boolean(syllable.label)
+      || syllable.chordPositions[0] < current.lastChordPosition;
+
+    if (startsNewRun) {
+      current = { lyricLineId: lyricLineId, type: type, lastChordPosition: -1, syllables: [] };
+      runs.push(current);
+    }
+    current.syllables.push(syllable);
+    current.lastChordPosition = syllable.chordPositions.at(-1);
+  }
+  return runs;
+}
+
 // Build lyric stanzas from the syllables engraved in the score, when no lyrics were
 // given to align against. A stanza is a run of syllables sharing one lyric line, in
 // sung order, then any line playback never reached — and syllables aren't lines.
 ChScore.prototype._getLyricsFromSyllables = function (syllables) {
+  const runs = this._syllableStanzaRuns(syllables);
+  const phraseStarts = this._getPhraseStartChordPositions(syllables, runs);
+
   // Walk the syllables in the order they're sung
   const built = [];
   let current = null;
   let builder = null;
-  for (const syllable of syllables) {
-    const lyricLineId = syllable.lyricLineIds?.[0] ?? null;
-    if (!lyricLineId || !syllable.text) continue;
-
+  for (const run of runs) for (const [index, syllable] of run.syllables.entries()) {
     const chordPosition = syllable.chordPositions[0];
-    // A section says what it is; fall back to the verse element's own label for
-    // scores walked without sections to align to
-    const type = syllable.sectionType ?? syllable.verseLabel ?? null;
     const label = syllable.label ?? null;
 
-    // A stanza ends where its section does, when the lyric line changes, when the
-    // verse type changes, when a verse label is reached, or when playback jumps
-    // back into a repeat
-    const startsNewStanza = !current
-      || syllable.startsSection
-      || current.lyricLineIds[0] !== lyricLineId
-      || current.type !== type
-      || Boolean(label)
-      || chordPosition < current.chordPositionRanges.at(-1).end - 1;
-
-    if (startsNewStanza) {
-      current = this._newLyricStanza(lyricLineId, type, label, chordPosition, syllable.expandedChordPositions[0]);
+    if (index === 0) {
+      current = this._newLyricStanza(
+        run.lyricLineId, run.type, label, chordPosition, syllable.expandedChordPositions[0]);
       builder = this._wordBuilder();
       built.push({ stanza: current, builder: builder });
+    } else if (phraseStarts.has(chordPosition)) {
+      builder.breakLine();
     }
 
     if (syllable.roundMarker) builder.addRoundMarker(syllable.roundMarker);
@@ -5736,6 +5908,340 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   const stanzas = this._mergePickupStanzas(built.map(entry => entry.stanza));
   for (const stanza of stanzas) stanza.name = this._stanzaName(stanza);
   return stanzas;
+}
+
+// How much each phrase-start signal is worth, fitted on the training half of the corpus.
+// Text carries most of it — `capital` and `punctuation` are what a break really turns on —
+// and `gap` is the musical signal that fires often enough to matter. `fermata` and
+// `barLine` are musically the right idea but hardly ever fire in hymnody, so they're kept
+// for repertoire that does mark its phrases rather than for what they earn here.
+ChScore.prototype._phraseStartWeights = {
+  punctuation: 1.0, capital: 1.5, gap: 0.8,
+  fermata: 0.4, barLine: 0.6, beatPhase: 0.5,
+  printedLine: 0.8,
+  // Negative: evidence against breaking here, not for it
+  functionWord: -0.4,
+  // What a break has to be worth before it's taken at all, and what a line straying
+  // from the song's typical length costs per syllable
+  breakCost: 1.9, lengthCost: 0.3,
+};
+
+// Phrase punctuation, allowing a closing quote or bracket after it
+ChScore.prototype._phrasePunctuation = /[.,:;?!—–…]["'’”\)\]]*$/u;
+
+// Words a line doesn't end on, because they attach to whatever follows: articles,
+// conjunctions and possessives leave a phrase visibly unfinished ("You have a work that no /
+// other can do"). Deliberately that closed class only — a wider list picks up words that
+// merely happen to sit mid-line in this repertoire. Keyed by language like
+// _hyphenatedWords; a language with no list simply doesn't get the signal.
+ChScore.prototype._phraseFunctionWords = {
+  en: new Set(['a', 'an', 'the', 'and', 'or', 'nor', 'but', 'my', 'i’m', 'i’ll', 'thy',
+    'your', 'you’re', 'you’ll', 'our', 'we’re', 'we’ll', 'their', 'they’re', 'they’ll',
+    'very', 'every', 'ev’ry']),
+};
+
+
+// The whole word ending at this syllable, gathered back over however many notes it's sung
+// across. Syllables arrive one chord position at a time; only the one opening the word
+// carries @wordpos i or s, so that's where the walk stops.
+ChScore.prototype._wordEndingAt = function (syllables, index) {
+  const parts = [];
+  for (let k = index; k >= 0; k--) {
+    const syls = syllables[k].syls ?? [];
+    parts.unshift(syls.length ? syls.map(syl => syl.text).join('') : (syllables[k].text ?? ''));
+    if (!['m', 't'].includes(syls[0]?.wordpos)) break;
+  }
+  return parts.join('');
+}
+
+// The middle value of a list of numbers, or null if there are none. Sorts a copy: the
+// callers build their lists for this and shouldn't have to care that it reorders them.
+ChScore.prototype._median = function (numbers) {
+  if (!numbers.length) return null;
+  const sorted = [...numbers].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+// A signal firing at almost every word start, or at almost none, says nothing about
+// where phrases begin. Phrases run roughly 6–10 syllables, so a rate near 1/8 is the
+// informative case; the weight falls off from there and reaches 0 at the extremes.
+ChScore.prototype._signalInformativeness = function (rate) {
+  if (rate <= 0.01 || rate >= 0.75) return 0;
+  return Math.min(1, (0.75 - rate) / 0.6);
+}
+
+// Evidence that a phrase starts at each chord position, as a Map. Only word starts are
+// scored — a phrase never begins mid-word — and every backward-looking signal reads the
+// whole span since the previous syllable (its held notes and rests included), not just
+// the chord position before, since the fermata or long note ending a phrase often sits
+// several positions back. Scores are averaged over the lyric lines singing a position,
+// so verses agreeing on a break reinforce it without a separate cross-verse pass.
+ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
+  runs = runs ?? this._syllableStanzaRuns(syllables);
+  const chordPositions = this._scoreData.chordPositions ?? [];
+  const weights = this._phraseStartWeights;
+
+  const measures = this._scoreData.measures ?? [];
+  const measureIndexById = new Map();
+  measures.forEach((measure, index) => measureIndexById.set(measure.measureId, index));
+
+  const fermataChordPositions = new Set();
+  for (const fermata of this._scoreData.meiParsed?.querySelectorAll('fermata[ch-chord-position]') ?? []) {
+    fermataChordPositions.add(Number.parseInt(fermata.getAttribute('ch-chord-position')));
+  }
+
+  const durations = [];
+  for (const cp of this._scoreData.audibleChordPositions ?? []) {
+    if (chordPositions[cp]?.durationQ > 0) durations.push(chordPositions[cp].durationQ);
+  }
+  const medianDuration = this._median(durations) ?? 1;
+
+  // Raw per-signal hits, kept unweighted so the text signals can be calibrated once the
+  // whole score has been seen
+  const hits = new Map(); // cp -> { count, punctuation, capital, ... }
+  const bump = (cp, signal, value = 1) => {
+    if (!hits.has(cp)) hits.set(cp, { count: 0 });
+    const entry = hits.get(cp);
+    entry[signal] = (entry[signal] ?? 0) + value;
+  };
+
+  const functionWords = this._phraseFunctionWords[this._scoreData.scoreMetadata?.lang];
+  let wordStarts = 0;
+  for (const run of runs) {
+    for (let i = 1; i < run.syllables.length; i++) {
+      const syllable = run.syllables[i];
+      const previous = run.syllables[i - 1];
+      const firstSyl = syllable.syls?.[0];
+      if (['m', 't'].includes(firstSyl?.wordpos)) continue; // Never break mid-word
+
+      const cp = syllable.chordPositions[0];
+      wordStarts += 1;
+      bump(cp, 'count');
+
+      const previousText = (previous.syls?.at(-1)?.text ?? previous.text ?? '').trim();
+      if (this._phrasePunctuation.test(previousText)) bump(cp, 'punctuation');
+      // A line ending on a word that leans on the next one is evidence against a break.
+      // Compared as a whole word, gathered back across the notes it's sung over: a word
+      // split between them arrives a fragment at a time, and matching on the fragment it
+      // ends with never recognizes a multi-syllable entry ("ev-’ry" reaching here as "ry").
+      if (functionWords && ['s', 't', null, undefined].includes(previous.syls?.at(-1)?.wordpos)) {
+        const bare = this._foldWord(this._wordEndingAt(run.syllables, i - 1));
+        if (functionWords.has(bare)) bump(cp, 'functionWord');
+      }
+      if (/^\p{Lu}/u.test((firstSyl?.text ?? syllable.text ?? '').trim())) bump(cp, 'capital');
+
+      // The span the previous syllable occupies: its own onset plus every position with
+      // no syllable of its own, which _gatherSyllables already appended to it
+      const span = previous.chordPositions;
+      // How long since the previous syllable was sung, however that time is filled. A held
+      // note and a rest are the same thing to a singer waiting to start the next phrase, and
+      // measuring them separately made one graded and the other merely present-or-absent.
+      const gapDuration = span.reduce((total, spanCp) => total + (chordPositions[spanCp]?.durationQ ?? 0), 0);
+      if (gapDuration >= medianDuration * 1.75) bump(cp, 'gap');
+      if (span.some(spanCp => fermataChordPositions.has(spanCp))) bump(cp, 'fermata');
+
+      // Barlines crossed between the previous syllable and this one.
+      // Repeat barlines are deliberately not evidence: in a song that doesn't start on a
+      // downbeat they routinely fall mid-phrase or mid-word ("This Is the Christ",
+      // "Were You There?").
+      const fromIndex = measureIndexById.get(chordPositions[span[0]]?.measureId);
+      const toIndex = measureIndexById.get(chordPositions[cp]?.measureId);
+      if (fromIndex != null && toIndex != null && toIndex > fromIndex) {
+        const crossed = measures.slice(fromIndex, toIndex);
+        if (crossed.some(measure => ['dbl', 'end'].includes(measure.rightBarLine))) bump(cp, 'barLine');
+      }
+    }
+  }
+
+  // Calibrate the text signals against how often they fire in this score, so one weight
+  // table works across languages: a score that capitalizes every word start (or none),
+  // or that engraves no punctuation, simply falls back on the musical signals.
+  const totalHits = (signal) => [...hits.values()].reduce((total, entry) => total + (entry[signal] ?? 0), 0);
+
+  const scale = {
+    capital: this._signalInformativeness(wordStarts ? totalHits('capital') / wordStarts : 0),
+    punctuation: this._signalInformativeness(wordStarts ? totalHits('punctuation') / wordStarts : 0),
+  };
+
+  const scores = new Map();
+  for (const [cp, entry] of hits) {
+    let score = 0;
+    for (const [signal, weight] of Object.entries(weights)) {
+      if (!entry[signal]) continue;
+      score += weight * (scale[signal] ?? 1) * (entry[signal] / entry.count);
+    }
+    scores.set(cp, score);
+  }
+
+  this._addBeatPhaseBonus(scores);
+  this._addPrintedLineBonus(scores, runs);
+  return scores;
+}
+
+// Phrases start at the same point in the measure all song long — not necessarily the
+// downbeat. "Behold the Wounds in Jesus\u2019 Hands" starts every line on beat 4 of 4, so
+// rewarding downbeats pointed at the wrong syllable every time; the beat has to be read off
+// the score. One signal among the others, not a rule: it lifts the candidates on that beat
+// and never rules out the ones off it. Reading only where notes fall, it works the same in a
+// language whose spelling marks no phrase at all.
+ChScore.prototype._addBeatPhaseBonus = function (scores) {
+  const chordPositions = this._scoreData.chordPositions ?? [];
+  const measuresById = this._scoreData.measuresById ?? {};
+
+  const beatOf = (cp) => {
+    const measure = measuresById[chordPositions[cp]?.measureId];
+    if (!measure || measure.startQ == null) return null;
+    const [count, unit] = measure.timeSignature ?? [0, 0];
+    const fullMeasureQ = count && unit ? count * (4 / unit) : 0;
+    if (!fullMeasureQ) return null;
+    // A measure that doesn't open on a downbeat is the tail of a full one, so its notes sit
+    // at the end of the bar rather than the start: an eighth-note pickup into 4/4 is on beat
+    // 4½, not beat 1. Measuring from its own start put the song's first phrase — the one
+    // phrase every song is certain of — on the wrong beat. Which measures those are is
+    // settled the same way _parseAndAnnotateMei settles @isDownbeat.
+    const startsOffDownbeat = ['partial-pickup', 'partial-end'].includes(measure.measureType);
+    const lead = startsOffDownbeat ? fullMeasureQ - (measure.durationQ ?? fullMeasureQ) : 0;
+    return (lead + chordPositions[cp].startQ - measure.startQ) % fullMeasureQ;
+  };
+
+  // Which beat it is comes from the pickup, not from the evidence: a song opening with a
+  // one-beat pickup into 4/4 starts its phrases a beat before each barline, all song long.
+  const firstMeasure = (this._scoreData.measures ?? [])[0];
+  if (!firstMeasure || firstMeasure.startQ == null) return;
+  const [fc, fu] = firstMeasure.timeSignature ?? [0, 0];
+  const fullQ = fc && fu ? fc * (4 / fu) : 0;
+  if (!fullQ) return;
+  const pickupQ = firstMeasure.measureType === 'partial-pickup' ? firstMeasure.durationQ : 0;
+  const phraseBeat = ((fullQ - pickupQ) % fullQ + fullQ) % fullQ;
+  for (const cp of scores.keys()) {
+    const beat = beatOf(cp);
+    if (beat != null && Math.abs(beat - phraseBeat) < 0.01) {
+      scores.set(cp, scores.get(cp) + this._phraseStartWeights.beatPhase);
+    }
+  }
+}
+
+// Verses printed below the music carry real line breaks from <lb>. Each printed line is
+// matched on its own — not as part of a whole stanza — so a mid-verse refrain printed on
+// one line is recovered, a typo costs only its own line, and lines can match out of order
+// or repeat. Matching on the head and tail of a line rather than the whole of it is what
+// makes a typo in the middle harmless. Strong evidence, not an override: printed verses
+// are sometimes wrapped to fit a column rather than by phrase.
+ChScore.prototype._addPrintedLineBonus = function (scores, runs) {
+  const printedStanzas = this._scoreData.scoreMetadata?.stanzas ?? [];
+  if (printedStanzas.length === 0) return;
+  // Memoized: syllable texts repeat heavily across a song's verses, and the normalizer is
+  // built for whole documents rather than the 2–5 characters it's handed here.
+  const folded = new Map();
+  const fold = (text) => {
+    if (!folded.has(text)) {
+      folded.set(text, this._foldForMatching(text, 'remove'));
+    }
+    return folded.get(text);
+  };
+
+  const printedLines = [];
+  for (const stanza of printedStanzas) {
+    for (const line of stanza.split('\n')) {
+      const folded = fold(line);
+      if (folded.length >= 6) printedLines.push(folded);
+    }
+  }
+  if (printedLines.length === 0) return;
+
+  for (const run of runs) {
+    // The run's syllables as one folded string, with each character remembering which
+    // syllable it came from
+    let stream = '';
+    const syllableIndexByChar = [];
+    run.syllables.forEach((syllable, index) => {
+      for (const char of fold(syllable.text ?? '')) {
+        stream += char;
+        syllableIndexByChar.push(index);
+      }
+    });
+    if (!stream) continue;
+
+    const bonusAt = (syllableIndex) => {
+      const syllable = run.syllables[syllableIndex];
+      if (!syllable) return;
+      const cp = syllable.chordPositions[0];
+      if (scores.has(cp)) scores.set(cp, scores.get(cp) + this._phraseStartWeights.printedLine);
+    };
+
+    for (const line of printedLines) {
+      const head = line.slice(0, 10);
+      const tail = line.slice(-10);
+      for (let at = stream.indexOf(head); at !== -1; at = stream.indexOf(head, at + 1)) {
+        bonusAt(syllableIndexByChar[at]);
+      }
+      for (let at = stream.indexOf(tail); at !== -1; at = stream.indexOf(tail, at + 1)) {
+        bonusAt(syllableIndexByChar[at + tail.length]);
+      }
+    }
+  }
+}
+
+// The chord positions where a lyric phrase starts, as a Set. Rather than thresholding the
+// evidence, each stanza is segmented with dynamic programming against a prior on how long
+// a line runs, so "phrases have at least a few syllables" and "a stanza's lines are about
+// the same length" are costs rather than special cases — and a one-syllable line can't be
+// produced at all. Two passes: the first finds the song's own typical line length, the
+// second segments against it.
+ChScore.prototype._getPhraseStartChordPositions = function (syllables, runs = null) {
+  runs = runs ?? this._syllableStanzaRuns(syllables);
+  const scores = this._scorePhraseStarts(syllables, runs);
+  const { breakCost, lengthCost } = this._phraseStartWeights;
+  const minLength = 4;
+  const maxLength = 16;
+
+  const segment = (run, targetLength, lengthWeight = lengthCost) => {
+    const positions = run.syllables.map(syllable => syllable.chordPositions[0]);
+    const count = positions.length;
+    if (count < minLength * 2) return [];
+    // best[j]: cost of covering the first j syllables, cameFrom[j]: the break before j
+    const best = Array(count + 1).fill(Infinity);
+    const cameFrom = Array(count + 1).fill(-1);
+    best[0] = 0;
+    for (let j = minLength; j <= count; j++) {
+      for (let i = Math.max(0, j - maxLength); i <= j - minLength; i++) {
+        if (best[i] === Infinity) continue;
+        // A break has to pay for itself: without breakCost every position carrying any
+        // evidence at all is worth breaking on, and stanzas come out split roughly double
+        const evidence = i === 0 ? 0 : (scores.get(positions[i]) ?? 0) - breakCost;
+        const cost = best[i] - evidence + lengthWeight * Math.abs((j - i) - targetLength);
+        if (cost < best[j]) { best[j] = cost; cameFrom[j] = i; }
+      }
+    }
+    if (best[count] === Infinity) return [];
+    const breaks = [];
+    for (let j = count; j > 0; j = cameFrom[j]) {
+      if (cameFrom[j] > 0) breaks.push(cameFrom[j]);
+    }
+    return breaks.reverse();
+  };
+
+  // First pass on evidence alone — no length prior at all, so a song whose lines really
+  // are short says so instead of being pulled toward a generic length. Its median is the
+  // prior the second pass regularizes against.
+  const lengths = [];
+  for (const run of runs) {
+    const breaks = segment(run, 8, lengthCost * 0.5);
+    let previous = 0;
+    for (const at of breaks.concat(run.syllables.length)) {
+      lengths.push(at - previous);
+      previous = at;
+    }
+  }
+  const targetLength = this._median(lengths) ?? 8;
+
+  const phraseStarts = new Set();
+  for (const run of runs) {
+    for (const at of segment(run, targetLength)) {
+      phraseStarts.add(run.syllables[at].chordPositions[0]);
+    }
+  }
+  return phraseStarts;
 }
 
 // Walk the song in sung order — through repeats, endings and jumps — yielding one entry
@@ -5856,17 +6362,96 @@ ChScore.prototype._applyFindReplace = function (text) {
 // doesn't, in any language.
 ChScore.prototype._hyphenatedWords = {
   en: [
-    'adam-ondi-ahman', 'all-gracious', 'all-pervading', 'birthday-time',
-    'day-dawn', 'death-beds', 'earth-stains', 'easter-time', 'ever-circling',
-    'ever-joyful', 'ever-living', 'ever-present', 'ever-sure', 'ever-tender',
-    'far-called', 'far-flung', 'firm-rooted', 'get-the-work-done', 'habit-free',
-    'heaven-born', 'heav’n-born', 'heav’n-rescued', 'heigh-dee-ho', 'latter-day',
-    'life-giving', 'light-mindedness', 'long-awaited', 'long-expected',
-    'love-light', 'nail-prints', 'never-fading', 'one-tenth', 'prayer-time',
-    'purple-headed', 're-echoes', 'safe-folded', 'self-control', 'soul-cheering',
-    'star-spangled', 'stepping-stones', 'storm-tossed', 'tempest-tossed',
-    'thank-off’rings', 'under-shepherds', 'valley-o', 'war-cry', 'well-fought',
-    'where-e’er', 'white-robed', 'zip-a-dee-ay',
+    'adam-ondi-ahman', 'ah-so', 'all-gracious', 'all-pervading', 'birthday-time',
+    'chewk-ha-hahm-nee-dah', 'coom-play-ahn-yos', 'day-dawn', 'death-beds', 'dog-en',
+    'don-ken', 'earth-stains', 'easter-time', 'ever-circling', 'ever-joyful',
+    'ever-living', 'ever-present', 'ever-sure', 'ever-tender', 'fah-now', 'far-called',
+    'far-flung', 'fay-lees', 'fie-lee-mawn', 'firm-rooted', 'frer-li-sher',
+    'get-the-work-done', 'grah-see-ahs', 'grah-too-lay-rare', 'guh-burts-tahk',
+    'habit-free', 'heaven-born', 'heav’n-born', 'heav’n-rescued', 'heigh-dee-ho',
+    'kahn-shah', 'latter-day', 'life-gate', 'life-giving', 'light-mindedness',
+    'long-awaited', 'long-expected', 'love-light', 'mah-loh', 'mah-noo-ee-yah',
+    'mare-see', 'nail-prints', 'never-fading', 'oh-meh-deh-toe', 'one-tenth',
+    'prayer-time', 'purple-headed', 're-echoes', 'safe-folded', 'self-control',
+    'shee-mah-sue', 'soul-cheering', 'star-spangled', 'stepping-stones', 'storm-tossed',
+    'săng-ill-oŏl', 'tahn-joe-bee', 'tempest-tossed', 'thank-off’rings',
+    'under-shepherds', 'valley-o', 'war-cry', 'well-fought', 'white-robed',
+    'zip-a-dee-ay',
+  ],
+  fr: [
+    'a-t-il', 'accorde-moi', 'accorde-nous', 'adorez-le', 'ai-je', 'aide-moi',
+    'aide-nous', 'aimez-vous', 'aimons-le', 'apaise-moi', 'apaise-toi', 'apporte-nous',
+    'apprends-moi', 'apprends-nous', 'approchez-vous', 'as-tu', 'assieds-toi',
+    'au-delà', 'au-dessus', 'avez-vous', 'baptise-nous', 'bien-aimé', 'bien-aimés',
+    'bénis-moi', 'bénis-nous', 'calme-nous', 'chante-le', 'chantons-le', 'cherchez-les',
+    'choisirais-je', 'comble-nous', 'compte-les', 'conduis-moi', 'conduis-nous',
+    'conforte-nous', 'consacrons-nous', 'console-moi', 'contemplerai-je',
+    'contre-chant', 'convertissez-vous', 'couronne-moi', 'crièrent-ils', 'crois-le',
+    'célébrez-le', 'dirige-moi', 'dis-moi', 'dis-nous', 'donne-moi', 'donne-nous',
+    'donnons-lui', 'délivre-moi', 'délivre-nous', 'dénombre-les', 'efforçons-nous',
+    'enseigne-moi', 'enseigne-nous', 'entends-le', 'entends-moi', 'envoie-moi', 'es-tu',
+    'esprit-saint', 'est-il', 'exaltons-le', 'fais-en', 'fais-les', 'fais-toi',
+    'faisons-lui', 'faites-lui', 'faut-il', 'fie-toi', 'forge-la', 'garde-moi',
+    'garde-nous', 'gardons-nous', 'guide-moi', 'guide-nous', 'guidons-les',
+    'guéris-moi', 'guéris-nous', 'ici-bas', 'ignore-les', 'jean-baptiste',
+    'joignons-nous', 'jour-là', 'jusque-là', 'jésus-christ', 'laisse-nous',
+    'laissez-les', 'laissons-la', 'laissons-le', 'levez-vous', 'levons-nous',
+    'louez-le', 'louons-le', 'lui-même', 'là-bas', 'là-haut', 'l’arc-en-ciel',
+    'l’esprit-saint', 'maître-guérisseur', 'menons-les', 'montre-moi', 'montre-nous',
+    'montrons-nous', 'mène-moi', 'mène-nous', 'm’aimes-tu', 'm’as-tu', 'nouveau-né',
+    'n’ai-je', 'n’est-ce', 'n’est-il', 'n’écoutons-nous', 'n’éprouves-tu', 'offre-nous',
+    'offrons-lui', 'oserais-je', 'ouvrez-lui', 'pardonne-nous', 'pardonne-tous',
+    'parle-moi', 'parlerais-je', 'penserais-je', 'permets-moi', 'permets-nous',
+    'peut-on', 'peut-être', 'peux-tu', 'pleuraient-elles', 'porte-moi', 'portons-lui',
+    'pourrais-je', 'pouvons-nous', 'premier-né', 'prends-le', 'prends-moi',
+    'prends-nous', 'prosternons-nous', 'protège-moi', 'prépare-moi', 'présentez-vous',
+    'prête-moi', 'puis-je', 'puisses-tu', 'puissiez-vous', 'puissions-nous',
+    'puissé-je', 'purifie-le', 'purifie-moi', 'qu’avons-nous', 'qu’offrirons-nous',
+    'raconte-moi', 'rappelons-nous', 'recouvrons-nous', 'reflèteraient-ils',
+    'rejoins-les', 'rendez-lui', 'rendez-vous', 'rends-moi', 'rends-nous',
+    'repentez-vous', 'reposez-vous', 'revêts-moi', 'revêts-nous', 'reçois-moi',
+    'reçois-nous', 'réjouis-toi', 'réveillez-vous', 'révèle-toi', 'saint-esprit',
+    'sainte-cène', 'saisissons-nous', 'sauve-moi', 'scelle-nous', 'serais-je',
+    'serons-nous', 'servez-le', 'soir-là', 'sois-lui', 'sommes-nous', 'soulage-nous',
+    'soutiens-les', 'soutiens-moi', 'soutiens-nous', 'souvenez-vous', 'souvenons-nous',
+    'souviens-toi', 'suffit-il', 'suis-le', 'suis-moi', 'tenons-nous', 'tiens-toi',
+    'tournez-vous', 'tournons-nous', 'tout-petits', 'tout-puissant', 'très-haut',
+    'très-saint', 'unissez-vous', 'unissons-les', 'unissons-nous', 'vas-tu', 'veux-tu',
+    'viens-nous', 'vois-tu', 'voudrais-je', 'ében-ézer', 'écoute-le', 'écoute-nous',
+    'écoutez-le', 'étiez-vous', 'éveille-toi', 'éveillez-vous', 'éveillons-nous',
+    'évite-les', 'œuvrons-y',
+  ],
+  pt: [
+    'abraçar-me', 'abrem-se', 'achegai-vos', 'adorai-o', 'adorar-te', 'agarrar-nos',
+    'agradecemos-te', 'agradecer-te', 'ajuda-me', 'ajuda-nos', 'ajudai-me',
+    'ajudando-vos', 'ajudar-nos', 'ajudá-lo', 'alegra-te', 'aliviou-me', 'amai-vos',
+    'amar-te', 'ancorar-me', 'aparta-nos', 'apegar-nos', 'apresentar-se', 'arco-íris',
+    'arrepender-nos', 'bem-amado', 'bem-estar', 'bem-vindo', 'buscá-la', 'cantai-lhe',
+    'cantaremos-te', 'chamai-o', 'chamar-te', 'concede-me', 'concede-nos',
+    'conceder-nos', 'concedeu-me', 'conduzindo-os', 'consagrai-o', 'conta-me',
+    'conta-nos', 'convida-nos', 'curei-lhe', 'damos-te', 'dar-lhe', 'dar-me', 'dar-nos',
+    'dei-lhe', 'deitei-me', 'deixa-me', 'deixai-os', 'deixou-nos', 'deu-me',
+    'dirigiu-se', 'dá-lhe', 'dá-lhes', 'dá-me', 'dá-nos', 'eleva-nos', 'ensina-me',
+    'ensina-nos', 'ensinai-me', 'ensinar-me', 'ensinar-nos', 'ensinar-te',
+    'ensinou-nos', 'ergam-se', 'ergue-nos', 'ergue-te', 'erguei-vos', 'escuta-nos',
+    'esqueci-me', 'estender-lhe', 'estendeu-lhes', 'faz-me', 'faz-nos', 'fazendo-os',
+    'fez-lhes', 'fez-nos', 'fizer-nos', 'guardou-me', 'guia-me', 'guia-nos',
+    'guiai-vos', 'guiar-me', 'guiar-nos', 'guiar-te', 'inspira-me', 'inspiram-me',
+    'inspirar-te', 'inspire-nos', 'leva-nos', 'libertar-nos', 'liderar-nos',
+    'ligar-nos', 'livram-me', 'livrou-nos', 'louvai-o', 'louvá-lo', 'mandar-nos',
+    'mandou-me', 'mandou-nos', 'mostra-me', 'mostrai-lhes', 'mostrar-nos',
+    'mostrou-lhes', 'mostrou-me', 'mostrou-nos', 'nutre-nos', 'oferta-lhes', 'ouve-o',
+    'ouvi-lo', 'ouvir-te', 'ouviu-se', 'passando-se', 'pedimos-te', 'perde-se',
+    'perdoa-nos', 'peço-te', 'porta-voz', 'preparar-nos', 'preparou-nos', 'protege-me',
+    'protege-nos', 'proteger-te', 'purifica-nos', 'redimir-nos', 'refina-me',
+    'resgatar-nos', 'resgatou-me', 'responder-te', 'restaura-nos', 'reunir-se',
+    'rogamos-te', 'rogo-te', 'salva-nos', 'salvar-nos', 'salvá-la', 'segui-lo',
+    'segui-o', 'sela-nos', 'sem-par', 'servi-lo', 'servi-o', 'servir-te', 'sigamos-te',
+    'sujeitam-se', 'suplicou-me', 'traz-me', 'trazer-nos', 'trazê-la', 'unir-nos',
+    'vê-nos',
+  ],
+  es: [
+    'eben-ezer',
   ],
 };
 
@@ -5876,6 +6461,29 @@ ChScore.prototype._hyphenatedWords = {
 // _wordBuilder's trailingHyphen below, built from this same set).
 ChScore.prototype._hyphenCharacters = '-‐‑';
 
+// What counts as punctuation at a word's edges. _hyphenPositionsTable trims it off
+// every token it files, and _insertKnownHyphens off every word it looks up, so the two
+// agree on a key no matter what quotes or sentence punctuation a word is printed with.
+ChScore.prototype._punctuationCharacter = '[^\\p{L}\\p{N}]';
+
+// The two character sets above as patterns, compiled once here rather than per call:
+// _insertKnownHyphens and _foldWord run on every word of the lyrics.
+ChScore.prototype._hyphenPattern = new RegExp(`[${ChScore.prototype._hyphenCharacters}]`);
+ChScore.prototype._punctuationAtEdges = new RegExp(
+  `^${ChScore.prototype._punctuationCharacter}+|${ChScore.prototype._punctuationCharacter}+$`, 'gu');
+ChScore.prototype._leadingPunctuation = new RegExp(`^${ChScore.prototype._punctuationCharacter}*`, 'u');
+
+// Combining marks, left behind by an NFD decomposition once the base letter is out
+ChScore.prototype._diacriticMarks = /[̀-ͯ]/g;
+
+// Everything a fold for *matching* drops. Symbols because nothing sung is one, digits
+// because a printed verse number ("3. Sweet hour") isn't sung either -- dropping it is
+// what lines a printed line up with the syllables.
+ChScore.prototype._matchingStrip = /[̀-ͯ\p{P}\p{N}\p{S}]/u;
+
+// The apostrophe spelled one way, whichever the engraver used
+ChScore.prototype._apostrophes = /['‘’ʼ]/g;
+
 // A dictionary of hyphenated words, indexed by the word with its hyphens removed and
 // lowercased, to the character positions (into that stripped word) a hyphen goes
 // back at. `words` are already-hyphenated tokens (e.g. the hard-coded list below);
@@ -5884,9 +6492,10 @@ ChScore.prototype._hyphenCharacters = '-‐‑';
 // word inside quotes/guillemets or followed by sentence punctuation (e.g.
 // "« Ében-Ézer »,") is still found.
 ChScore.prototype._hyphenPositionsTable = function (words, texts = []) {
-  const punctuationAtEdges = /^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu;
-  const hyphenChars = new RegExp(`[${ChScore.prototype._hyphenCharacters}]`);
-  const scannedWords = texts.flatMap(text => text.split(/\s+/)).map(token => token.replace(punctuationAtEdges, ''));
+  const hyphenChars = ChScore.prototype._hyphenPattern;
+  const scannedWords = texts
+    .flatMap(text => text.split(/\s+/))
+    .map(token => token.replace(ChScore.prototype._punctuationAtEdges, ''));
 
   // Scanned words first, so a score's own printed hyphenation wins over the
   // hard-coded list on a conflict -- whichever is seen first for a given word claims
@@ -5913,14 +6522,21 @@ ChScore.prototype._hyphenPositionsTable = function (words, texts = []) {
 
 // Restore a known compound word's hyphen(s) once its syllables are rejoined, so
 // "latterday" becomes "latter-day" again. Case is left as the syllables spelled
-// it; only where the hyphens go is looked up.
+// it; only where the hyphens go is looked up. Punctuation is trimmed off the edges
+// before looking up, the way _hyphenPositionsTable trims what it files, so a word
+// ending a line ("AdamondiAhman.") still matches -- and since the looked-up positions
+// count from the first letter, anything trimmed off the front shifts them back.
 ChScore.prototype._insertKnownHyphens = function (word) {
-  const hyphenPositions = this._scoreData?.hyphenPositions?.[word.toLowerCase()];
+  const leadingPunctuation = word.match(this._leadingPunctuation)[0].length;
+  const trimmed = word.replace(this._punctuationAtEdges, '');
+
+  const hyphenPositions = this._scoreData?.hyphenPositions?.[trimmed.toLowerCase()];
   if (!hyphenPositions) return word;
 
   let result = word;
   for (const position of hyphenPositions.slice().reverse()) {
-    result = `${result.slice(0, position)}-${result.slice(position)}`;
+    const at = position + leadingPunctuation;
+    result = `${result.slice(0, at)}-${result.slice(at)}`;
   }
   return result;
 }
@@ -5930,7 +6546,7 @@ ChScore.prototype._insertKnownHyphens = function (word) {
 ChScore.prototype._wordBuilder = function () {
   const self = this;
   const trailingHyphen = new RegExp(`[${self._hyphenCharacters}\\s]+$`);
-  const words = []; // { text, italic, bold }, styling merged into <em>/<strong> spans in text()
+  const words = []; // { text, italic, bold, endsLine }, styling merged into <em>/<strong> spans in text()
   let partial = '';
   let partialItalic = false;
   let partialBold = false;
@@ -5959,6 +6575,12 @@ ChScore.prototype._wordBuilder = function () {
         words.push({ text: self._insertKnownHyphens(syllable), italic, bold });
       }
     },
+    // End the current line. Marked on the last word rather than pushed as its own entry,
+    // so a break can't land inside a word still being assembled in `partial`.
+    breakLine() {
+      const last = words.at(-1);
+      if (last && !partial) last.endsLine = true;
+    },
     // A round marker stands on its own before the word it marks, and is never styled
     // with it
     addRoundMarker(text) {
@@ -5973,22 +6595,27 @@ ChScore.prototype._wordBuilder = function () {
 
       // A styling change doesn't happen mid-word, so consecutive words with the
       // same styling are one <em>/<strong> span — "one, two, three." stays a
-      // single run instead of three, matching how it's engraved.
+      // single run instead of three, matching how it's engraved. A run never
+      // spans a line break, so the markup stays inside its own line.
       const runs = [];
       for (const word of all) {
         const current = runs.at(-1);
-        if (current && current.italic === word.italic && current.bold === word.bold) {
+        if (current && !current.endsLine && current.italic === word.italic && current.bold === word.bold) {
           current.text += ` ${word.text}`;
+          current.endsLine = word.endsLine ?? false;
         } else {
-          runs.push({ text: word.text, italic: word.italic, bold: word.bold });
+          runs.push({ text: word.text, italic: word.italic, bold: word.bold, endsLine: word.endsLine ?? false });
         }
       }
 
-      return runs.map(({ text, italic, bold }) => {
-        if (bold) text = `<strong>${text}</strong>`;
-        if (italic) text = `<em>${text}</em>`;
-        return text;
-      }).join(' ').trim();
+      let text = '';
+      for (const run of runs) {
+        let piece = run.text;
+        if (run.bold) piece = `<strong>${piece}</strong>`;
+        if (run.italic) piece = `<em>${piece}</em>`;
+        text += piece + (run.endsLine ? '\n' : ' ');
+      }
+      return text.trim();
     },
   };
 }

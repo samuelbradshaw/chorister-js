@@ -1507,6 +1507,80 @@ describe('_fixIntroBrackets()', () => {
 
 
 // ============================================================
+// _fixCreditStyling
+// ============================================================
+describe('_fixCreditStyling()', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  /** One credit from the runs given, each `[attributes, text]`. */
+  const creditXml = (...runs) =>
+    `<score-partwise><credit page="1">${
+      runs.map(([attributes, text]) => `<credit-words ${attributes}>${text}</credit-words>`).join('')
+    }</credit></score-partwise>`;
+
+  /** The credit's runs after the fix, as `[fontStyle/fontWeight, text]`. */
+  function runsOf(musicXml) {
+    const parsed = new DOMParser().parseFromString(musicXml, 'text/xml');
+    return [...parsed.querySelectorAll('credit-words')].map(run =>
+      [`${run.getAttribute('font-style')}/${run.getAttribute('font-weight')}`, run.textContent]);
+  }
+
+  it('should return a score with no credits untouched, without parsing it', () => {
+    expect(score._fixCreditStyling('<score-partwise/>')).toBe('<score-partwise/>');
+  });
+
+  it('should read italic and bold out of the font name', () => {
+    const musicXml = creditXml(['font-family="McKay Neue ldsLat Italic, text"', 'Words: ']);
+    expect(runsOf(score._fixCreditStyling(musicXml))).toEqual([['italic/null', 'Words: ']]);
+  });
+
+  it('should leave a credit of one run for its <rend> to carry', () => {
+    const musicXml = creditXml(['font-style="italic"', 'Paroles : Stephen A. Reynolds']);
+    expect(runsOf(score._fixCreditStyling(musicXml)))
+      .toEqual([['italic/null', 'Paroles : Stephen A. Reynolds']]);
+  });
+
+  it('should merge a credit\u2019s runs into one, marking the styled ones up', () => {
+    // Only the first run carries a position, so Verovio would scatter the rest
+    const musicXml = creditXml(
+      ['default-x="183" default-y="1159" font-style="italic"', 'Words: '],
+      ['font-style="normal"', 'Anon.'],
+    );
+
+    // The space between the runs moves out of the <em> it was engraved inside
+    expect(runsOf(score._fixCreditStyling(musicXml)))
+      .toEqual([['normal/normal', '<em>Words:</em> Anon.']]);
+  });
+
+  it('should mark a bold run up as <strong>', () => {
+    const musicXml = creditXml(
+      ['font-weight="bold"', 'Note: '],
+      ['', 'sung a cappella'],
+    );
+    expect(runsOf(score._fixCreditStyling(musicXml))[0][1]).toBe('<strong>Note:</strong> sung a cappella');
+  });
+
+  it('should set the merged credit\u2019s font aside, since Verovio drops it', () => {
+    const musicXml = creditXml(
+      ['font-family="McKay Neue ldsLat Italic, text" font-size="7"', 'Words: '],
+      ['font-family="McKay Neue ldsLat, text"', 'Anon.'],
+    );
+    score._fixCreditStyling(musicXml);
+
+    // Keyed by the text the block will be read from, with the styling words dropped
+    // from the family name now that font-style carries them
+    expect(score._creditStyles.get('<em>Words:</em> Anon.'))
+      .toEqual({ fontFamily: 'McKay Neue ldsLat, text', fontSize: '7' });
+  });
+});
+
+
+// ============================================================
 // _getScoreMetadata
 // ============================================================
 describe('_getScoreMetadata()', () => {
@@ -1574,8 +1648,63 @@ describe('_getScoreMetadata()', () => {
       text: 'Hymns of Praise\nsecond line',
       halign: 'center',
       valign: 'top',
+      fontFamily: null,
+      fontSize: null,
       elementId: 'h1',
     }]);
+  });
+
+  it('should carry a text block’s font family and size', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend fontfam="McKay Neue ldsLat" fontsize="7">Words: Anon.</rend></pgHead>',
+    }));
+
+    expect(metadata.header[0].fontFamily).toBe('McKay Neue ldsLat');
+    expect(metadata.header[0].fontSize).toBe('7');
+  });
+
+  it('should mark a styled text block up as <em>/<strong>, a line at a time', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend fontstyle="italic">Words: Anon.<lb/>Music: J. Battishill</rend>' +
+              '<rend fontweight="bold">Second verse sung a cappella</rend></pgHead>',
+    }));
+
+    expect(metadata.header[0].text)
+      .toBe('<em>Words: Anon.</em>\n<em>Music: J. Battishill</em>');
+    expect(metadata.header[1].text).toBe('<strong>Second verse sung a cappella</strong>');
+  });
+
+  it('should mark a styled run inside a text block up where it sits', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend>Air from <rend fontstyle="italic">Orpheus</rend></rend></pgHead>',
+    }));
+
+    expect(metadata.header[0].text).toBe('Air from <em>Orpheus</em>');
+  });
+
+  it('should carry a block’s printed lines as newlines, not paragraph markup', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend halign="center">Sweet Hour of Prayer</rend></pgHead>',
+      pgFoot: '<pgFoot><rend>3. Sweet hour of prayer<lb/>That calls me from a world of care</rend></pgFoot>',
+    }));
+
+    // <p> is the TSV export's own wrapper (see extract_to_tsv.py), not something a
+    // score says -- a block is the words printed, and <lb/> is where they break.
+    expect(metadata.title).toBe('Sweet Hour of Prayer');
+    expect(metadata.stanzas).toEqual(['3. Sweet hour of prayer\nThat calls me from a world of care']);
+    expect(metadata.footer[0].text)
+      .toBe('3. Sweet hour of prayer\nThat calls me from a world of care');
+  });
+
+  it('should still find the verse marker on a stanza printed in italics', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgFoot: '<pgFoot><rend fontstyle="italic">3. Sweet hour of prayer</rend>' +
+              '<rend fontstyle="italic">1982. Text © someone</rend></pgFoot>',
+    }));
+
+    // The marker is behind the <em> the styling became, and the copyright year that
+    // only looks like one is still dropped
+    expect(metadata.stanzas).toEqual(['<em>3. Sweet hour of prayer</em>']);
   });
 
   it('should collect only numbered verse blocks as stanzas', () => {
@@ -1710,6 +1839,28 @@ describe('_hyphenPositionsTable() and _insertKnownHyphens()', () => {
   it('should insert hyphens at the score’s looked-up positions', () => {
     score._scoreData = { hyphenPositions: { latterday: [6] } };
     expect(score._insertKnownHyphens('latterday')).toBe('latter-day');
+  });
+
+  it('should look past sentence punctuation ending the word', () => {
+    // "In Adam-ondi-Ahman." ends every one of that hymn's verses, so the rejoined word
+    // always arrives with its period attached.
+    score._scoreData = { hyphenPositions: { adamondiahman: [4, 8] } };
+    expect(score._insertKnownHyphens('AdamondiAhman.')).toBe('Adam-ondi-Ahman.');
+  });
+
+  it('should shift the looked-up positions past punctuation opening the word', () => {
+    score._scoreData = { hyphenPositions: { latterday: [6] } };
+    expect(score._insertKnownHyphens('“latterday')).toBe('“latter-day');
+  });
+
+  it('should look past punctuation at both edges at once', () => {
+    score._scoreData = { hyphenPositions: score._hyphenPositionsTable([], ['Ében-Ézer']) };
+    expect(score._insertKnownHyphens('“ébenézer!”')).toBe('“ében-ézer!”');
+  });
+
+  it('should leave a token with no letters alone', () => {
+    score._scoreData = { hyphenPositions: { latterday: [6] } };
+    expect(score._insertKnownHyphens('—')).toBe('—');
   });
 
   it('should return the word unchanged when it is not in the table', () => {
