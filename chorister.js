@@ -1663,12 +1663,20 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
         chordPosition = this._bisectLeft(chordPositionQstamps, qstamp);
       } else if (startid) {
         const refNote = elementsById.get(startid);
-        chordPosition = Number.parseInt(refNote.getAttribute('ch-chord-position'));
-        qstamp = this._scoreData.chordPositions[chordPosition].startQ;
+        chordPosition = Number.parseInt(refNote?.getAttribute('ch-chord-position'));
+        if (Number.isNaN(chordPosition)) {
+          // Only notes and rests are given chord positions, so a fermata Verovio
+          // anchored to an invisible <space> -- the filler a voice resting under a
+          // held chord gets -- has to be placed by when it sounds instead.
+          qstamp = this._qstampOfUnnumbered(refNote);
+          chordPosition = qstamp == null ? null : this._bisectLeft(chordPositionQstamps, qstamp);
+        } else {
+          qstamp = this._scoreData.chordPositions[chordPosition].startQ;
+        }
       }
 
       // Set chord position
-      element.setAttribute('ch-chord-position', chordPosition);
+      if (chordPosition != null) element.setAttribute('ch-chord-position', chordPosition);
 
       // Clean up formatted text
       for (const rend of element.querySelectorAll('rend')) {
@@ -2392,7 +2400,11 @@ ChScore.prototype._updateMei = function () {
         // before the one holding it.
         for (const layer of layers) {
           for (const container of Array.from(layer.querySelectorAll('beam, tuplet')).reverse()) {
-            if (!container.isConnected) continue; // Already swallowed by a container inside it
+            // Already swallowed by a container inside it: replaceWith leaves the node
+            // parentless. Not isConnected -- during expansion the rendition being rebuilt
+            // is not attached to the document yet, and linkedom calls all of it
+            // disconnected, which skipped every container there was.
+            if (!container.parentNode) continue;
             const events = this._layerEvents(container);
             if (events.length === 0 || !events.every(event => event.matches('rest'))) continue;
             const durations = events.map(event => this._wholeNotesOf(event));
@@ -3069,13 +3081,18 @@ ChScore.prototype._drawScore = function () {
     return innerContainer;
   }
 
-  // Parse header and footer content
-  let headerNodes = [], footerNodes = [];
-  if (this._currentOptions.headerContent || this._currentOptions.footerContent) {
-    const parser = new DOMParser();
-    headerNodes = Array.from(parser.parseFromString(this._currentOptions.headerContent ?? '', 'text/html').body.childNodes);
-    footerNodes = Array.from(parser.parseFromString(this._currentOptions.footerContent ?? '', 'text/html').body.childNodes);
-  }
+  // Parse header and footer content. Set as innerHTML on an element rather than parsed as
+  // a document: that is the fragment-parsing path every DOM implements the same way, where
+  // DOMParser('text/html') on a fragment differs -- linkedom makes the fragment's first
+  // element the documentElement and leaves <body> empty, so the content never arrives.
+  const contentNodes = (html) => {
+    if (!html) return [];
+    const holder = document.createElement('div');
+    holder.innerHTML = html;
+    return Array.from(holder.childNodes);
+  };
+  const headerNodes = contentNodes(this._currentOptions.headerContent);
+  const footerNodes = contentNodes(this._currentOptions.footerContent);
 
   // Add header content
   if (headerNodes.length === 0) headerNodes.push(document.createTextNode(''));
@@ -3917,41 +3934,15 @@ ChScore.prototype._normalizeChordSets = function () {
 /********************** Private methods: normalize parts **********************/
 
 ChScore.prototype._normalizeParts = function (chordPositionIndex) {
-  // Parts supplied by the caller win; otherwise build them from a template,
-  // deriving one from the engraving when none was given
+  // Parts supplied by the caller win; otherwise build them from a template, deriving one
+  // from the engraving when none was given. _derivePartsTemplate always names something --
+  // a score with nothing sung is 'I' -- so there is no template-less case to fall back to.
   if (this._scoreData.parts.length === 0) {
     this._scoreData.partsTemplate ||= this._derivePartsTemplate(chordPositionIndex);
-    this._scoreData.parts = this._scoreData.partsTemplate ? this._buildPartsFromTemplate(
+    this._scoreData.parts = this._buildPartsFromTemplate(
       this._scoreData.partsTemplate, this._scoreData.staffNumbers,
       this._scoreData.numChordPositions, this._scoreData.hasLyrics
-    ) : [
-      {
-        partId: 'melody',
-        name: 'Melody',
-        isVocal: true,
-        placement: 'auto',
-        chordPositionRefs: {
-          0: {
-            isMelody: true,
-            staffNumbers: [1],
-            lyricLineIds: null,
-          },
-        },
-      },
-      {
-        partId: 'accompaniment',
-        name: 'Accompaniment',
-        isVocal: false,
-        placement: 'full',
-        chordPositionRefs: {
-          0: {
-            isMelody: false,
-            staffNumbers: this._scoreData.staffNumbers,
-            lyricLineIds: null,
-          },
-        },
-      },
-    ];
+    );
   }
 
   this._scoreData.partsById = {};
@@ -4570,6 +4561,28 @@ ChScore.prototype._layerEvents = function (element, events = []) {
     else if (child.matches('beam, tuplet, graceGrp, bTrem, fTrem')) this._layerEvents(child, events);
   }
   return events;
+}
+
+// When an element carrying no chord position of its own sounds, as a qstamp. Its onset is
+// everything before it in its own layer, which is the only thing that places an invisible
+// <space>: it isn't in Verovio's timemap, so nothing else says where it is.
+//
+// Takes its measure from the element rather than the caller's walk, so it doesn't depend
+// on that walk having reached the right one.
+ChScore.prototype._qstampOfUnnumbered = function (element) {
+  const layer = element?.closest('layer');
+  const measureId = element?.closest('measure')?.getAttribute('xml:id');
+  const measureInfo = this._scoreData.measuresById?.[measureId];
+  if (!layer || measureInfo?.startQ == null) return null;
+
+  let wholeNotes = 0;
+  for (const timed of layer.querySelectorAll('note, rest, space, chord')) {
+    if (timed === element) break;
+    // A chord carries the duration its notes share, so the notes inside don't count again
+    if (timed.matches('note') && timed.parentElement?.matches('chord')) continue;
+    wholeNotes += this._wholeNotesOf(timed) ?? 0;
+  }
+  return measureInfo.startQ + (wholeNotes * 4);
 }
 
 // What a note or rest is worth as a fraction of a whole note, tuplets included — a triplet

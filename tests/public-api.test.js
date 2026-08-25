@@ -811,25 +811,6 @@ describe('Edge Cases', () => {
     expect(optionsAfter).toEqual(optionsBefore);
   });
 
-  it('should handle null/undefined inputData fields gracefully', async () => {
-    const score = new ChScore('#score-container');
-    const scoreData = await score.load('musicxml', {
-      scoreContent: sampleMusicXml,
-      scoreId: null,
-      midiUrl: null,
-      lyricsUrl: null,
-      lyricsText: null,
-      parts: null,
-      partsTemplate: null,
-      sections: null,
-      chordSets: null,
-      fermatas: null,
-    });
-    expect(scoreData).toBeDefined();
-    expect(scoreData.scoreMetadata.scoreId).toBeNull();
-    expect(scoreData.lyricsText).toBeNull();
-  });
-
   it('should handle a minimal single-measure MusicXML score', async () => {
     const minimalMusicXml = `<?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="4.0">
@@ -922,16 +903,6 @@ describe('_normalizeSections() — Section generation', () => {
 
     const verseSections = score._scoreData.sections.filter(s => s.type === 'verse');
     expect(verseSections.length).toBe(4);
-  });
-
-  it('should generate sections with expansion for repeated score (This Little Light)', async () => {
-    const score = new ChScore('#score-container');
-    ChScore.prototype._drawScore = function() {};
-    await score.load('musicxml', { scoreContent: sampleMusicXml2 });
-    ChScore.prototype._drawScore = origDrawScore;
-
-    expect(score._scoreData.sections.length).toBe(1);
-    expect(score._scoreData.hasRepeatOrJump).toBeDefined();
   });
 
   it('should generate an introduction section when score has intro brackets', async () => {

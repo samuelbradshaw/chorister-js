@@ -125,70 +125,36 @@ describe('_normalizeParts()', () => {
       staffNumbers: [1, 2],
       numChordPositions: 64,
       hasLyrics: true,
+      // An engraving with nothing to read parts off, which is the case these cover:
+      // _derivePartsTemplate finds no staffDef and _normalizeParts falls back to its
+      // default melody + accompaniment. Real _scoreData always carries the parsed MEI.
+      meiParsed: new DOMParser().parseFromString('<music/>', 'text/xml'),
     };
   });
 
-  // ── Default fallback (no parts, no template) ──
+  // ── Derived template (no parts, no template) ──
+  //
+  // There is no template-less fallback: _derivePartsTemplate always names something, so
+  // every part here comes from _buildPartsFromTemplate, which its own describes cover.
 
-  it('should create default melody + accompaniment when no parts or template are provided', () => {
+  it('should derive a template from the engraving when none was given', () => {
     score._normalizeParts();
-    const partIds = score._scoreData.parts.map(p => p.partId);
-    expect(partIds).toEqual(['melody', 'accompaniment']);
+    expect(score._scoreData.partsTemplate).toBeTruthy();
   });
 
-  it('should mark the default melody part as isMelody=true', () => {
+  it('should call a score with nothing sung in it instrumental', () => {
+    // The fixture's engraving has no staffDef to read a singing part off
     score._normalizeParts();
-    const melody = score._scoreData.parts.find(p => p.partId === 'melody');
-    expect(melody.chordPositionRefs[0].isMelody).toBe(true);
+    expect(score._scoreData.partsTemplate).toBe('I');
+    expect(score._scoreData.parts.map(p => p.partId)).toContain('instrumental');
   });
 
-  it('should mark the default accompaniment part as isMelody=false', () => {
+  it('should build its parts from the template it derived', () => {
     score._normalizeParts();
-    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
-    expect(accompaniment.chordPositionRefs[0].isMelody).toBe(false);
-  });
-
-  it('should assign melody to staff 1 only', () => {
-    score._normalizeParts();
-    const melody = score._scoreData.parts.find(p => p.partId === 'melody');
-    expect(melody.chordPositionRefs[0].staffNumbers).toEqual([1]);
-  });
-
-  it('should assign accompaniment to all staff numbers', () => {
-    score._normalizeParts();
-    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
-    expect(accompaniment.chordPositionRefs[0].staffNumbers).toEqual([1, 2]);
-  });
-
-  it('should assign accompaniment to 3 staves when staffNumbers has 3 entries', () => {
-    score._scoreData.staffNumbers = [1, 2, 3];
-    score._normalizeParts();
-    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
-    expect(accompaniment.chordPositionRefs[0].staffNumbers).toEqual([1, 2, 3]);
-  });
-
-  it('should set melody isVocal=true and accompaniment isVocal=false', () => {
-    score._normalizeParts();
-    const melody = score._scoreData.parts.find(p => p.partId === 'melody');
-    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
-    expect(melody.isVocal).toBe(true);
-    expect(accompaniment.isVocal).toBe(false);
-  });
-
-  it('should set correct placement values on default parts', () => {
-    score._normalizeParts();
-    const melody = score._scoreData.parts.find(p => p.partId === 'melody');
-    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
-    expect(melody.placement).toBe('auto');
-    expect(accompaniment.placement).toBe('full');
-  });
-
-  it('should set correct name values on default parts', () => {
-    score._normalizeParts();
-    const melody = score._scoreData.parts.find(p => p.partId === 'melody');
-    const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
-    expect(melody.name).toBe('Melody');
-    expect(accompaniment.name).toBe('Accompaniment');
+    const fromTemplate = score._buildPartsFromTemplate(
+      score._scoreData.partsTemplate, score._scoreData.staffNumbers,
+      score._scoreData.numChordPositions, score._scoreData.hasLyrics);
+    expect(score._scoreData.parts.map(p => p.partId)).toEqual(fromTemplate.map(p => p.partId));
   });
 
   // ── partsTemplate branch ──
@@ -238,8 +204,9 @@ describe('_normalizeParts()', () => {
   it('should populate partsById from the resulting parts', () => {
     score._normalizeParts();
     expect(score._scoreData.partsById).toBeDefined();
-    expect(score._scoreData.partsById['melody']).toBe(score._scoreData.parts[0]);
-    expect(score._scoreData.partsById['accompaniment']).toBe(score._scoreData.parts[1]);
+    for (const part of score._scoreData.parts) {
+      expect(score._scoreData.partsById[part.partId]).toBe(part);
+    }
   });
 
   it('should populate partsById when using a template', () => {
@@ -313,17 +280,15 @@ describe('_buildPartsFromTemplate()', () => {
     }
   });
 
-  // Parameterized: single-staff melody templates
+  // Parameterized: single-staff melody templates. 'Melody' is the tune on its own —
+  // unlike 'Unison' and 'Solo', no accompaniment part comes with it.
   it.each([
     ['Unison', [1], ['melody', 'accompaniment']],
-    ['Melody', [1], ['melody', 'accompaniment']],
+    ['Melody', [1], ['melody']],
     ['Solo', [1], ['melody', 'accompaniment']],
-  ])('should parse %s template into melody + accompaniment', (template, staves, expected) => {
+  ])('should parse %s template into %j', (template, staves, expected) => {
     const parts = score._buildPartsFromTemplate(template, staves, numChordPositions, hasLyrics);
-    const partIds = parts.map(p => p.partId);
-    for (const id of expected) {
-      expect(partIds).toContain(id);
-    }
+    expect(parts.map(p => p.partId)).toEqual(expected);
   });
 
   it('should parse Two-Part template into two parts on separate staves', () => {

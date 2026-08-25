@@ -366,20 +366,23 @@ describe('ch-part-id — without partsTemplate or parts', () => {
 
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
-  it('should still have hasPartInfo true (default melody part is generated)', () => {
+  it('should still have hasPartInfo true (a template is derived from the engraving)', () => {
     expect(score._scoreData.hasPartInfo).toBe(true);
   });
 
-  it('should assign default part IDs (melody, accompaniment) to notes', () => {
+  // Which parts those are is the derived template's business -- this fixture reads as
+  // instrumental -- so the test is that every id assigned is one of the parts derived.
+  it('should assign the derived template’s part IDs to notes', () => {
     const notesWithPartId = score._scoreData.meiParsed.querySelectorAll('note[ch-part-id]');
     expect(notesWithPartId.length).toBeGreaterThan(0);
-    const allPartIds = new Set();
+
+    const derived = new Set(score._scoreData.parts.map(part => part.partId));
+    expect(derived.size).toBeGreaterThan(0);
     for (const note of notesWithPartId) {
       for (const id of note.getAttribute('ch-part-id').split(' ')) {
-        if (id) allPartIds.add(id);
+        if (id) expect(derived.has(id)).toBe(true);
       }
     }
-    expect(allPartIds.has('melody') || allPartIds.has('accompaniment')).toBe(true);
   });
 });
 

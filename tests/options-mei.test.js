@@ -822,7 +822,10 @@ describe('_updateSvg() — SVG post-processing', () => {
     });
   });
 
-  afterEach(() => {
+  // Before, not after: the file-level hook tears this score down and replaces the DOM
+  // ahead of every test, so each one has to start by putting the score back on default
+  // options and redrawing. Doing it afterwards left the first test with no SVG at all.
+  beforeEach(() => {
     score._currentOptions = structuredClone(ChScore.prototype._defaultOptions);
     score._updateMei();
     score._drawScore();
