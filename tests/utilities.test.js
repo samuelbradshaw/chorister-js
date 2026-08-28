@@ -1540,7 +1540,15 @@ describe('_fixCreditStyling()', () => {
     // Keyed by the text the block will be read from, with the styling words dropped
     // from the family name now that font-style carries them
     expect(score._creditStyles.get('<em>Words:</em> Anon.'))
-      .toEqual({ fontFamily: 'McKay Neue ldsLat, text', fontSize: '7' });
+      .toEqual({ fontFamily: 'McKay Neue ldsLat, text', fontSize: '7', halign: null });
+  });
+
+  it('should set the credit\u2019s halign aside, since Verovio reads justify instead', () => {
+    // A title centered on the page but justified left, as Finale engraves them
+    const musicXml = creditXml(['justify="left" halign="center"', 'Llevaremos Su verdad al mundo']);
+    score._fixCreditStyling(musicXml);
+
+    expect(score._creditStyles.get('Llevaremos Su verdad al mundo').halign).toBe('center');
   });
 });
 
@@ -1723,6 +1731,23 @@ describe('_getScoreMetadata()', () => {
     expect(metadata.title).toBe('His Eye Is on the Sparrow');
   });
 
+  it('should prefer the credit’s halign over the one Verovio derived from justify', () => {
+    // Finale engraves a title centered on the page but justified left, so Verovio writes
+    // halign="left" onto the <rend> and the block reads as left-aligned. The credit's own
+    // halign was set aside before conversion (see _fixCreditStyling), and wins here.
+    score._creditStyles = new Map([['Llevaremos Su verdad al mundo', { halign: 'center' }]]);
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend halign="left" valign="top">Llevaremos Su verdad al mundo</rend>' +
+              '<rend halign="center" valign="top">1 Nefi 1:1 | Alma 53:18–22</rend></pgHead>',
+    }));
+
+    expect(metadata.header[0].halign).toBe('center');
+    // No credit style set aside for this one, so the <rend> still speaks for it
+    expect(metadata.header[1].halign).toBe('center');
+    expect(metadata.title).toBe('Llevaremos Su verdad al mundo');
+    score._creditStyles = new Map();
+  });
+
   it('should fall back to titleStmt/title when no centered single-line block exists', () => {
     const withNoHeader = score._getScoreMetadata(buildMei({
       fileDesc: '<titleStmt><title>Come, Follow Me</title></titleStmt>',
@@ -1861,13 +1886,25 @@ describe('_mergePickupStanzas()', () => {
   beforeAll(() => {
     document.body.innerHTML = '<div id="score-container"></div>';
     score = new ChScore('#score-container');
-    score._scoreData = { staffNumbers: [1, 2] };
+    // Ten chord positions to a measure, so a fragment inside one measure and one
+    // spanning several are both spelled by choosing chord positions.
+    score._scoreData = {
+      staffNumbers: [1, 2],
+      chordPositions: Array.from({ length: 300 }, (_, cp) => ({ measureId: `m${Math.floor(cp / 10)}` })),
+    };
   });
 
-  /** A stanza as _getLyricsFromSyllables would have built it. */
-  function stanza(lyricLineId, marker, words, chordPosition) {
-    const built = score._newLyricStanza(lyricLineId, 'verse', marker, chordPosition, chordPosition);
+  /**
+   * A stanza as _getLyricsFromSyllables would have built it. `span` widens the one-chord
+   * -position stanza _newLyricStanza starts with: `end` is where it stops sounding
+   * (exclusive), `ecp`/`ecpEnd` where it lands in sung order.
+   */
+  function stanza(lyricLineId, marker, words, chordPosition, span = {}) {
+    const built = score._newLyricStanza(
+      lyricLineId, 'verse', marker, chordPosition, span.ecp ?? chordPosition);
     built.annotatedLyrics = words;
+    if (span.end != null) built.chordPositionRanges[0].end = span.end;
+    if (span.ecpEnd != null) built.expandedChordPositions[1] = span.ecpEnd;
     return built;
   }
 
@@ -1907,6 +1944,57 @@ describe('_mergePickupStanzas()', () => {
     const verse2 = stanza('1.2', null, 'there when they crucified', 0);
 
     expect(score._mergePickupStanzas([pickup, verse2]).length).toBe(2);
+  });
+
+  it('should merge a pickup whose label names the lyric line it already sits on', () => {
+    // Example: "Because" (HHC), which prints verse 2's "2." on lyric line 2 rather
+    // than on the line the pickup is engraved over. The label says nothing on its own,
+    // so the music does: one measure, sung immediately before a verse reached by
+    // jumping back into the repeat.
+    const pickup = stanza('1.2', '2.', 'Because He', 142, { end: 145, ecpEnd: 145 });
+    const verse2 = stanza('1.2', null, 'died for me, I’ll live again.', 14,
+      { end: 70, ecp: 145, ecpEnd: 201 });
+
+    const merged = score._mergePickupStanzas([pickup, verse2]);
+
+    expect(merged.length).toBe(1);
+    expect(merged[0].marker).toBe('2.');
+    expect(merged[0].annotatedLyrics).toBe('Because He died for me, I’ll live again.');
+    expect(merged[0].chordPositionRanges.map(range => range.start)).toEqual([142, 14]);
+  });
+
+  it('should merge a pickup carrying no label at all', () => {
+    // Example: "I'm Trying to Be like Jesus" (1989 CSB), which engraves the same shape
+    // with no verse numbers printed anywhere.
+    const pickup = stanza('1.2', null, 'I’m', 151, { end: 152, ecpEnd: 152 });
+    const verse2 = stanza('1.2', null, 'trying to love my neighbor;', 23,
+      { end: 103, ecp: 152, ecpEnd: 232 });
+
+    const merged = score._mergePickupStanzas([pickup, verse2]);
+
+    expect(merged.length).toBe(1);
+    expect(merged[0].annotatedLyrics).toBe('I’m trying to love my neighbor;');
+  });
+
+  it('should leave an unlabelled fragment that spans more than one measure', () => {
+    // A whole passage sung again isn't an anacrusis, however the run came to be split.
+    // Example: "Gethsemane" (HHC), whose refrain is typed as a verse and so looks like
+    // a same-line fragment — 13 measures of one.
+    const fragment = stanza('1.1', null, 'Gethsemane! Jesus loves me,', 9,
+      { end: 139, ecpEnd: 139 });
+    const next = stanza('1.1', null, 'So He went willingly.', 49,
+      { end: 86, ecp: 139, ecpEnd: 279 });
+
+    expect(score._mergePickupStanzas([fragment, next]).length).toBe(2);
+  });
+
+  it('should leave a one-measure fragment that isn’t sung immediately before the next', () => {
+    const fragment = stanza('1.2', null, 'I’m', 151, { end: 152, ecpEnd: 152 });
+    // Something else is sung in between, so this is no pickup into it
+    const later = stanza('1.2', null, 'trying to love my neighbor;', 23,
+      { end: 103, ecp: 160, ecpEnd: 232 });
+
+    expect(score._mergePickupStanzas([fragment, later]).length).toBe(2);
   });
 });
 

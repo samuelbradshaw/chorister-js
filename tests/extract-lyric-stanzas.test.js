@@ -28,6 +28,7 @@ import {
   sampleMusicXmlHGW, sampleLyricsHGW,
   sampleMusicXmlIIW, sampleLyricsIIW,
   sampleMusicXmlTLL, sampleLyricsTLL,
+  sampleMusicXmlFHS,
   hgwPartsTemplate, tllPartsTemplate,
   hgwFermatas, iiwFermatas, tllFermatas,
   iiwParts, iiwSections,
@@ -608,6 +609,48 @@ describe('_extractLyricStanzas — no lyrics text', { timeout: 30000 }, () => {
     for (const verse of verses) expect(verse.annotatedLyrics).toBeTruthy();
     expect(verses[0].annotatedLyrics).toContain('How great the wisdom and the love');
     expect(verses[1].annotatedLyrics).toContain('His precious blood He freely spilt');
+  });
+});
+
+
+// ════════════════════════════════════════════════════════════════
+// A pickup engraved inside a first ending
+// ════════════════════════════════════════════════════════════════
+describe('_extractLyricStanzas — For Health and Strength', { timeout: 30000 }, () => {
+  let score;
+
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXmlFHS });
+  });
+
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  // Verse 2 opens on a pickup inside the first ending, so playback reaches its first
+  // word at the end of verse 1's pass and the jump back into the repeat splits it off.
+  // The "2." printed there names lyric line 2, which is the line the pickup already sits
+  // on, so only the music says it leads into the verse rather than being one.
+  it('should merge the pickup into verse 2 rather than leaving it a stanza of its own', () => {
+    const stanzas = score._scoreData.sections.filter(section => section.annotatedLyrics);
+    expect(stanzas.map(stanza => stanza.name)).toEqual(['Verse 1', 'Verse 2']);
+    for (const stanza of stanzas) {
+      expect(stanza.annotatedLyrics).toContain('For health and strength and daily food');
+      expect(stanza.annotatedLyrics).toContain('we praise thy name, O Lord.');
+    }
+  });
+
+  it('should sing the pickup before the verse it leads into', () => {
+    const verse2 = score._scoreData.sections.find(section => section.name === 'Verse 2');
+    const starts = verse2.chordPositionRanges.map(range => range.start);
+    // The pickup is engraved near the end of the score but sung first, so verse 2's
+    // ranges open past where the rest of it begins
+    expect(starts.length).toBeGreaterThan(1);
+    expect(starts[0]).toBeGreaterThan(starts[1]);
+    // ...and it is verse 1's words that start the song, not verse 2's
+    expect(verse2.expandedChordPositionStart).toBeGreaterThan(
+      score._scoreData.sections.find(section => section.name === 'Verse 1').expandedChordPositionStart);
   });
 });
 

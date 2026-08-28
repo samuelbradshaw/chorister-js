@@ -28,6 +28,13 @@ export const sampleMusicXmlIIW = readFileSync(
 export const sampleMusicXmlTLL = readFileSync(
   resolve(resourcesDir, 'this-little-light-of-mine.musicxml'), 'utf-8'
 );
+// A traditional round with a repeat and 1st/2nd endings, whose second verse begins on a
+// pickup inside the first ending — labelled "2." on lyric line 2, the line it already
+// sits on. No lyrics file goes with it, so it is also the one fixture here that reaches
+// _getLyricsFromSyllables rather than _alignSyllablesToLyrics.
+export const sampleMusicXmlFHS = readFileSync(
+  resolve(resourcesDir, 'for-health-and-strength.musicxml'), 'utf-8'
+);
 // Synthetic, so no copyrighted score is redistributed here. Built to the same shape as
 // "A Child’s Prayer" (1989 CSB), the corpus song this support was written for: two
 // independent melody parts on separate staves each carrying a full lyric line

@@ -18,10 +18,9 @@
  *   which a whole-song comparison cannot see)
  * - This Little Light: repeats and first/second endings, i.e. more than one pass
  * - How Great the Wisdom / It Is Well: no-repeat controls, external lyrics file
- *
- * Note: no fixture here reproduces a labelled pickup engraved inside a repeat (the
- * "Grandmother" / "The Things I Do" shape that motivated the shared method). Those are
- * verified against the corpus; these tests guard the invariant generally.
+ * - For Health and Strength: a labelled pickup engraved inside a first ending, and the
+ *   only fixture with no lyrics file, so the only one whose stanzas are derived from the
+ *   engraved syllables and then reshaped by _mergePickupStanzas
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -31,7 +30,7 @@ import {
   sampleMusicXmlHGW, sampleLyricsHGW, hgwPartsTemplate, hgwFermatas,
   sampleMusicXmlIIW, sampleLyricsIIW, iiwParts, iiwSections, iiwFermatas,
   sampleMusicXmlTLL, sampleLyricsTLL, tllPartsTemplate, tllFermatas,
-  sampleMusicXmlTwoPart,
+  sampleMusicXmlTwoPart, sampleMusicXmlFHS,
 } from './song-data.js';
 
 let ChScore, origDrawScore;
@@ -108,6 +107,13 @@ const songs = [
       sections: iiwSections,
       fermatas: iiwFermatas,
     },
+  },
+  {
+    // No lyricsText: this one is derived from the engraved syllables, which is the path
+    // _mergePickupStanzas runs on, and the only fixture here whose stanzas the merge
+    // reshapes. Expansion must agree with the reshaped sections, not just the words.
+    name: 'For Health and Strength (labelled pickup inside a first ending)',
+    inputData: { scoreContent: sampleMusicXmlFHS },
   },
 ];
 

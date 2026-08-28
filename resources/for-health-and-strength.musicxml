@@ -1,0 +1,417 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
+<score-partwise version="4.0">
+  <work>
+    <work-title>For Health and Strength</work-title>
+  </work>
+  <identification>
+    <creator type="composer">Traditional</creator>
+    <rights type="copyright">Public Domain</rights>
+    <encoding>
+      <software>denigma 4.0.0</software>
+      <encoding-date>2026-08-23</encoding-date>
+      <supports type="no" element="accidental" />
+      <supports type="yes" element="beam" />
+      <supports type="no" element="stem" />
+      <software>https://github.com/webern/mx version=a38496219a35</software>
+    </encoding>
+    <miscellaneous>
+      <miscellaneous-field name="original-creation-date">2026-08-22</miscellaneous-field>
+      <miscellaneous-field name="description">MusicXML imported from MuseScore Studio 4.7.4 by Finale.</miscellaneous-field>
+      <miscellaneous-field name="denigma-name">denigma</miscellaneous-field>
+      <miscellaneous-field name="denigma-version">4.0.0</miscellaneous-field>
+      <miscellaneous-field name="denigma-commit">fccb0c2a7f48</miscellaneous-field>
+      <miscellaneous-field name="source-format">enigmaxml</miscellaneous-field>
+      <miscellaneous-field name="source-filename">for-health-and-strength.enigmaxml</miscellaneous-field>
+    </miscellaneous>
+  </identification>
+  <defaults>
+    <scaling>
+      <millimeters>7.23194444</millimeters>
+      <tenths>40</tenths>
+    </scaling>
+    <page-layout>
+      <page-height>1545.36585366</page-height>
+      <page-width>1194.14634146</page-width>
+      <page-margins type="both">
+        <left-margin>70.24390244</left-margin>
+        <right-margin>70.24390244</right-margin>
+        <top-margin>87.80487805</top-margin>
+        <bottom-margin>87.80487805</bottom-margin>
+      </page-margins>
+    </page-layout>
+    <system-layout>
+      <system-margins>
+        <left-margin>70.24390244</left-margin>
+        <right-margin>0</right-margin>
+      </system-margins>
+      <system-distance>298.53658537</system-distance>
+      <top-system-distance>210.73170732</top-system-distance>
+    </system-layout>
+    <appearance>
+      <line-width type="stem">0.91145833</line-width>
+      <line-width type="beam">5</line-width>
+      <line-width type="staff">0.91145833</line-width>
+      <line-width type="light barline">1.00260417</line-width>
+      <line-width type="heavy barline">5</line-width>
+      <line-width type="leger">1.10026042</line-width>
+      <line-width type="bracket">1.30208333</line-width>
+      <line-width type="ending">1.30208333</line-width>
+      <line-width type="dashes">0.91796875</line-width>
+      <line-width type="extend">0.91796875</line-width>
+      <line-width type="octave shift">0.91796875</line-width>
+      <line-width type="pedal">0.91796875</line-width>
+      <line-width type="wedge">0.91796875</line-width>
+      <line-width type="enclosure">1.30208333</line-width>
+      <line-width type="tuplet bracket">1.00260417</line-width>
+      <note-size type="grace">60</note-size>
+      <note-size type="cue">60</note-size>
+      <distance type="hyphen">120</distance>
+      <distance type="beam">7.5</distance>
+    </appearance>
+    <music-font font-family="Finale Maestro, engraved" font-style="normal" font-size="20.5" font-weight="normal" />
+    <word-font font-family="Times, text" font-style="normal" font-size="10.25" font-weight="normal" />
+    <lyric-font font-family="Finale Lyrics, text" font-style="normal" font-size="10.25" font-weight="normal" />
+  </defaults>
+  <credit page="1">
+    <credit-type>title</credit-type>
+    <credit-words justify="center" default-x="597.07317073" default-y="1440" font-family="Times New Roman, text" font-style="normal" font-size="24" font-weight="normal" halign="center" valign="top">For Health and Strength</credit-words>
+  </credit>
+  <credit page="1">
+    <credit-type>composer</credit-type>
+    <credit-words justify="right" default-x="1123.90243902" default-y="1361.95121951" font-family="Times New Roman, text" font-style="normal" font-size="12" font-weight="normal" halign="right" valign="top">Traditional</credit-words>
+  </credit>
+  <credit page="1">
+    <credit-type>rights</credit-type>
+    <credit-words justify="center" default-x="597.07317073" default-y="70.24390244" font-family="Times New Roman, text" font-style="normal" font-size="10" font-weight="normal" halign="center" valign="bottom">Public Domain</credit-words>
+  </credit>
+  <part-list>
+    <score-part id="P1">
+      <part-name print-object="no">Piano</part-name>
+      <part-abbreviation print-object="no">Pno.</part-abbreviation>
+      <group>score</group>
+      <score-instrument id="P1-I1">
+        <instrument-name>Piano</instrument-name>
+        <instrument-sound>keyboard.piano</instrument-sound>
+      </score-instrument>
+    </score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1" implicit="yes">
+      <print>
+        <measure-numbering system="only-top" multiple-rest-always="no" multiple-rest-range="no">system</measure-numbering>
+      </print>
+      <attributes>
+        <divisions>8</divisions>
+        <key>
+          <fifths>0</fifths>
+          <mode>major</mode>
+        </key>
+        <time>
+          <beats>4</beats>
+          <beat-type>4</beat-type>
+        </time>
+        <clef>
+          <sign>G</sign>
+          <line>2</line>
+        </clef>
+      </attributes>
+      <note>
+        <pitch>
+          <step>C</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>1.  For</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>(2. For)</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="2">
+      <barline location="left">
+        <bar-style>heavy-light</bar-style>
+        <repeat direction="forward" winged="none" />
+      </barline>
+      <note>
+        <pitch>
+          <step>C</step>
+          <octave>5</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>health</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>health</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>C</step>
+          <octave>5</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>and</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>and</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>C</step>
+          <octave>5</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>strength</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>strength</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>A</step>
+          <alter>1</alter>
+          <octave>4</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>and</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>and</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="3">
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>begin</syllabic>
+          <text>dai</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>begin</syllabic>
+          <text>dai</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>end</syllabic>
+          <text>ly</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>end</syllabic>
+          <text>ly</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>food,</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>food,</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>G</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>we</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>we</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="4">
+      <note>
+        <pitch>
+          <step>F</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>praise</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>praise</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>F</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>thy</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>thy</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>F</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>name,</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>name,</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>E</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>O</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>O</text>
+          <extend type="start" />
+        </lyric>
+        <lyric number="2">
+          <extend type="stop" />
+        </lyric>
+      </note>
+    </measure>
+    <measure number="5">
+      <barline location="left">
+        <ending number="1" type="start">1.</ending>
+      </barline>
+      <note>
+        <pitch>
+          <step>G</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>24</duration>
+        <voice>1</voice>
+        <type>half</type>
+        <dot />
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>Lord.</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>C</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>8</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="2" relative-y="28.75">
+          <syllabic>single</syllabic>
+          <text>2.  For</text>
+        </lyric>
+      </note>
+      <barline location="right">
+        <bar-style>light-heavy</bar-style>
+        <ending number="1" type="stop" />
+        <repeat direction="backward" winged="none" />
+      </barline>
+    </measure>
+    <measure number="6">
+      <barline location="left">
+        <ending number="2" type="start">2.</ending>
+      </barline>
+      <note>
+        <pitch>
+          <step>F</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>24</duration>
+        <voice>1</voice>
+        <type>half</type>
+        <dot />
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>Lord.</text>
+        </lyric>
+      </note>
+      <barline location="right">
+        <bar-style>light-heavy</bar-style>
+        <ending number="2" type="stop" />
+      </barline>
+    </measure>
+  </part>
+</score-partwise>

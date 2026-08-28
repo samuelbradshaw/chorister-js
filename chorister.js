@@ -1043,13 +1043,21 @@ ChScore.prototype._fixCreditStyling = function (musicXml) {
       changed = true;
     }
 
-    // Verovio carries neither font-family nor font-size onto the <rend>, so keep them
-    // here, keyed by the text they belong to -- the same text the block is read from,
-    // which is what _getScoreMetadata matches them back up by. The first run names the
-    // block's font: a later run changing font is what made it a run of its own.
+    // Verovio carries font-family, font-size, and halign onto the <rend> either not at
+    // all or wrongly, so keep them here, keyed by the text they belong to -- the same
+    // text the block is read from, which is what _getScoreMetadata matches them back up
+    // by. The first run names the block's font: a later run changing font is what made
+    // it a run of its own.
+    //
+    // The two attributes describing where a credit sits are not interchangeable: halign
+    // aligns the block against its default-x (where it is on the page), while justify
+    // aligns the text within the block. Verovio reads <rend halign> off justify and
+    // drops halign, so a title anchored centered but justified left -- Finale engraves
+    // them -- reaches the metadata as a left-aligned block and loses the title.
     this._creditStyles.set(this._cleanBlockWhitespace(runs[0].textContent), {
       fontFamily: this._fontFamilyWithoutStyling(runs[0].getAttribute('font-family')),
       fontSize: runs[0].getAttribute('font-size') || null,
+      halign: runs[0].getAttribute('halign'),
     });
   }
 
@@ -1146,7 +1154,11 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
           // Per line, not around the block: a run never spans a line break in lyrics
           // either, which keeps the markup usable line by line.
           text: text.split('\n').map(line => styleText(line, rend)).join('\n'),
-          halign: rend.getAttribute('halign'),
+          // The credit's own halign wins, unlike the font fields: the <rend>'s came from
+          // justify, which is the text's justification and not the block's alignment on
+          // the page (see _fixCreditStyling). Only MusicXML sets a credit style aside,
+          // so MEI-native input keeps the <rend>'s halign.
+          halign: creditStyle?.halign ?? rend.getAttribute('halign'),
           valign: rend.getAttribute('valign'),
           fontFamily: rend.getAttribute('fontfam') ?? creditStyle?.fontFamily ?? null,
           fontSize: rend.getAttribute('fontsize') ?? creditStyle?.fontSize ?? null,
@@ -5618,26 +5630,44 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
   const insertions = [];
   let currentStanzaIndex = 0;
 
+  // Where every blank line falls, found once up front for the walk below
+  const stanzaBreakOffsets = [];
+  for (let at = expandedLyrics.indexOf('\n\n'); at !== -1; at = expandedLyrics.indexOf('\n\n', at + 1)) {
+    stanzaBreakOffsets.push(at);
+  }
+  let nextBreak = 0;
+
+  // Memoized: a song repeats its syllables across verses, and the fold is the same
+  // document-scale normalizer either way (see _addPrintedLineBonus, which caches too).
+  const foldedSyllables = new Map();
+  const foldSyllable = (text) => {
+    if (!foldedSyllables.has(text)) foldedSyllables.set(text, this._foldForMatching(text));
+    return foldedSyllables.get(text);
+  };
+
   // Match each syllable
   for (const syllable of syllables) {
-    const normSylText = this._foldForMatching(syllable.text);
+    const normSylText = foldSyllable(syllable.text);
     if (!normSylText) continue;
 
     const windowEnd = Math.min(pos + 20, normText.length);
-    let matchPos = normText.indexOf(normSylText, pos);
+    let matchPos = -1;
     let matched = false;
 
-    // Try exact match first
-    if (matchPos !== -1 && matchPos < windowEnd) {
-      matched = true;
+    // Try exact match first, within the window rather than the whole rest of the text:
+    // a hit past the window is discarded anyway, so searching that far only costs a
+    // scan of everything left whenever a syllable doesn't line up.
+    for (let i = pos; i < windowEnd; i++) {
+      if (normText.startsWith(normSylText, i)) { matchPos = i; matched = true; break; }
     }
     // Fuzzy match
-    else {
+    if (!matched) {
       let bestPos = pos;
       let bestScore = 0;
 
       for (let i = pos; i < windowEnd; i++) {
-        const score = this._lyricSimilarity(normSylText, normText.substring(i, i + normSylText.length));
+        // Compared in place: a substring per candidate is an allocation per position
+        const score = this._lyricSimilarity(normSylText, normText, i, normSylText.length);
         if (score > bestScore) {
           bestScore = score;
           bestPos = i;
@@ -5654,10 +5684,13 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
     if (matched) {
       const originalPos = posMap[matchPos] !== undefined ? posMap[matchPos] : expandedLyrics.length;
 
-      // Check if we've crossed into a new stanza (look for \n\n between pos and matchPos)
-      const textBetween = expandedLyrics.substring(posMap[pos] || 0, originalPos);
-      const stanzaBreaks = (textBetween.match(/\n\n/g) || []).length;
-      currentStanzaIndex = Math.min(currentStanzaIndex + stanzaBreaks, stanzas.length - 1);
+      // Crossing a blank line means the next stanza has started. The matches only ever
+      // move forward, so the breaks are walked once overall rather than re-counted out
+      // of a fresh substring at every syllable.
+      while (nextBreak < stanzaBreakOffsets.length && stanzaBreakOffsets[nextBreak] < originalPos) {
+        nextBreak++;
+        currentStanzaIndex = Math.min(currentStanzaIndex + 1, stanzas.length - 1);
+      }
 
       insertions.push([originalPos, `<span data-ch-chord-position="${syllable.chordPositions.join(' ')}" data-ch-expanded-chord-position="${syllable.expandedChordPositions.join(' ')}" data-ch-lyric-line-id="${syllable.lyricLineIds.join(' ')}"></span>`]);
 
@@ -5683,11 +5716,17 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
     stanza.expandedChordPositions = [stanza.expandedChordPositions[0], stanza.expandedChordPositions.at(-1) + 1];
   }
 
-  // Insert markers in reverse order
-  for (let i = insertions.length - 1; i >= 0; i--) {
-    const [idx, marker] = insertions[i];
-    expandedLyrics = expandedLyrics.substring(0, idx) + marker + expandedLyrics.substring(idx);
+  // Splice every marker in over one pass. Rebuilding the whole string per insertion is
+  // quadratic in the number of syllables, which a long text feels.
+  insertions.sort((a, b) => a[0] - b[0]);
+  const pieces = [];
+  let cut = 0;
+  for (const [idx, marker] of insertions) {
+    pieces.push(expandedLyrics.slice(cut, idx), marker);
+    cut = idx;
   }
+  pieces.push(expandedLyrics.slice(cut));
+  expandedLyrics = pieces.join('');
 
   const stanzasText = expandedLyrics.split('\n\n');
   for (let sz = 0; sz < stanzas.length; sz++) {
@@ -5697,14 +5736,16 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
   return stanzas;
 }
 
-// One text fold, its policy named by the caller: `strip` is a character class to drop,
-// `edges` trims all but letters and digits off both ends, `whitespace` is 'keep',
+// One text fold, its policy named by the caller: `strip` is a global character class to
+// drop, `edges` trims all but letters and digits off both ends, `whitespace` is 'keep',
 // 'collapse' or 'remove'. The two policies in use are _foldForMatching and _foldWord.
 ChScore.prototype._foldText = function (text, { strip = null, edges = false, whitespace = 'keep' } = {}) {
-  // NFD first, so a combining mark is its own character for `strip` to drop; what
-  // survives is recomposed, keeping an accent the fold was told to keep.
-  let folded = (text ?? '').normalize('NFD');
-  if (strip) folded = folded.replace(new RegExp(strip.source, 'gu'), '');
+  let folded = text ?? '';
+  // Decomposed only to strip, so a combining mark is a character of its own for `strip`
+  // to reach. With nothing to strip that round trip ends where it started, so it's the
+  // recomposition alone that runs -- a lookup key shouldn't depend on how the engraver
+  // happened to encode its accents.
+  if (strip) folded = folded.normalize('NFD').replace(strip, '');
   folded = folded.normalize('NFC');
   if (edges) folded = folded.replace(this._punctuationAtEdges, '');
   if (whitespace === 'collapse') folded = folded.replace(/\s+/g, ' ').trim();
@@ -5717,7 +5758,7 @@ ChScore.prototype._foldText = function (text, { strip = null, edges = false, whi
 // left. Runs through _normalizeLyricsForMatching, not _foldText, so this policy has one
 // implementation -- that one is also HTML-aware and maps each character back to its source.
 ChScore.prototype._foldForMatching = function (text, whitespace = 'collapse') {
-  const folded = this._normalizeLyricsForMatching(text ?? '').normText;
+  const folded = this._normalizeLyricsForMatching(text ?? '', false).normText;
   return whitespace === 'remove' ? folded.replace(/\s+/g, '') : folded.trim();
 }
 
@@ -5735,9 +5776,11 @@ ChScore.prototype._foldWord = function (word) {
 // For <ruby> blocks, use the <rt> reading text for matching and map to the <ruby> tag position.
 // For other HTML tags (<em>, <strong>, etc.), skip them entirely.
 // For plain text, apply the existing normalization (strip accents, punctuation, digits; collapse whitespace).
-ChScore.prototype._normalizeLyricsForMatching = function (expandedLyrics) {
+// `withPosMap` false skips that map, for callers that only want the folded text --
+// _foldForMatching runs per syllable and throws it away.
+ChScore.prototype._normalizeLyricsForMatching = function (expandedLyrics, withPosMap = true) {
   const normChars = [];
-  const posMap = [];
+  const posMap = withPosMap ? [] : null;
   const rubyRegex = /<ruby[^>]*>[\s\S]*?<\/ruby>/gi;
   const stripRe = this._matchingStrip;
   let lastPlainIndex = 0;
@@ -5750,11 +5793,11 @@ ChScore.prototype._normalizeLyricsForMatching = function (expandedLyrics) {
     if (norm && !/\s/.test(norm)) {
       for (const ch of norm) {
         normChars.push(ch);
-        posMap.push(position);
+        posMap?.push(position);
       }
     } else if (collapseWhitespace && /\s/.test(norm) && normChars.at(-1) !== ' ') {
       normChars.push(' ');
-      posMap.push(position);
+      posMap?.push(position);
     }
   }
 
@@ -5789,19 +5832,31 @@ ChScore.prototype._normalizeLyricsForMatching = function (expandedLyrics) {
 }
 
 // Longest common substring similarity (like Python's SequenceMatcher)
-ChScore.prototype._lyricSimilarity = function (str1, str2) {
-  const matrix = Array(str1.length + 1).fill(null)
-    .map(() => Array(str2.length + 1).fill(0));
+// `from`/`length` read a window of str2 in place, so a caller scanning many candidate
+// positions doesn't allocate a substring for each one.
+ChScore.prototype._lyricSimilarity = function (str1, str2, from = 0, length = null) {
+  const len1 = str1.length;
+  // Clamped to what is actually there, the way a substring past the end comes back short
+  const available = str2.length - from;
+  const len2 = length == null ? available : Math.min(length, available);
+  if (len1 + len2 === 0) return 0;
+
+  // The longest common substring only ever reads the row above, so one row does --
+  // walked backwards, where row[i - 1] is still the previous column's value. Reused
+  // between calls: this runs once per candidate position of every unmatched syllable.
+  let row = ChScore.prototype._similarityRow;
+  if (!row || row.length < len1 + 1) row = ChScore.prototype._similarityRow = new Int32Array(len1 + 1);
+  row.fill(0, 0, len1 + 1);
+
   let maxLen = 0;
-  for (let i = 1; i <= str1.length; i++) {
-    for (let j = 1; j <= str2.length; j++) {
-      if (str1[i - 1] === str2[j - 1]) {
-        matrix[i][j] = matrix[i - 1][j - 1] + 1;
-        maxLen = Math.max(maxLen, matrix[i][j]);
-      }
+  for (let j = 1; j <= len2; j++) {
+    const char2 = str2[from + j - 1];
+    for (let i = len1; i >= 1; i--) {
+      row[i] = str1[i - 1] === char2 ? row[i - 1] + 1 : 0;
+      if (row[i] > maxLen) maxLen = row[i];
     }
   }
-  return str1.length + str2.length > 0 ? (maxLen * 2) / (str1.length + str2.length) : 0;
+  return (maxLen * 2) / (len1 + len2);
 }
 
 // Join chord position ranges that continue one another on the same staves and lyric line
@@ -6019,6 +6074,14 @@ ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
   };
 
   const functionWords = this._phraseFunctionWords[this._scoreData.scoreMetadata?.lang];
+  // Memoized: the words a line can end on are the commonest words there are, so the
+  // same handful ("the", "and", "my") is looked up over and over.
+  const foldedWords = new Map();
+  const foldWordCached = (word) => {
+    if (!foldedWords.has(word)) foldedWords.set(word, this._foldWord(word));
+    return foldedWords.get(word);
+  };
+
   let wordStarts = 0;
   for (const run of runs) {
     for (let i = 1; i < run.syllables.length; i++) {
@@ -6038,7 +6101,7 @@ ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
       // split between them arrives a fragment at a time, and matching on the fragment it
       // ends with never recognizes a multi-syllable entry ("ev-’ry" reaching here as "ry").
       if (functionWords && ['s', 't', null, undefined].includes(previous.syls?.at(-1)?.wordpos)) {
-        const bare = this._foldWord(this._wordEndingAt(run.syllables, i - 1));
+        const bare = foldWordCached(this._wordEndingAt(run.syllables, i - 1));
         if (functionWords.has(bare)) bump(cp, 'functionWord');
       }
       if (/^\p{Lu}/u.test((firstSyl?.text ?? syllable.text ?? '').trim())) bump(cp, 'capital');
@@ -6633,9 +6696,34 @@ ChScore.prototype._wordBuilder = function () {
   };
 }
 
-// Merge pickup fragments into the verse they belong to. A hymn often engraves the
-// next verse's first syllables on a pickup before a repeat, so they arrive as a short
-// stanza labelled "2." while sitting on lyric line 1 — sung before the verse it names.
+// Whether a stanza is an anacrusis leading into the one after it, read off the music
+// rather than the label. Three things have to hold, and together they are what a pickup
+// before a repeat looks like: the fragment is sung in one place, immediately before the
+// stanza it leads into, and fits inside a single measure — an anacrusis is the tail of
+// the measure before the repeat barline, not a phrase. Measured in measures rather than
+// counted in chord positions, so a dense accompaniment under two syllables can't defeat
+// it: "Gethsemane" spans 37 measures where a real pickup spans one.
+ChScore.prototype._isPickupFragment = function (stanza, next) {
+  const ranges = stanza.chordPositionRanges;
+  if (ranges?.length !== 1 || !next?.chordPositionRanges?.length) return false;
+
+  // Sung immediately before it, and only split off because playback jumped back into
+  // the repeat to reach the words the fragment leads into
+  if (stanza.expandedChordPositions[1] !== next.expandedChordPositions[0]) return false;
+  if (next.chordPositionRanges[0].start >= ranges[0].end) return false;
+
+  const first = this._scoreData.chordPositions[ranges[0].start];
+  const last = this._scoreData.chordPositions[ranges[0].end - 1];
+  return Boolean(first) && first.measureId === last?.measureId;
+}
+
+// Merge pickup fragments into the verse they belong to. A hymn often engraves the next
+// verse's first syllables on a pickup before a repeat, so they arrive as a stanza of
+// their own — sung before the verse they belong to, and split off from it by the jump
+// back into the repeat. Which verse that is can be printed ("2." on lyric line 1, "Were
+// You There"), printed on the line it already names ("2." on lyric line 2, "Because"),
+// or not printed at all ("I'm Trying to Be like Jesus"). Only the first is a label
+// question; the other two are settled by _isPickupFragment reading the music.
 ChScore.prototype._mergePickupStanzas = function (stanzas) {
   const merged = [];
 
@@ -6646,12 +6734,22 @@ ChScore.prototype._mergePickupStanzas = function (stanzas) {
     const lineNumber = Number.parseInt(stanza.lyricLineIds[0]?.split('.')[1]);
     const nextLineNumber = Number.parseInt(next?.lyricLineIds[0]?.split('.')[1]);
 
-    const isPickup = number !== null
-      && number !== lineNumber
-      && next
+    // Whatever the label says, the fragment can only join a stanza of its own kind that
+    // hasn't been numbered as a verse in its own right
+    const nextTakesPickup = Boolean(next)
       && next.type === stanza.type
-      && this._markerNumber(next.marker) === null
-      && nextLineNumber === number;
+      && this._markerNumber(next.marker) === null;
+
+    // A numbered label naming the verse it leads into. Where the label only names the
+    // line the fragment already sits on, it says nothing on its own, so the music has to.
+    const labelled = number !== null && nextLineNumber === number
+      && (number !== lineNumber || this._isPickupFragment(stanza, next));
+
+    // No label at all: the music is the only evidence there is.
+    const unlabelled = number === null && nextLineNumber === lineNumber
+      && this._isPickupFragment(stanza, next);
+
+    const isPickup = nextTakesPickup && (labelled || unlabelled);
 
     if (isPickup) {
       next.marker = stanza.marker;

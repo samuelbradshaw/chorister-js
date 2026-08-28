@@ -95,3 +95,48 @@ describe('_foldText()', () => {
     expect(score._foldText('é').length).toBe(1);
   });
 });
+
+describe('_lyricSimilarity()', () => {
+  /** The original full-matrix implementation, kept here as the thing to agree with. */
+  function referenceSimilarity(str1, str2) {
+    const matrix = Array(str1.length + 1).fill(null).map(() => Array(str2.length + 1).fill(0));
+    let maxLen = 0;
+    for (let i = 1; i <= str1.length; i++) {
+      for (let j = 1; j <= str2.length; j++) {
+        if (str1[i - 1] === str2[j - 1]) {
+          matrix[i][j] = matrix[i - 1][j - 1] + 1;
+          maxLen = Math.max(maxLen, matrix[i][j]);
+        }
+      }
+    }
+    return str1.length + str2.length > 0 ? (maxLen * 2) / (str1.length + str2.length) : 0;
+  }
+
+  const PAIRS = [
+    ['', ''], ['', 'abc'], ['abc', ''],
+    ['abc', 'abc'], ['abc', 'xyz'],
+    ['great', 'greet'], ['wisdom', 'wisdon'], ['love', 'glove'],
+    ['a', 'aaaa'], ['aaaa', 'a'], ['abcabc', 'cabcab'],
+    ['thelord', 'thelamb'], ['ebenezer', 'ebenezer'],
+  ];
+
+  it.each(PAIRS)('should score %j against %j exactly as the full matrix did', (a, b) => {
+    expect(score._lyricSimilarity(a, b)).toBe(referenceSimilarity(a, b));
+  });
+
+  it('should read a window of the haystack the same as a substring of it', () => {
+    const haystack = 'howgreatthewisdomandthelove';
+    for (let i = 0; i < haystack.length; i++) {
+      for (const needle of ['great', 'wisdom', 'zzz', 'the']) {
+        expect(score._lyricSimilarity(needle, haystack, i, needle.length))
+          .toBe(referenceSimilarity(needle, haystack.substring(i, i + needle.length)));
+      }
+    }
+  });
+
+  it('should reuse its row buffer without leaking state between calls', () => {
+    const first = score._lyricSimilarity('abcdefgh', 'abcdefgh');
+    score._lyricSimilarity('zz', 'zz');           // shorter, reuses the same buffer
+    expect(score._lyricSimilarity('abcdefgh', 'abcdefgh')).toBe(first);
+  });
+});
