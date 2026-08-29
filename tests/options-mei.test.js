@@ -477,7 +477,7 @@ describe('showMelodyOnly — MEI verification', () => {
   });
 
   it('should have melody info after loading with partsTemplate', () => {
-    expect(score._scoreData.hasMelodyInfo).toBe(true);
+    expect(score._scoreData.features.hasMelodyInfo).toBe(true);
   });
 
   it('should have 2 staves per measure before enabling showMelodyOnly', () => {
@@ -552,7 +552,7 @@ describe('showChordSet — MEI verification', () => {
   afterEach(() => { resetScoreState(score); });
 
   it('should detect chordSets after loading', () => {
-    expect(score._scoreData.hasChordSets).toBe(true);
+    expect(score._scoreData.features.hasChordSets).toBe(true);
   });
 
   it('should have no harm elements by default (showChordSet is false)', () => {
@@ -654,7 +654,7 @@ describe('showFingeringMarks — MEI verification', () => {
   afterEach(() => { resetScoreState(score); });
 
   it('should detect fingering marks after loading MusicXML with fingering', () => {
-    expect(score._scoreData.hasFingeringMarks).toBe(true);
+    expect(score._scoreData.features.hasFingeringMarks).toBe(true);
   });
 
   it('should remove fing elements by default (showFingeringMarks defaults to false)', () => {

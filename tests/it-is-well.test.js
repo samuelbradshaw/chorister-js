@@ -71,15 +71,15 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
     });
 
     it('should have lyrics', () => {
-      expect(score._scoreData.hasLyrics).toBe(true);
+      expect(score._scoreData.features.hasLyrics).toBe(true);
     });
 
     it('should have part info', () => {
-      expect(score._scoreData.hasPartInfo).toBe(true);
+      expect(score._scoreData.features.hasPartInfo).toBe(true);
     });
 
     it('should have melody info', () => {
-      expect(score._scoreData.hasMelodyInfo).toBe(true);
+      expect(score._scoreData.features.hasMelodyInfo).toBe(true);
     });
 
     it('should be in 4/4 time', () => {
@@ -112,7 +112,7 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
     });
 
     it('should have hasRepeatOrJump false (no repeats in the MusicXML)', () => {
-      expect(score._scoreData.hasRepeatOrJump).toBe(false);
+      expect(score._scoreData.features.hasRepeatOrJump).toBe(false);
     });
   });
 
@@ -215,7 +215,7 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
   // ── Intro brackets ──
   describe('Intro brackets — two ranges', () => {
     it('should detect intro brackets', () => {
-      expect(score._scoreData.hasIntroBrackets).toBe(true);
+      expect(score._scoreData.features.hasIntroBrackets).toBe(true);
     });
 
     it('should have exactly four dir elements with ch-intro-bracket (2 starts + 2 ends)', () => {
@@ -356,7 +356,7 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
     });
 
     it('should have hasLyricSectionIds true', () => {
-      expect(score._scoreData.hasLyricSectionIds).toBe(true);
+      expect(score._scoreData.features.hasLyricSectionIds).toBe(true);
     });
   });
 
@@ -726,7 +726,7 @@ describe('It Is Well — default load (no parts/sections)', { timeout: 30000 }, 
   });
 
   it('should have intro brackets even without custom sections', () => {
-    expect(score._scoreData.hasIntroBrackets).toBe(true);
+    expect(score._scoreData.features.hasIntroBrackets).toBe(true);
   });
 
   it('should have 4 intro bracket dir elements without custom sections', () => {

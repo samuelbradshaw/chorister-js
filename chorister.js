@@ -370,6 +370,13 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
   // Create scoreData object
   this._scoreData = {
     scoreMetadata: {},
+    features: {
+      hasLyrics: false, hasPartInfo: false, hasMelodyInfo: false, hasChordSets: false,
+      hasExpansion: false, hasRepeatOrJump: false, hasIntroBrackets: false,
+      hasFingeringMarks: false, hasLyricSectionIds: false, hasTwoPartMelody: false,
+      hasRound: false, hasOstinato: false, hasDescant: false, hasObbligato: false,
+      hasPickupMeasure: false,
+    },
     meiStringOriginal: this._vrvToolkit.getMEI(),
     midiNoteSequence: midiNoteSequence ?? core.midiToSequenceProto(midiArray),
     midiType: midiType ?? null,
@@ -1109,10 +1116,14 @@ ChScore.prototype._fixIntroBrackets = function (musicXml) {
   return moved ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
 }
 
-// A printed verse marker ("3.", "12)"), and a digit run too long to be one -- both
-// allowing the <em>/<strong> a styled paragraph now opens with. See _getScoreMetadata.
-ChScore.prototype._verseMarker = /^(?:<(?:em|strong)>)*\s*\d{1,2}\s*[.)]/;
-ChScore.prototype._nonVerseMarker = /^(?:<(?:em|strong)>)*\s*\d{3,}\s*[.)]/;
+ChScore.prototype._verseMarker = /^\s*\d{1,2}\s*[.)]/;
+ChScore.prototype._nonVerseMarker = /^\s*\d{3,}\s*[.)]/;
+ChScore.prototype._stylingMarkup = /<\/?(?:em|strong)>/g;
+ChScore.prototype._capoMark = /^capo\b[\s:.,-]*\d+[\s:.,-]*$/i;
+ChScore.prototype._standaloneNumber = /^\d+$/;
+ChScore.prototype._stripStyling = function (text) {
+  return (text ?? '').replace(this._stylingMarkup, '');
+}
 
 // Get metadata from the MEI fileDesc, pgHead, and pgFoot elements
 ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
@@ -1147,17 +1158,10 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
       for (const rend of container.querySelectorAll(':scope > rend')) {
         const text = getText(rend);
         if (!text) continue;
-        // MEI-native input carries the font on the <rend>; MusicXML's was set aside
-        // before conversion, since Verovio drops it (see _fixCreditStyling).
         const creditStyle = this._creditStyles?.get(text);
         blocks.push({
-          // Per line, not around the block: a run never spans a line break in lyrics
-          // either, which keeps the markup usable line by line.
-          text: text.split('\n').map(line => styleText(line, rend)).join('\n'),
-          // The credit's own halign wins, unlike the font fields: the <rend>'s came from
-          // justify, which is the text's justification and not the block's alignment on
-          // the page (see _fixCreditStyling). Only MusicXML sets a credit style aside,
-          // so MEI-native input keeps the <rend>'s halign.
+          html: text.split('\n').map(line => styleText(line, rend)).join('\n'),
+          text: this._stripStyling(text),
           halign: creditStyle?.halign ?? rend.getAttribute('halign'),
           valign: rend.getAttribute('valign'),
           fontFamily: rend.getAttribute('fontfam') ?? creditStyle?.fontFamily ?? null,
@@ -1174,37 +1178,51 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
     const name = getText(persName);
     if (name) contributors.push({ role: persName.getAttribute('role'), name: name });
   }
-
+  
   const date = meiParsed.querySelector('fileDesc pubStmt date');
   const header = getTextBlocks('pgHead');
   const footer = getTextBlocks('pgFoot');
-
-  // The printed title is usually the topmost text on page 1: centered, and a single
-  // printed line (no <lb/>) rather than a multi-line lyrics/credits block. Prefer it
-  // over titleStmt/title, which Finale-derived MEI frequently leaves empty.
-  const printedTitle = header.find(block => block.halign === 'center' && !block.text.includes('\n'));
-
-  // A paragraph that opens with a digit run longer than 2 followed by "." or ")" is
-  // something else printed the same way as a verse marker, e.g. a copyright year
-  // ("1982. Text © ..." in an attribution block) -- drop it up front rather than
-  // leaving it in scoreMetadata.stanzas for every consumer to filter out again.
-  // A paragraph printed in italics opens with the <em> its styling became, so the
-  // marker isn't the first thing in the string any more.
   const looksLikeNonVerseMarker = paragraph => this._nonVerseMarker.test(paragraph);
   const looksLikeVerseMarker = paragraph => this._verseMarker.test(paragraph);
-  // One item per verse/chorus, not per printed block: a block can hold several,
-  // separated by blank lines. A block only counts if at least one of its paragraphs
-  // carries a verse marker -- a block can open with an unmarked chorus before its
-  // first numbered verse.
-  const stanzas = header.concat(footer)
-    .map(block => block.text.split(/\n\s*\n/).filter(paragraph => !looksLikeNonVerseMarker(paragraph)))
-    .filter(paragraphs => paragraphs.some(looksLikeVerseMarker))
-    .flat();
+  const paragraphs = text => text.split(/\n\s*\n/);
+  const isStanzaBlock = block => block.text.includes('\n') && paragraphs(block.text).some(looksLikeVerseMarker);
+  const isCapoBlock = block => this._capoMark.test(block.text.trim());
+  const isNumberBlock = block => this._standaloneNumber.test(block.text.trim()) && Number.parseInt(block.text) > 0;
+
+  // Detect title (largest centered heading). Metadata title fields are sometimes empty or outdated. Anything centered above or below the title is a supertitle or subtitle.
+  const headings = header.filter(block => block.halign === 'center'
+    && !isStanzaBlock(block) && !isNumberBlock(block) && !isCapoBlock(block));
+  const sizes = headings.map(block => Number.parseFloat(block.fontSize));
+  const largest = Math.max(...sizes.filter(size => !Number.isNaN(size)));
+  const titleIndex = sizes.some(size => !Number.isNaN(size))
+    ? sizes.indexOf(largest)
+    : headings.findIndex(block => !block.html.includes('\n'));
+  const printedTitle = headings[titleIndex];
+  const subheadings = blocks => blocks.filter(block => !block.html.includes('\n')).map(block => block.html);
+  const pageBlocks = header.concat(footer);
+  const capoBlock = pageBlocks.find(isCapoBlock);
+  const numbers = pageBlocks.filter(isNumberBlock).map(block => block.text.trim());
+
+  // Detect stanzas
+  const stanzas = pageBlocks
+    .map(block => {
+      const words = paragraphs(block.text);
+      return paragraphs(block.html)
+        .map((paragraph, p) => [paragraph, words[p] ?? paragraph])
+        .filter(([, paragraphWords]) => !looksLikeNonVerseMarker(paragraphWords));
+    })
+    .filter(block => block.some(([, paragraphWords]) => looksLikeVerseMarker(paragraphWords)))
+    .flat()
+    .map(([paragraph]) => paragraph);
 
   return {
     scoreId: scoreId,
     lang: lang,
-    title: printedTitle?.text ?? (getText(meiParsed.querySelector('fileDesc titleStmt title')) || null),
+    title: printedTitle?.html ?? (getText(meiParsed.querySelector('fileDesc titleStmt title')) || null),
+    supertitles: printedTitle ? subheadings(headings.slice(0, titleIndex)) : [],
+    subtitles: printedTitle ? subheadings(headings.slice(titleIndex + 1)) : [],
+    capoMark: capoBlock?.html ?? null,
+    numbers: numbers,
     contributors: contributors,
     date: date ? (date.getAttribute('isodate') ?? getText(date)) : null,
     distributor: getText(meiParsed.querySelector('fileDesc pubStmt distributor')) || null,
@@ -1263,18 +1281,15 @@ ChScore.prototype._unzipMusicXml = async function (arrayBuffer) {
   return null;
 }
 
-// A round marks where each voice enters with a circled digit, engraved as a dingbat
-// circled digit (➀–➈). Not to be confused with a verse marker ("2.").
+// Detect round numbers
 ChScore.prototype._roundMarkerPattern = /^[➀-➈]$/;
+ChScore.prototype._ostinatoMark = /ostinato/i;
 
 ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   this._scoreData.meiParsed = (new DOMParser()).parseFromString(this._scoreData.meiStringOriginal, 'text/xml');
   this._scoreData.scoreMetadata = this._getScoreMetadata(this._scoreData.meiParsed, scoreId, lang);
 
-  // The hard-coded dictionary for this score's language (`lang` above, "en" by
-  // default) plus its own printed title/lyrics (if any), so _insertKnownHyphens can
-  // fix words the hard-coded list alone doesn't know -- built before any lyric
-  // derivation runs later in load().
+  // Build table of hyphenated words (combining hard-coded words, and words from the song title and lyrics below)
   this._scoreData.hyphenPositions = this._hyphenPositionsTable(
     this._hyphenatedWords[lang] ?? [],
     [this._scoreData.scoreMetadata.title, ...this._scoreData.scoreMetadata.stanzas].filter(Boolean)
@@ -1387,7 +1402,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
       this._scoreData.measuresById[measureId] = {
         measureId: measureId,
         measureType: null, // Added later (after durationQ is known)
-        timeSignature: timeSignature,
+        timeSignature: [...timeSignature],
         isFirstMeasure: (this._scoreData.measures.length === 0),
         isLastMeasure: (this._scoreData.measures.length === numMeasures - 1),
         rightBarLine: measure.getAttribute('right') ?? 'single',
@@ -1489,7 +1504,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
     return;
   }
   this._scoreData.staffNumbers = Array.from(this._scoreData.meiParsed.querySelectorAll('staffDef')).map(sf => Number.parseInt(sf.getAttribute('n')));
-  this._scoreData.hasLyrics = this._scoreData.meiParsed.querySelector('verse') !== null;
+  this._scoreData.features.hasLyrics = this._scoreData.meiParsed.querySelector('verse') !== null;
   const chordPositionIndex = this._indexChordPositions(vrvTimemap);
   this._scoreData.numChordPositions = chordPositionIndex.qstamps.length - 1;
   this._normalizeParts(chordPositionIndex);
@@ -1580,14 +1595,13 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
         const [staffPartIds, melodyPartIds] = getStaffPartIds(staffNumber, chordPositionCounter, this._scoreData.parts);
         note.partIds = staffPartIds.length > Math.abs(staffPartIndex) ? staffPartIds.at(staffPartIndex) : [];
         note.meiElement.setAttribute('ch-part-id', note.partIds.join(' '));
+        this._scoreData.features.hasPartInfo = true;
 
         if (melodyPartIds.length && note.partIds.some(partId => melodyPartIds.includes(partId))) {
-          // Multiple parts can be flagged isMelody at once for a 'Two-Part' template (see
-          // hasTwoPartMelody / _buildPartsFromTemplate), so more than one note here can be
-          // tagged ch-melody. melodyNote itself stays singular (first found), since it's
-          // used elsewhere (showMelodyOnly staff choice, MIDI) as "the" reference melody note.
+          // Two-part songs have multiple melodies (example: A Child’s Prayer). Tag notes from both melodies, but choose the first for melodyNote, which is expected to be singular downstream.
           note.meiElement.setAttribute('ch-melody', '');
           note.isMelody = true;
+          this._scoreData.features.hasMelodyInfo = true;
           if (!melodyNote) melodyNote = note;
         } else {
           note.isMelody = false;
@@ -1658,6 +1672,9 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   // Add attributes to intro brackets: @ch-intro-bracket
   // Add attributes to dir, harm, and fermata: @ch-chord-position
   let currentMeasureId = null;
+  this._scoreData.features.hasOstinato = (this._scoreData.scoreMetadata.header ?? [])
+    .concat(this._scoreData.scoreMetadata.footer ?? [])
+    .some(block => this._ostinatoMark.test(block.text));
   const chordPositionQstamps = this._scoreData.chordPositions.map(cpInfo => cpInfo.startQ).concat([this._scoreData.chordPositions.at(-1).endQ]);
   for (const element of this._scoreData.meiParsed.querySelectorAll('measure, dir, harm, fermata')) {
     if (element.matches('measure')) {
@@ -1677,9 +1694,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
         const refNote = elementsById.get(startid);
         chordPosition = Number.parseInt(refNote?.getAttribute('ch-chord-position'));
         if (Number.isNaN(chordPosition)) {
-          // Only notes and rests are given chord positions, so a fermata Verovio
-          // anchored to an invisible <space> -- the filler a voice resting under a
-          // held chord gets -- has to be placed by when it sounds instead.
+          // Handle fermatas placed on a space or barline
           qstamp = this._qstampOfUnnumbered(refNote);
           chordPosition = qstamp == null ? null : this._bisectLeft(chordPositionQstamps, qstamp);
         } else {
@@ -1708,7 +1723,9 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
         element.setAttribute('ch-intro-bracket', 'end');
       } else if (this._roundMarkerPattern.test(elementText)) {
         element.setAttribute('ch-round-marker', '');
+        this._scoreData.features.hasRound = true;
       }
+      if (this._ostinatoMark.test(elementText)) this._scoreData.features.hasOstinato = true;
 
       // If qstamp is at the end of the measure, right-align it to prevent it from sticking out too far
       // See https://github.com/rism-digital/verovio/issues/4239
@@ -1722,9 +1739,16 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
     }
   }
 
-  this._scoreData.hasPartInfo = this._scoreData.meiParsed.querySelector('[ch-part-id]') !== null;
-  this._scoreData.hasMelodyInfo = this._scoreData.meiParsed.querySelector('[ch-melody]') !== null;
-  this._scoreData.hasExpansion = this._scoreData.meiParsed.querySelector('expansion[plist]') != null;
+  this._scoreData.features.hasExpansion = this._scoreData.meiParsed.querySelector('expansion[plist]') != null;
+  this._scoreData.features.hasPickupMeasure = this._scoreData.measures[0]?.measureType === 'partial-pickup';
+  // A part is named for the voice it carries, with a number when a voice is split ("alto-2")
+  const partNames = this._scoreData.parts.map(part => part.partId.split('-')[0]);
+  this._scoreData.features.hasDescant = partNames.includes('descant');
+  this._scoreData.features.hasObbligato = partNames.includes('obbligato');
+  // The melody as MIDI pitches, in the order it's printed
+  this._scoreData.melodyPitches = this._scoreData.chordPositions
+    .map(chordPositionInfo => chordPositionInfo.melodyNote?.pitch)
+    .filter(pitch => Number.isInteger(pitch));
   this._normalizeSections(); // After parts and intro brackets are available
   this._normalizeChordSets(); // After <harm> elements have chord positions
 
@@ -1739,10 +1763,15 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   const meiPnameAccid = meiPname ? (meiPname + (['f', 's'].includes(meiAccid) ? meiAccid : '')) : null;
   const tonality = keySignatureElement?.getAttribute('mode') ?? scoreDefElement?.getAttribute('key.mode') ?? 'major';
   const keySignatures = this._getKeySignatures(tonality);
-  const [defaultKeySignatureId, defaultKeySignatureInfo] = Object.entries(keySignatures).find(ks => (ks[1].meiSig === meiSig || ks[1].meiPnameAccid === meiPnameAccid));
+  const defaultKeySignatureEntry = Object.entries(keySignatures).find(ks => (ks[1].meiSig === meiSig || ks[1].meiPnameAccid === meiPnameAccid));
+  if (!defaultKeySignatureEntry) {
+    console.error(`Error: Unrecognized key signature (sig: ${meiSig}, pname: ${meiPnameAccid}, mode: ${tonality}).`);
+  }
+  this._scoreData.keySignatures = this._getKeySignatureIds(tonality);
+  const [defaultKeySignatureId, defaultKeySignatureInfo] = defaultKeySignatureEntry ?? [null, null];
 
   // Get nearby key signatures
-  const nearbyKeySignatureIds = Object.keys(keySignatures);
+  const nearbyKeySignatureIds = defaultKeySignatureEntry ? Object.keys(keySignatures) : [];
   const midpointIndex = (nearbyKeySignatureIds.length - 1) / 2;
   const keyIndex = nearbyKeySignatureIds.indexOf(defaultKeySignatureId);
   if (keyIndex < midpointIndex) {
@@ -1768,11 +1797,11 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
       ...keySignatureInfo,
     });
   }
-  this._scoreData.keySignatureInfo = {
+  this._scoreData.keySignatureInfo = defaultKeySignatureEntry ? {
     keySignatureId: defaultKeySignatureId,
     nearbyKeySignatures: nearbyKeySignatures,
     ...defaultKeySignatureInfo,
-  }
+  } : null;
 
   // Get expanded chord positions (expand verses, repeats, codas, etc. based on score map)
   // Add attributes to verse elements: @ch-section-id, @ch-chorus
@@ -1890,12 +1919,13 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
       }
     }
   }
+  this._scoreData.tempos = this._normalizeTempos(tempoElements);
 
   // Check for various features
-  this._scoreData.hasIntroBrackets = this._scoreData.meiParsed.querySelector('[ch-intro-bracket]') !== null;
-  this._scoreData.hasChordSets = this._scoreData.chordSets.length > 0;
-  this._scoreData.hasFingeringMarks = this._scoreData.meiParsed.querySelector('fing') !== null;
-  this._scoreData.hasLyricSectionIds = this._scoreData.meiParsed.querySelector('[ch-section-id]') !== null;
+  this._scoreData.features.hasIntroBrackets = this._scoreData.meiParsed.querySelector('[ch-intro-bracket]') !== null;
+  this._scoreData.features.hasChordSets = this._scoreData.chordSets.length > 0;
+  this._scoreData.features.hasFingeringMarks = this._scoreData.meiParsed.querySelector('fing') !== null;
+  this._scoreData.features.hasLyricSectionIds = this._scoreData.meiParsed.querySelector('[ch-section-id]') !== null;
 
   // Normalize slurs by attaching them to chords when possible
   // This allows slurs to remain visible if notes are removed from the chord (such as when showing/hiding parts). This also makes the start and end points more precise (for example, in "The Morning Breaks" (1985 Hymns), without this change, the slur above "shadows" starts at the top of the note stem instead of close to the notehead).
@@ -1940,14 +1970,8 @@ const CH_INLINE_VERSE_NUMBER = /^\s*\(?(\d+\s*[.)])\s*/;
 ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
   if (meiParsed.querySelector('verse label')) return;
 
-  // Every staff carrying lyrics prints its own copy of the numbers and numbers its
-  // own lines from 1, so a staff's lyric lines are read on their own. A line can be
-  // numbered more than once, where a score lays its stanzas out one after another
-  // rather than stacking them — example: "Were You There?" (Hymns for Home and Church)
   const versesByStaff = new Map();
   for (const verse of meiParsed.querySelectorAll('verse')) {
-    // Empty verse elements are removed later; one landing first for a line would
-    // cost the staff the number it does carry
     if (verse.textContent.trim() === '') continue;
     const staffNumber = verse.closest('staff')?.getAttribute('n') ?? '';
     const lineNumber = Number.parseInt(verse.getAttribute('n'));
@@ -1959,9 +1983,6 @@ ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
   }
 
   for (const versesByLineNumber of versesByStaff.values()) {
-    // A staff engraves its numbers inline or it doesn't: every line has to start with
-    // its own number for any of them to be read as one, which is what tells a verse
-    // number from a lyric that merely starts with a digit
     let engravesNumbersInline = true;
     for (let lineNumber = 1; lineNumber <= versesByLineNumber.size; lineNumber++) {
       const syl = versesByLineNumber.get(lineNumber)?.[0].querySelector('syl');
@@ -1973,8 +1994,7 @@ ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
     }
     if (!engravesNumbersInline) continue;
 
-    // Each stanza's number moves out of the syllable it was engraved in, the ones
-    // that start a lyric line and the ones that start a later stanza of it alike
+    // Each stanza's number moves out of the syllable it was engraved in
     for (const verses of versesByLineNumber.values()) {
       for (const verse of verses) {
         const syl = verse.querySelector('syl');
@@ -1995,7 +2015,7 @@ ChScore.prototype._updateMei = function () {
 
   // Set chord set visibility
   // Add attributes to chord symbols: @ch-superscript
-  if (this._scoreData.hasChordSets) {
+  if (this._scoreData.features.hasChordSets) {
     const harmStaffNumber = this._scoreData.meiParsed.querySelector('[ch-melody]')?.closest('staff')?.getAttribute('n') ?? '1';
     const chordSet = this._scoreData.chordSetsById[this._currentOptions.showChordSet];
     if (chordSet) {
@@ -2033,7 +2053,7 @@ ChScore.prototype._updateMei = function () {
   }
 
   // Set fingering mark visibility
-  if (this._scoreData.hasFingeringMarks && !this._currentOptions.showFingeringMarks) {
+  if (this._scoreData.features.hasFingeringMarks && !this._currentOptions.showFingeringMarks) {
     for (const fingeringMark of this._scoreData.meiParsed.querySelectorAll('fing')) {
       fingeringMark.remove();
     }
@@ -2048,7 +2068,7 @@ ChScore.prototype._updateMei = function () {
   // TODO: Fix cases where the melody includes a part without lyrics attached. Known cases in 1985 Hymns: "The Lord Is My Shepherd" (#108, #316) (melody starts on Alto, then Soprano); "High on the Mountain Top" (#333) (melody starts on Tenor, then Bass); "I Need Thee Every Hour" (#334) (melody on Tenor 2); "Brightly Beams Our Father’s Mercy" (#335) (melody on Tenor 2); "School Thy Feelings" (#336) (melody starts on Tenor 2, then Tenor 1, then Tenor 2). For now, I marked the part with lyrics as the melody on those hymns.
   // TODO: Allow filtering to any part(s). Challenges: If layer/voice 1 in a staff is removed, the layer that remains may have empty spaces that need to be filled in with notes or rests copied from layer 1. Also, lyrics need to be attached to a part that remains visible.
   // See https://github.com/music-encoding/music-encoding/issues/1709
-  if (this._currentOptions.showMelodyOnly && this._scoreData.hasMelodyInfo) {
+  if (this._currentOptions.showMelodyOnly && this._scoreData.features.hasMelodyInfo) {
     const deletedElementIds = [];
     // Remove non-melody notes and rests
     for (const element of this._scoreData.meiParsed.querySelectorAll(`note:not([ch-melody]), rest:not([ch-melody]), mRest`)) {
@@ -2141,9 +2161,9 @@ ChScore.prototype._updateMei = function () {
     // Expand sections, endings, codas, etc.
     // TODO: Look into using Verovio's built-in expansion option (get expanded MEI, then edit to clean up endings, barlines, lyrics, etc.). Potential benefits would be automatic handling for cross-section ties (potentially – need to test), automatic generation of unique IDs, etc. The downside is less control over the output.
     const sectionIds = expansion.getAttribute('plist').split(' ').map(ref => ref.substring(1));
-    if (this._currentOptions.expandScore === 'full-score' && this._scoreData.hasExpansion) {
+    if (this._currentOptions.expandScore === 'full-score' && this._scoreData.features.hasExpansion) {
       const singleLineSectionIds = new Set();
-      const isTwoPart = this._scoreData.hasTwoPartMelody;
+      const isTwoPart = this._scoreData.features.hasTwoPartMelody;
 
       // Gather section contents
       // TODO: No need to get previous element siblings if this is fixed in Verovio code. Example: "This Is the Christ" (Hymns—For Home and Church)
@@ -2170,24 +2190,21 @@ ChScore.prototype._updateMei = function () {
         for (const element of sectionsById[sectionId]) element.remove();
       }
 
-      // Create new section elements, tagged with which playthrough of the song each is:
-      // reaching a section this playthrough already sang means the music has come back
-      // round. Not the same as the `-rendN` suffix, which counts playthroughs of one element
-      // — an ending is `-rend1` of itself but belongs to the body rendition before it.
-      let renditionNumber = 0;
-      const sectionIdsThisRendition = new Set();
+      // Create new section elements, tagged with which playthrough of the song each is
+      let iterationNumber = 0;
+      const sectionIdsThisIteration = new Set();
       for (const sectionId of sectionIds) {
-        if (renditionNumber === 0 || sectionIdsThisRendition.has(sectionId)) {
-          renditionNumber += 1;
-          sectionIdsThisRendition.clear();
+        if (iterationNumber === 0 || sectionIdsThisIteration.has(sectionId)) {
+          iterationNumber += 1;
+          sectionIdsThisIteration.clear();
         }
-        sectionIdsThisRendition.add(sectionId);
+        sectionIdsThisIteration.add(sectionId);
         sectionIdCounter[sectionId] += 1;
         for (const element of sectionsById[sectionId]) {
           const newElement = element.cloneNode(true);
           this._suffixIds(newElement, `-rend${sectionIdCounter[sectionId]}`);
           if (newElement.matches('section, ending')) {
-            newElement.setAttribute('ch-rendition', renditionNumber);
+            newElement.setAttribute('ch-iteration', iterationNumber);
           }
           parentSection.append(newElement);
         }
@@ -2198,8 +2215,8 @@ ChScore.prototype._updateMei = function () {
         const endingSection = this._createMeiElement(this._scoreData.meiParsed, 'section');
         endingSection.setAttribute('xml:id', ending.getAttribute('xml:id'));
         endingSection.setAttribute('ch-chord-position', ending.getAttribute('ch-chord-position'));
-        if (ending.hasAttribute('ch-rendition')) {
-          endingSection.setAttribute('ch-rendition', ending.getAttribute('ch-rendition'));
+        if (ending.hasAttribute('ch-iteration')) {
+          endingSection.setAttribute('ch-iteration', ending.getAttribute('ch-iteration'));
         }
         ending.before(endingSection);
         while (ending.firstChild) {
@@ -2233,52 +2250,49 @@ ChScore.prototype._updateMei = function () {
       let currentSectionChordPositions = null;
       let currentExpandedChordPositions = null;
       let currentSectionOriginalId = null;
-      let currentRendition = 0;
+      let currentIteration = 0;
       const sectionElements = this._scoreData.meiParsed.querySelectorAll('section[type="introduction"], section:not([type="introduction"]) > section');
 
-      // For a 'Two-Part' score it's @ch-rendition that says which part is singing, not the
-      // walk's pass number: the walk counts visits *per chord position*, so a repeat ending
-      // whose positions no body range covered reads as pass 1 however many renditions
-      // precede it. _gatherSyllables' tail-word handling works around the same mismatch.
-      const renditionOf = section => Number.parseInt(section.getAttribute('ch-rendition')) || 0;
+      // For a two-part song, @ch-iteration indicates which part is singing, not the walk's pass number. The walk counts visits per chord position, so a repeat ending whose positions no body range covered reads as pass 1 however many iterations precede it. _gatherSyllables' tail-word handling works around the same mismatch.
+      const iterationOf = section => Number.parseInt(section.getAttribute('ch-iteration')) || 0;
       const melodyPartIds = this._scoreData.melodyPartIds;
       // A chord takes its part from the notes inside it
       const partIdOf = element => element.getAttribute('ch-part-id')
         ?? element.querySelector('note[ch-part-id]')?.getAttribute('ch-part-id');
 
-      // A labelled pickup ("(3.)" in "A Child’s Prayer", 1989 CSB) leads *into* the verse it
-      // names, so it sounds at the end of the rendition before that one, not with its part.
+      // A labelled pickup ("(3.)" in "A Child’s Prayer", 1989 CSB) leads into the verse it
+      // names, so it sounds at the end of the iteration before that one, not with its part.
       // The label sits on the word's first syllable only, so the state runs on until the
       // next word start resets it. Keyed by note rather than verse, and built up front,
       // because the replay prunes verses.
-      const pickupRenditionByElement = new Map();
+      const pickupIterationByElement = new Map();
       if (isTwoPart) {
         for (const section of sectionElements) {
-          const pickupRenditionByLine = {};
+          const pickupIterationByLine = {};
           for (const verse of section.querySelectorAll('verse')) {
             const lyricLineId = verse.getAttribute('ch-lyric-line-id');
             if (this._startsWord(verse)) {
               const pickupVerse = this._pickupVerseNumber(verse);
-              pickupRenditionByLine[lyricLineId] = pickupVerse == null ? null : pickupVerse - 1;
+              pickupIterationByLine[lyricLineId] = pickupVerse == null ? null : pickupVerse - 1;
             }
-            const pickupRendition = pickupRenditionByLine[lyricLineId];
-            if (pickupRendition == null) continue;
+            const pickupIteration = pickupIterationByLine[lyricLineId];
+            if (pickupIteration == null) continue;
             const noteOrChord = verse.closest('note, chord');
             if (!noteOrChord) continue;
-            pickupRenditionByElement.set(noteOrChord, pickupRendition);
+            pickupIterationByElement.set(noteOrChord, pickupIteration);
             // A chord is rested out as a whole, so it needs the mark its notes carry
             const chord = noteOrChord.parentElement?.closest('chord');
-            if (chord) pickupRenditionByElement.set(chord, pickupRendition);
+            if (chord) pickupIterationByElement.set(chord, pickupIteration);
           }
         }
       }
-      // Whether a part's note is sung in a given rendition: a pickup only in the rendition
+      // Whether a part's note is sung in a given iteration: a pickup only in the iteration
       // it leads out of, anything else whenever its own part is singing — and once every
       // part has had its pass, they all sing.
-      const soundsInRendition = (element, rendition) => {
-        const pickupRendition = pickupRenditionByElement.get(element);
-        if (pickupRendition != null) return rendition === pickupRendition;
-        const singingPartId = melodyPartIds[rendition - 1]; // undefined once all have sung
+      const soundsInIteration = (element, iteration) => {
+        const pickupIteration = pickupIterationByElement.get(element);
+        if (pickupIteration != null) return iteration === pickupIteration;
+        const singingPartId = melodyPartIds[iteration - 1]; // undefined once all have sung
         return !singingPartId || partIdOf(element) === singingPartId;
       };
       // Replay the sequence recorded at parse time rather than walking it again.
@@ -2304,7 +2318,7 @@ ChScore.prototype._updateMei = function () {
           currentExpandedChordPositions = [];
           // The extracted introduction section carries no xml:id
           currentSectionOriginalId = currentSection.getAttribute('xml:id')?.split('-rend')[0] ?? null;
-          currentRendition = renditionOf(currentSection);
+          currentIteration = iterationOf(currentSection);
           elements = currentSection.querySelectorAll(selector);
         }
         currentExpandedChordPositions.push(ecpCounter);
@@ -2327,7 +2341,7 @@ ChScore.prototype._updateMei = function () {
             const isTwoPartMelodyNote = isTwoPart && melodyPartIds.includes(partIdOf(element));
             let keptVerseIndex = -1;
             if (isTwoPartMelodyNote) {
-              if (soundsInRendition(element, currentRendition)) keptVerseIndex = 0;
+              if (soundsInIteration(element, currentIteration)) keptVerseIndex = 0;
             } else {
               keptVerseIndex = this._verseSoundingAt(verseElements, passNumber, isSingleLine);
             }
@@ -2355,12 +2369,12 @@ ChScore.prototype._updateMei = function () {
       if (isTwoPart) {
         for (const section of sectionElements) {
           if (section.getAttribute('type') === 'introduction') continue;
-          const rendition = renditionOf(section);
+          const iteration = iterationOf(section);
           for (const element of section.querySelectorAll('note, chord')) {
             // A chord is rested out as a whole, so its own notes aren't handled separately
             if (element.matches('note') && element.parentElement.closest('chord')) continue;
             if (!melodyPartIds.includes(partIdOf(element))) continue;
-            if (!soundsInRendition(element, rendition)) silentSet.add(element);
+            if (!soundsInIteration(element, iteration)) silentSet.add(element);
           }
         }
       }
@@ -2404,18 +2418,9 @@ ChScore.prototype._updateMei = function () {
           }
         }
 
-        // A beam or tuplet left holding nothing but rests becomes the one rest that spans
-        // it — "A Child’s Prayer"'s silenced triplet pickup reads as a single quarter rest
-        // rather than three triplet rests. Only whole containers are collapsed: merging
-        // adjacent rests in general has to respect where the beat falls, which a duration
-        // sum on its own can't tell. Walked innermost-first so a nested container settles
-        // before the one holding it.
+        // Collapse rests from beamed or tuplet notes into a single rest. Example: "A Child’s Prayer" (Children’s Songbook)
         for (const layer of layers) {
           for (const container of Array.from(layer.querySelectorAll('beam, tuplet')).reverse()) {
-            // Already swallowed by a container inside it: replaceWith leaves the node
-            // parentless. Not isConnected -- during expansion the rendition being rebuilt
-            // is not attached to the document yet, and linkedom calls all of it
-            // disconnected, which skipped every container there was.
             if (!container.parentNode) continue;
             const events = this._layerEvents(container);
             if (events.length === 0 || !events.every(event => event.matches('rest'))) continue;
@@ -2423,7 +2428,6 @@ ChScore.prototype._updateMei = function () {
             if (durations.some(duration => duration == null)) continue;
             const attributes = this._restAttributesFor(durations.reduce((sum, d) => sum + d, 0));
             if (!attributes) continue;
-            // The collapsed rest starts where the run started
             const rest = restLike(events[0], ['ch-chord-position', 'ch-expanded-chord-position']);
             rest.setAttribute('dur', attributes.dur);
             if (attributes.dots) rest.setAttribute('dots', attributes.dots);
@@ -2431,11 +2435,7 @@ ChScore.prototype._updateMei = function () {
           }
         }
 
-        // Drop beams left holding nothing but rests, and any spanning element that pointed
-        // at a note that is now gone
-        // Only a measure holding a silenced layer can have been left with either, and
-        // `[startid], [endid], [plist]` over the whole expanded MEI is the most expensive
-        // selector on this path — so both sweeps stay inside the measures actually touched
+        // Drop beams and spanning elements that pointed at a note that was replaced by a rest
         const touchedMeasures = new Set([...layers].map(layer => layer.closest('measure')));
         for (const measure of touchedMeasures) {
           for (const beam of measure.querySelectorAll('beam')) {
@@ -2451,8 +2451,8 @@ ChScore.prototype._updateMei = function () {
       }
 
       // A verse the replay never reached keeps its engraved lyric line number, which Verovio
-      // renders as a *second* row of words under the staff. An expanded score shows one
-      // verse per staff per rendition, so every surviving melody verse belongs on line 1 —
+      // renders as a second row of words under the staff. An expanded score shows one
+      // verse per staff per iteration, so every surviving melody verse belongs on line 1 —
       // a genuine secondary line, already renumbered to 2 above, is the only exception.
       for (const verse of this._scoreData.meiParsed.querySelectorAll(
         ':is(note[ch-melody], chord:has([ch-melody])) verse:not([ch-secondary])')) {
@@ -2597,7 +2597,7 @@ ChScore.prototype._updateSvg = function (svg) {
   }
 
   // Improve appearance of chord symbols
-  if (this._scoreData.hasChordSets && this._currentOptions.showChordSet) {
+  if (this._scoreData.features.hasChordSets && this._currentOptions.showChordSet) {
     const chordTexts = svgParsed.querySelectorAll('.harm > text');
     for (const chordText of chordTexts) {
       chordText.setAttribute('text-anchor', 'middle');
@@ -2878,7 +2878,7 @@ ChScore.prototype._updateSvg = function (svg) {
   }
 
   // Loop through lyrics by system and staff
-  if (this._scoreData.hasLyrics) {
+  if (this._scoreData.features.hasLyrics) {
     const lyricFontSize = Number.parseInt(svgParsed.querySelector('.verse tspan[font-size]:not([font-size="0px"])')?.getAttribute('font-size'));
     const lyricPadding = lyricFontSize / 8;
     for (const system of systems) {
@@ -3607,7 +3607,7 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
   // Add repeat barlines
   const originalMeasures = Array.from(meiParsed.querySelectorAll('measure'));
   const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed);
-  if (!this._scoreData.hasRepeatOrJump && verseNumbers.length > 1) {
+  if (!this._scoreData.features.hasRepeatOrJump && verseNumbers.length > 1) {
     originalMeasures[0].setAttribute('left', 'rptstart');
     originalMeasures.at(-1).setAttribute('right', 'rptend');
   }
@@ -3776,6 +3776,7 @@ ChScore.prototype._defaultVerovioOptions = {
     'note@ch-part-id', 'note@ch-melody',
     'rest@ch-part-id', 'rest@ch-melody',
     'verse@ch-section-id', 'verse@ch-secondary', 'verse@ch-chorus',
+    'section@ch-iteration', 'ending@ch-iteration',
   ],
 };
 
@@ -3837,6 +3838,72 @@ ChScore.prototype._keySignatures = {
 
 ChScore.prototype._getKeySignatures = function (tonality = 'major') {
   return this._keySignatures[tonality];
+}
+
+ChScore.prototype._tempoNotes = { 1: 'whole', 2: 'half', 4: 'quarter', 8: 'eighth' };
+ChScore.prototype._tempoRange = /=\s*(\d+)(?:\s*[-–]\s*(\d+))?/;
+ChScore.prototype._tempoNoteChars = {
+  '': 'whole', '': 'half', '': 'half', '': 'quarter',
+  '': 'quarter', '': 'eighth', '': 'eighth',
+};
+ChScore.prototype._tempoAugmentationDot = '';
+
+// The note a metronome mark counts in, read off the glyph it's engraved with
+ChScore.prototype._glyphTempoNote = function (text) {
+  for (const character of text ?? '') {
+    const tempoNote = this._tempoNoteChars[character];
+    if (tempoNote) {
+      return text.includes(this._tempoAugmentationDot) ? `${tempoNote}-dotted` : tempoNote;
+    }
+  }
+  return null;
+}
+
+// Set default tempo by averaging upper and lower tempo numbers
+ChScore.prototype._normalizeTempos = function (tempoElements) {
+  const tempos = [];
+  for (const tempoElement of tempoElements) {
+    const range = this._tempoRange.exec(tempoElement.textContent);
+    if (!range) continue;
+    const tempoLower = Number.parseInt(range[1]);
+    const tempoUpper = range[2] ? Number.parseInt(range[2]) : tempoLower;
+    const tempoDefault = Math.trunc((tempoLower + tempoUpper) / 2);
+    const meiUnit = Number.parseInt(tempoElement.getAttribute('mm.unit'));
+    const meiDots = Number.parseInt(tempoElement.getAttribute('mm.dots')) || 0;
+    const meiNote = this._tempoNotes[meiUnit] ?? null;
+    const glyphNote = this._glyphTempoNote(tempoElement.textContent);
+
+    if (meiNote) {
+      // A dot adds half of what came before it, so a double-dotted note counts 1.75 beats
+      let dottedMultiplier = 1;
+      for (let d = 0; d < meiDots; d++) dottedMultiplier += 0.5 ** (d + 1);
+      tempoElement.setAttribute('mm', tempoDefault);
+      tempoElement.setAttribute('midi.bpm', Math.trunc(tempoDefault * (4 / meiUnit) * dottedMultiplier));
+    }
+
+    tempos.push({
+      tempoNote: (meiNote && meiDots === 1) ? `${meiNote}-dotted` : (meiNote ?? glyphNote),
+      tempoLower: tempoLower,
+      tempoUpper: tempoUpper,
+      tempoDefault: tempoDefault,
+    });
+  }
+  return tempos;
+}
+
+// Every key the score is written in, as slugs ("e-flat-major"), in printed order
+ChScore.prototype._getKeySignatureIds = function (tonality = 'major') {
+  const keySignatures = Object.entries(this._getKeySignatures(tonality));
+  const keySignatureIds = [];
+  for (const element of this._scoreData.meiParsed.querySelectorAll('keySig, scoreDef[key\\.sig], staffDef[key\\.sig]')) {
+    const meiSig = element.getAttribute('sig') ?? element.getAttribute('key.sig');
+    const meiPname = element.getAttribute('pname') ?? element.getAttribute('key.pname');
+    const meiAccid = element.getAttribute('accid') ?? element.getAttribute('key.accid');
+    const meiPnameAccid = meiPname ? (meiPname + (['f', 's'].includes(meiAccid) ? meiAccid : '')) : null;
+    const entry = keySignatures.find(ks => (ks[1].meiSig === meiSig || ks[1].meiPnameAccid === meiPnameAccid));
+    if (entry && entry[0] !== keySignatureIds.at(-1)) keySignatureIds.push(entry[0]);
+  }
+  return keySignatureIds;
 }
 
 
@@ -3953,7 +4020,7 @@ ChScore.prototype._normalizeParts = function (chordPositionIndex) {
     this._scoreData.partsTemplate ||= this._derivePartsTemplate(chordPositionIndex);
     this._scoreData.parts = this._buildPartsFromTemplate(
       this._scoreData.partsTemplate, this._scoreData.staffNumbers,
-      this._scoreData.numChordPositions, this._scoreData.hasLyrics
+      this._scoreData.numChordPositions, this._scoreData.features.hasLyrics
     );
   }
 
@@ -3963,19 +4030,19 @@ ChScore.prototype._normalizeParts = function (chordPositionIndex) {
   }
 
   // The melody-eligible parts, in the order they sing: for a 'Two-Part' template ('P+P',
-  // independent melody lines on separate staves) part-N sings rendition N, so the order is
+  // independent melody lines on separate staves) part-N sings iteration N, so the order is
   // load-bearing. More than one means two-part; 'Duet' ('PP', one shared staff) yields one.
   this._scoreData.melodyPartIds = Object.values(this._scoreData.partsById)
     .filter(part => /^part-\d+$/.test(part.partId) && Object.values(part.chordPositionRefs).some(ref => ref.isMelody))
     .map(part => part.partId);
-  this._scoreData.hasTwoPartMelody = this._scoreData.melodyPartIds.length > 1;
+  this._scoreData.features.hasTwoPartMelody = this._scoreData.melodyPartIds.length > 1;
 }
 
 // Derive a likely parts template heuristically, from what each staff looks like
 ChScore.prototype._derivePartsTemplate = function (chordPositionIndex) {
   // Nothing is sung, so every staff is an instrument — answered without reading the
   // engraving, which also lets this be asked of a score that has none
-  if (!this._scoreData.hasLyrics) return 'I';
+  if (!this._scoreData.features.hasLyrics) return 'I';
 
   // Staves as a template with no chord position on it. Nothing sung anywhere is one 'I'
   // for the score, not one per staff.
@@ -4790,12 +4857,12 @@ ChScore.prototype._normalizeSections = function () {
     return sections;
   }
 
-  this._scoreData.hasRepeatOrJump = !!this._scoreData.meiParsed.querySelector('repeatMark, coda, segno, ending, measure:is([left="rptstart"], [left="rptboth"], [right="rptend"], [right="rptboth"]), dir:is([type="coda"], [type="tocoda"], [type="segno"], [type="dalsegno"], [type="dacapo"], [type="fine"])')
+  this._scoreData.features.hasRepeatOrJump = !!this._scoreData.meiParsed.querySelector('repeatMark, coda, segno, ending, measure:is([left="rptstart"], [left="rptboth"], [right="rptend"], [right="rptboth"]), dir:is([type="coda"], [type="tocoda"], [type="segno"], [type="dalsegno"], [type="dacapo"], [type="fine"])')
 
   let hasPrebuiltSections = this._scoreData.sections.length > 0;
   const verseNumbers = this._getInlineVerseNumbers(this._scoreData.meiParsed);
   const hasIntroBrackets = this._getIntroBrackets(this._scoreData.meiParsed).length > 0;
-  const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionElement(this._scoreData.meiParsed, verseNumbers.length, hasIntroBrackets, this._scoreData.hasRepeatOrJump);
+  const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionElement(this._scoreData.meiParsed, verseNumbers.length, hasIntroBrackets, this._scoreData.features.hasRepeatOrJump);
 
   let introSection;
   let otherSections = [];
@@ -4833,7 +4900,7 @@ ChScore.prototype._normalizeSections = function () {
         });
       }
     }
-  } else if (this._scoreData.hasExpansion) {
+  } else if (this._scoreData.features.hasExpansion) {
     const expansion = this._scoreData.meiParsed.querySelector('expansion[plist]');
     const expansionSectionElementIds = expansion.getAttribute('plist').trim().split(' ').map(sid => sid.substring(1));
     for (const expansionSectionElementId of expansionSectionElementIds) {
@@ -5472,7 +5539,7 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
   // beyond the part count are dropped — whole words, since tail syllables carry no label of
   // their own and so are tracked per lyric line until the next word starts.
   const excludedVerses = new Set();
-  if (this._scoreData.hasTwoPartMelody) {
+  if (this._scoreData.features.hasTwoPartMelody) {
     const partCount = this._scoreData.melodyPartIds.length;
     const skipStateByLine = {};
     for (const verse of melodyVerses) {
@@ -5507,7 +5574,7 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
     // 'Two-Part' score — each part's own verse is alone on its own staff. That signal
     // doesn't apply here; only the melody-verse-count range.hasSingleLine (which does
     // count across staves) should gate the shortcut for a two-part score.
-    const chordPositionIsSingleLine = this._scoreData.hasTwoPartMelody
+    const chordPositionIsSingleLine = this._scoreData.features.hasTwoPartMelody
       ? false : this._scoreData.chordPositions[cp].isSingleLine;
     let verseElements = melodyVersesByChordPosition.get(cp) ?? [];
     if (excludedVerses.size > 0) verseElements = verseElements.filter(ve => !excludedVerses.has(ve));
@@ -5567,7 +5634,7 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
     }
   }
 
-  if (this._scoreData.hasTwoPartMelody) {
+  if (this._scoreData.features.hasTwoPartMelody) {
     // A part's tail word engraved in a shared repeat ending is walked before that part
     // resumes its own verse body, so it lands ahead of the run it belongs with
     // ("here." in "Love Is Spoken Here", 1989 CSB). Spotted as two adjacent same-line

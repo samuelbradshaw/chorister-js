@@ -124,7 +124,7 @@ describe('_normalizeParts()', () => {
       partsTemplate: null,
       staffNumbers: [1, 2],
       numChordPositions: 64,
-      hasLyrics: true,
+      features: { hasLyrics: true },
       // An engraving with nothing to read parts off, which is the case these cover:
       // _derivePartsTemplate finds no staffDef and _normalizeParts falls back to its
       // default melody + accompaniment. Real _scoreData always carries the parsed MEI.
@@ -153,7 +153,7 @@ describe('_normalizeParts()', () => {
     score._normalizeParts();
     const fromTemplate = score._buildPartsFromTemplate(
       score._scoreData.partsTemplate, score._scoreData.staffNumbers,
-      score._scoreData.numChordPositions, score._scoreData.hasLyrics);
+      score._scoreData.numChordPositions, score._scoreData.features.hasLyrics);
     expect(score._scoreData.parts.map(p => p.partId)).toEqual(fromTemplate.map(p => p.partId));
   });
 
@@ -1618,6 +1618,7 @@ describe('_getScoreMetadata()', () => {
     }));
 
     expect(metadata.header).toEqual([{
+      html: 'Hymns of Praise\nsecond line',
       text: 'Hymns of Praise\nsecond line',
       halign: 'center',
       valign: 'top',
@@ -1642,9 +1643,11 @@ describe('_getScoreMetadata()', () => {
               '<rend fontweight="bold">Second verse sung a cappella</rend></pgHead>',
     }));
 
-    expect(metadata.header[0].text)
+    expect(metadata.header[0].html)
       .toBe('<em>Words: Anon.</em>\n<em>Music: J. Battishill</em>');
-    expect(metadata.header[1].text).toBe('<strong>Second verse sung a cappella</strong>');
+    expect(metadata.header[1].html).toBe('<strong>Second verse sung a cappella</strong>');
+    // The same words, for reading rather than printing
+    expect(metadata.header[0].text).toBe('Words: Anon.\nMusic: J. Battishill');
   });
 
   it('should mark a styled run inside a text block up where it sits', () => {
@@ -1652,7 +1655,8 @@ describe('_getScoreMetadata()', () => {
       pgHead: '<pgHead><rend>Air from <rend fontstyle="italic">Orpheus</rend></rend></pgHead>',
     }));
 
-    expect(metadata.header[0].text).toBe('Air from <em>Orpheus</em>');
+    expect(metadata.header[0].html).toBe('Air from <em>Orpheus</em>');
+    expect(metadata.header[0].text).toBe('Air from Orpheus');
   });
 
   it('should carry a block’s printed lines as newlines, not paragraph markup', () => {
@@ -1665,7 +1669,7 @@ describe('_getScoreMetadata()', () => {
     // score says -- a block is the words printed, and <lb/> is where they break.
     expect(metadata.title).toBe('Sweet Hour of Prayer');
     expect(metadata.stanzas).toEqual(['3. Sweet hour of prayer\nThat calls me from a world of care']);
-    expect(metadata.footer[0].text)
+    expect(metadata.footer[0].html)
       .toBe('3. Sweet hour of prayer\nThat calls me from a world of care');
   });
 
@@ -1768,6 +1772,169 @@ describe('_getScoreMetadata()', () => {
       pgHead: '<pgHead><rend halign="left">Capo 3:</rend></pgHead>',
     }));
     expect(withLeftAligned.title).toBe('Come, Follow Me');
+  });
+
+  it('should take the largest centered heading as the title, whatever its order', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend halign="center" fontsize="7">Sacrament</rend>' +
+              '<rend halign="center" fontsize="16">In Humility, Our Savior</rend>' +
+              '<rend halign="center" fontsize="7">Alma 5:26–27</rend></pgHead>',
+    }));
+
+    expect(metadata.title).toBe('In Humility, Our Savior');
+    expect(metadata.supertitles).toEqual(['Sacrament']);
+    expect(metadata.subtitles).toEqual(['Alma 5:26–27']);
+  });
+
+  it('should read a centered block of several lines beside the title as neither', () => {
+    // An unnumbered stanza printed beside the music is centered like a heading, and
+    // reporting it as a subtitle would put a verse in the subtitle of half the corpus
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend halign="center" fontsize="16">Angels We Have Heard on High</rend>' +
+              '<rend halign="center" fontsize="9">Angels we have heard on high<lb/>Sweetly singing o’er the plains</rend></pgHead>',
+    }));
+
+    expect(metadata.title).toBe('Angels We Have Heard on High');
+    expect(metadata.subtitles).toEqual([]);
+  });
+
+  it('should let a title run to more than one printed line', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend halign="center" fontsize="16">Come, Ye Thankful<lb/>People, Come</rend>' +
+              '<rend halign="center" fontsize="7">Mark 4:26–29</rend></pgHead>',
+    }));
+
+    expect(metadata.title).toBe('Come, Ye Thankful\nPeople, Come');
+    expect(metadata.subtitles).toEqual(['Mark 4:26–29']);
+  });
+
+  it('should read neither printed verses nor a bare number as a heading', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend halign="center" fontsize="14">245</rend>' +
+              '<rend halign="center" fontsize="16">This House We Dedicate to Thee</rend>' +
+              '<rend halign="center" fontsize="9">1. This house we dedicate to Thee<lb/>2. Accept our gift</rend></pgHead>',
+    }));
+
+    expect(metadata.title).toBe('This House We Dedicate to Thee');
+    expect(metadata.supertitles).toEqual([]);
+    expect(metadata.subtitles).toEqual([]);
+    expect(metadata.numbers).toEqual(['245']);
+  });
+
+  it('should look for headings in the page header only', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend halign="center" fontsize="16">Israel, Israel, God Is Calling</rend></pgHead>',
+      pgFoot: '<pgFoot><rend halign="center" fontsize="20">Printed larger, but a footer</rend></pgFoot>',
+    }));
+
+    expect(metadata.title).toBe('Israel, Israel, God Is Calling');
+    expect(metadata.subtitles).toEqual([]);
+  });
+
+  it('should report no headings when the title came from titleStmt', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      fileDesc: '<titleStmt><title>Come, Follow Me</title></titleStmt>',
+      pgHead: '<pgHead><rend halign="left" fontsize="7">Words: Anon.</rend></pgHead>',
+    }));
+
+    expect(metadata.title).toBe('Come, Follow Me');
+    expect(metadata.supertitles).toEqual([]);
+    expect(metadata.subtitles).toEqual([]);
+  });
+
+  it('should report a capo marking, wherever it is printed', () => {
+    // Italics are read through: the marking is what the words say, styling and all
+    const inHeader = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend halign="left" fontstyle="italic">Capo 5 :</rend></pgHead>',
+    }));
+    expect(inHeader.capoMark).toBe('<em>Capo 5 :</em>');
+
+    const inFooter = score._getScoreMetadata(buildMei({
+      pgFoot: '<pgFoot><rend halign="left">Capo 3:</rend></pgFoot>',
+    }));
+    expect(inFooter.capoMark).toBe('Capo 3:');
+
+    // A block that only mentions a capo is prose, not the marking
+    const inProse = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend halign="left">Guitarists may capo 3 to play along.</rend></pgHead>',
+    }));
+    expect(inProse.capoMark).toBeNull();
+  });
+
+  it('should report printed numbers, and nothing else that has digits in it', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgHead: '<pgHead><rend halign="center"><strong>245</strong></rend>' +
+              '<rend halign="center">0</rend>' +
+              '<rend halign="center">3:7</rend>' +
+              '<rend halign="center">2 Nephi 4</rend></pgHead>',
+      pgFoot: '<pgFoot><rend halign="right">1</rend></pgFoot>',
+    }));
+
+    expect(metadata.numbers).toEqual(['245', '1']);
+  });
+});
+
+
+// ============================================================
+// _normalizeTempos
+// ============================================================
+describe('_normalizeTempos()', () => {
+  let score;
+  const parser = new DOMParser();
+
+  /** The <tempo> elements of a minimal MEI. */
+  function tempoElements(...tempos) {
+    return parser
+      .parseFromString(`<mei><music>${tempos.join('')}</music></mei>`, 'text/xml')
+      .querySelectorAll('tempo');
+  }
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  it('should read a single metronome mark', () => {
+    expect(score._normalizeTempos(tempoElements('<tempo mm="100" mm.unit="4"> = 100</tempo>'))).toEqual([
+      { tempoNote: 'quarter', tempoLower: 100, tempoUpper: 100, tempoDefault: 100 },
+    ]);
+  });
+
+  it('should take the middle of a printed range, and play it there', () => {
+    const elements = tempoElements('<tempo mm="84" mm.unit="4" midi.bpm="84"> = 84-92</tempo>');
+    const tempos = score._normalizeTempos(elements);
+
+    expect(tempos).toEqual([{ tempoNote: 'quarter', tempoLower: 84, tempoUpper: 92, tempoDefault: 88 }]);
+    expect(elements[0].getAttribute('mm')).toBe('88');
+    expect(elements[0].getAttribute('midi.bpm')).toBe('88');
+  });
+
+  it('should count a dotted note as the beats it lasts', () => {
+    const elements = tempoElements('<tempo mm="60" mm.unit="4" mm.dots="1"> = 60</tempo>');
+    const tempos = score._normalizeTempos(elements);
+
+    expect(tempos[0].tempoNote).toBe('quarter-dotted');
+    // A dotted quarter is 1.5 quarter notes, so 60 of them is 90 quarter notes a minute
+    expect(elements[0].getAttribute('midi.bpm')).toBe('90');
+  });
+
+  it('should report every mark, and skip text with no numbers in it', () => {
+    const tempos = score._normalizeTempos(tempoElements(
+      '<tempo mm="72" mm.unit="4"> = 72</tempo>',
+      '<tempo>Slower</tempo>',
+      '<tempo mm="120" mm.unit="2"> = 120</tempo>',
+    ));
+
+    expect(tempos.map(tempo => tempo.tempoDefault)).toEqual([72, 120]);
+    expect(tempos.map(tempo => tempo.tempoNote)).toEqual(['quarter', 'half']);
+  });
+
+  it('should name the note from the SMuFL glyph it is engraved with', () => {
+    // U+ECA3 metNoteHalfUp, U+ECB7 metAugmentationDot
+    const tempos = score._normalizeTempos(tempoElements(
+      '<tempo><rend glyph.auth="smufl"></rend> = 60</tempo>'));
+
+    expect(tempos[0].tempoNote).toBe('half-dotted');
   });
 });
 

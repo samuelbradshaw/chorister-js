@@ -74,19 +74,19 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
     });
 
     it('should have lyrics', () => {
-      expect(score._scoreData.hasLyrics).toBe(true);
+      expect(score._scoreData.features.hasLyrics).toBe(true);
     });
 
     it('should have part info', () => {
-      expect(score._scoreData.hasPartInfo).toBe(true);
+      expect(score._scoreData.features.hasPartInfo).toBe(true);
     });
 
     it('should have melody info', () => {
-      expect(score._scoreData.hasMelodyInfo).toBe(true);
+      expect(score._scoreData.features.hasMelodyInfo).toBe(true);
     });
 
     it('should have hasRepeatOrJump false (no repeats in the MusicXML)', () => {
-      expect(score._scoreData.hasRepeatOrJump).toBe(false);
+      expect(score._scoreData.features.hasRepeatOrJump).toBe(false);
     });
 
     it('should have 37 chord positions', () => {
@@ -319,7 +319,7 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
   // ── Intro brackets (single range) ──
   describe('Intro brackets — single range', () => {
     it('should detect intro brackets', () => {
-      expect(score._scoreData.hasIntroBrackets).toBe(true);
+      expect(score._scoreData.features.hasIntroBrackets).toBe(true);
     });
 
     it('should have exactly 2 dir elements with ch-intro-bracket (1 start + 1 end)', () => {
@@ -372,7 +372,7 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
     });
 
     it('should have hasLyricSectionIds true', () => {
-      expect(score._scoreData.hasLyricSectionIds).toBe(true);
+      expect(score._scoreData.features.hasLyricSectionIds).toBe(true);
     });
 
     it('section IDs should reference known sections', () => {
@@ -709,7 +709,7 @@ describe('How Great — plain load (no partsTemplate)', { timeout: 30000 }, () =
   });
 
   it('should detect intro brackets from the MusicXML', () => {
-    expect(score._scoreData.hasIntroBrackets).toBe(true);
+    expect(score._scoreData.features.hasIntroBrackets).toBe(true);
   });
 
   it('should detect 4 inline verse numbers from embedded lyrics', () => {

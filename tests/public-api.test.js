@@ -912,7 +912,7 @@ describe('_normalizeSections() — Section generation', () => {
     ChScore.prototype._drawScore = origDrawScore;
 
     const introSections = score._scoreData.sections.filter(s => s.type === 'introduction');
-    if (score._scoreData.hasIntroBrackets) {
+    if (score._scoreData.features.hasIntroBrackets) {
       expect(introSections.length).toBeGreaterThanOrEqual(1);
     }
   });
@@ -1115,7 +1115,7 @@ describe('_updateExpansionElement()', () => {
     await score.load('musicxml', { scoreContent: sampleMusicXml2 });
     ChScore.prototype._drawScore = origDrawScore;
 
-    expect(score._scoreData.hasExpansion).toBe(true);
+    expect(score._scoreData.features.hasExpansion).toBe(true);
   });
 
   it('should detect hasRepeatOrJump for scores with repeat barlines', async () => {
@@ -1124,7 +1124,7 @@ describe('_updateExpansionElement()', () => {
     await score.load('musicxml', { scoreContent: sampleMusicXml2 });
     ChScore.prototype._drawScore = origDrawScore;
 
-    expect(score._scoreData.hasRepeatOrJump).toBe(true);
+    expect(score._scoreData.features.hasRepeatOrJump).toBe(true);
   });
 
   it('should not detect hasRepeatOrJump for simple hymns', async () => {
@@ -1133,7 +1133,7 @@ describe('_updateExpansionElement()', () => {
     await score.load('musicxml', { scoreContent: sampleMusicXml });
     ChScore.prototype._drawScore = origDrawScore;
 
-    expect(score._scoreData.hasRepeatOrJump).toBe(false);
+    expect(score._scoreData.features.hasRepeatOrJump).toBe(false);
   });
 });
 
@@ -2679,7 +2679,7 @@ describe('_extractPianoIntroduction', () => {
     const hasRepeatOrJump = overrides.hasRepeatOrJump ?? false;
     const verseNumbers = overrides.verseNumbers || [1, 2];
     const ctx = {
-      _scoreData: { meiParsed, hasRepeatOrJump, sections },
+      _scoreData: { meiParsed, features: { hasRepeatOrJump }, sections },
       _getInlineVerseNumbers: () => verseNumbers,
       _getIntroBrackets: ChScore.prototype._getIntroBrackets,
       _createMeiElement: ChScore.prototype._createMeiElement,

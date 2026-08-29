@@ -84,7 +84,7 @@ export function resetScoreState(score) {
   score._scoreData.meiParsed = new DOMParser().parseFromString(
     score._scoreData.meiStringComplete, 'text/xml'
   );
-  if (score._scoreData.hasFingeringMarks) {
+  if (score._scoreData.features.hasFingeringMarks) {
     for (const fing of score._scoreData.meiParsed.querySelectorAll('fing')) fing.remove();
   }
   const scoreDef = score._scoreData.meiParsed.querySelector('scoreDef');

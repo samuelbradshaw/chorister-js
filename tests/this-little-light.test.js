@@ -75,15 +75,15 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
     });
 
     it('should have lyrics', () => {
-      expect(score._scoreData.hasLyrics).toBe(true);
+      expect(score._scoreData.features.hasLyrics).toBe(true);
     });
 
     it('should have part info', () => {
-      expect(score._scoreData.hasPartInfo).toBe(true);
+      expect(score._scoreData.features.hasPartInfo).toBe(true);
     });
 
     it('should have melody info', () => {
-      expect(score._scoreData.hasMelodyInfo).toBe(true);
+      expect(score._scoreData.features.hasMelodyInfo).toBe(true);
     });
 
     it('first measure should be a partial-pickup measure', () => {
@@ -111,11 +111,11 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
   // ── Repeat and endings ──
   describe('Repeat barlines and endings', () => {
     it('should have hasRepeatOrJump true', () => {
-      expect(score._scoreData.hasRepeatOrJump).toBe(true);
+      expect(score._scoreData.features.hasRepeatOrJump).toBe(true);
     });
 
     it('should have an expansion element in the MEI', () => {
-      expect(score._scoreData.hasExpansion).toBe(true);
+      expect(score._scoreData.features.hasExpansion).toBe(true);
     });
 
     it('should have ending elements in the original MEI', () => {
@@ -219,7 +219,7 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
   // ── No intro brackets ──
   describe('No intro brackets', () => {
     it('should not have intro brackets', () => {
-      expect(score._scoreData.hasIntroBrackets).toBe(false);
+      expect(score._scoreData.features.hasIntroBrackets).toBe(false);
     });
 
     it('should have zero ch-intro-bracket dir elements', () => {
@@ -378,7 +378,7 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
     });
 
     it('should have hasLyricSectionIds true', () => {
-      expect(score._scoreData.hasLyricSectionIds).toBe(true);
+      expect(score._scoreData.features.hasLyricSectionIds).toBe(true);
     });
   });
 
@@ -597,22 +597,22 @@ describe('This Little Light — plain load (no partsTemplate)', { timeout: 30000
   });
 
   it('should read its stanzas from more than one lyric line', () => {
-    expect(score._scoreData.hasExpansion).toBe(true);
+    expect(score._scoreData.features.hasExpansion).toBe(true);
     const sung = score._scoreData.sections.filter(section => section.annotatedLyrics);
     const lines = new Set(sung.flatMap(section => lyricLinesOf(section.sectionId)));
     expect(lines.size).toBeGreaterThan(1);
   });
 
   it('should have hasRepeatOrJump true', () => {
-    expect(score._scoreData.hasRepeatOrJump).toBe(true);
+    expect(score._scoreData.features.hasRepeatOrJump).toBe(true);
   });
 
   it('should have hasExpansion true', () => {
-    expect(score._scoreData.hasExpansion).toBe(true);
+    expect(score._scoreData.features.hasExpansion).toBe(true);
   });
 
   it('should not have intro brackets', () => {
-    expect(score._scoreData.hasIntroBrackets).toBe(false);
+    expect(score._scoreData.features.hasIntroBrackets).toBe(false);
   });
 
   it('should not have chorus sections', () => {

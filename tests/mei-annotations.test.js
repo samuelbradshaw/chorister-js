@@ -133,7 +133,7 @@ describe('MEI annotations — SA+TB shared load', () => {
     });
 
     it('should have hasPartInfo true', () => {
-      expect(score._scoreData.hasPartInfo).toBe(true);
+      expect(score._scoreData.features.hasPartInfo).toBe(true);
     });
 
     it('should contain valid part ID strings matching known part names', () => {
@@ -311,7 +311,7 @@ describe('MEI annotations — plain sampleMusicXml shared load', () => {
     });
 
     it('should have hasLyricSectionIds true after loading', () => {
-      expect(score._scoreData.hasLyricSectionIds).toBe(true);
+      expect(score._scoreData.features.hasLyricSectionIds).toBe(true);
     });
 
     it('should contain section IDs matching the loaded sections', () => {
@@ -367,7 +367,7 @@ describe('ch-part-id — without partsTemplate or parts', () => {
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   it('should still have hasPartInfo true (a template is derived from the engraving)', () => {
-    expect(score._scoreData.hasPartInfo).toBe(true);
+    expect(score._scoreData.features.hasPartInfo).toBe(true);
   });
 
   // Which parts those are is the derived template's business -- this fixture reads as
@@ -588,7 +588,7 @@ describe("ch-melody — with partsTemplate 'Two-Part'", () => {
   afterEach(() => { resetScoreState(score); });
 
   it('should set hasTwoPartMelody', () => {
-    expect(score._scoreData.hasTwoPartMelody).toBe(true);
+    expect(score._scoreData.features.hasTwoPartMelody).toBe(true);
   });
 
   it('should tag both part-1 and part-2 notes ch-melody at shared chord positions', () => {
@@ -692,6 +692,37 @@ describe('Annotation count consistency', () => {
     const meiVerses = score._scoreData.meiParsed.querySelectorAll('verse[ch-lyric-line-id]');
     const lyricLineIds = new Set(Array.from(meiVerses).map(v => v.getAttribute('ch-lyric-line-id')));
     expect(lyricLineIds.size).toBeGreaterThan(1);
+  });
+});
+
+
+// ============================================================
+// features.hasOstinato
+// ============================================================
+describe('_parseAndAnnotateMei() — hasOstinato', () => {
+  async function load(scoreContent) {
+    const score = new ChScore('#score-container');
+    ChScore.prototype._drawScore = function() {};
+    await score.load('musicxml', { scoreContent: scoreContent });
+    ChScore.prototype._drawScore = origDrawScore;
+    return score._scoreData.features.hasOstinato;
+  }
+
+  const ostinatoDirection = '<direction placement="above"><direction-type>'
+    + '<words>Ostinato (repeat as needed)</words></direction-type></direction>';
+
+  it('should be false for a score that never names one', async () => {
+    expect(await load(sampleMusicXml)).toBe(false);
+  });
+
+  it('should be true when a direction names it', async () => {
+    expect(await load(sampleMusicXml.replace('<direction ', ostinatoDirection + '<direction ')))
+      .toBe(true);
+  });
+
+  it('should be true when the credits name it', async () => {
+    const credit = '<credit page="1"><credit-words>Ostinato accompaniment</credit-words></credit>';
+    expect(await load(sampleMusicXml.replace('<part-list>', credit + '<part-list>'))).toBe(true);
   });
 });
 

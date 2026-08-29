@@ -163,17 +163,17 @@ for (const song of songs) {
  * corpus/lyric-extraction-notes.md, "Two-part songs". The fixture is synthetic, built to
  * the shape of "A Child’s Prayer" (1989 CSB), the corpus song this was written for. Both
  * staves are tagged ch-melody, so every chord position offers two verses at once and the
- * rendition picks between them: rendition 1 sings Part 1's words, rendition 2 Part 2's,
+ * iteration picks between them: iteration 1 sings Part 1's words, iteration 2 Part 2's,
  * and from there on they sing together.
  *
  * The whole-song equality the fixtures above assert deliberately does NOT hold here:
  * extraction emits one verse per part (plus a trailing tag where the score has one), while
- * expansion renders every engraved rendition. So this block asserts what does hold — each
+ * expansion renders every engraved iteration. So this block asserts what does hold — each
  * expanded section carries its own part's words and no other's.
  *
  * Known gap, deliberately not asserted: a verse section's expanded text repeats its own
  * body, because the stanza's chordPositionRange is one solid interval spanning both repeat
- * endings while the MEI holds a clone per rendition — the same class of bug the notes
+ * endings while the MEI holds a clone per iteration — the same class of bug the notes
  * describe under "What snapshotting the whole of _scoreData turned up".
  */
 describe('Expansion keeps each part to its own words — two-part score', { timeout: 30000 }, () => {
@@ -195,7 +195,7 @@ describe('Expansion keeps each part to its own words — two-part score', { time
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   it('should detect the score as two-part', () => {
-    expect(score._scoreData.hasTwoPartMelody).toBe(true);
+    expect(score._scoreData.features.hasTwoPartMelody).toBe(true);
   });
 
   it('should extract one verse per part, each with that part own words', () => {
@@ -223,11 +223,11 @@ describe('Expansion keeps each part to its own words — two-part score', { time
     expect(actual.get('section-1')).not.toContain(verse1.slice(0, 30));
   });
 
-  // The part that isn't singing this rendition is rested out, not just stripped of its
+  // The part that isn't singing this iteration is rested out, not just stripped of its
   // words — otherwise both parts' notes are engraved on every pass and only the lyrics
-  // alternate. A rendition where a part sings nothing at all becomes measure rests.
-  it('should rest out the part that is not singing in each rendition', () => {
-    const renditions = Array.from(score._scoreData.meiParsed.querySelectorAll(
+  // alternate. A iteration where a part sings nothing at all becomes measure rests.
+  it('should rest out the part that is not singing in each iteration', () => {
+    const iterations = Array.from(score._scoreData.meiParsed.querySelectorAll(
       'section:not([type="introduction"]) > section'))
       .map(section => {
         const count = selector => {
@@ -240,33 +240,33 @@ describe('Expansion keeps each part to its own words — two-part score', { time
         };
         return { notes: count('note'), measureRests: count('mRest') };
       })
-      // The verse renditions are the substantial ones — the fixture's body carries 12 notes
+      // The verse iterations are the substantial ones — the fixture's body carries 12 notes
       // per part, while an ending clone carries at most the pickup's 3 plus a tail word
-      .filter(rendition => (rendition.notes['1'] ?? 0) + (rendition.notes['2'] ?? 0) > 8);
+      .filter(iteration => (iteration.notes['1'] ?? 0) + (iteration.notes['2'] ?? 0) > 8);
 
-    expect(renditions).toHaveLength(3);
+    expect(iterations).toHaveLength(3);
     // Pass 1 — Part 1 sings, Part 2 rests
-    expect(renditions[0].notes['2']).toBeUndefined();
-    expect(renditions[0].measureRests['2']).toBeGreaterThan(0);
+    expect(iterations[0].notes['2']).toBeUndefined();
+    expect(iterations[0].measureRests['2']).toBeGreaterThan(0);
     // Pass 2 — the mirror image
-    expect(renditions[1].notes['1']).toBeUndefined();
-    expect(renditions[1].measureRests['1']).toBeGreaterThan(0);
+    expect(iterations[1].notes['1']).toBeUndefined();
+    expect(iterations[1].measureRests['1']).toBeGreaterThan(0);
     // Pass 3 — both parts sound together, so neither is rested out
-    expect(renditions[2].notes['1']).toBeGreaterThan(0);
-    expect(renditions[2].notes['2']).toBeGreaterThan(0);
-    expect(renditions[2].measureRests['1']).toBeUndefined();
-    expect(renditions[2].measureRests['2']).toBeUndefined();
+    expect(iterations[2].notes['1']).toBeGreaterThan(0);
+    expect(iterations[2].notes['2']).toBeGreaterThan(0);
+    expect(iterations[2].measureRests['1']).toBeUndefined();
+    expect(iterations[2].measureRests['2']).toBeUndefined();
   });
 
   // "(3.)" is printed on Part 1's line inside the repeat ending (as "A Child’s Prayer"
-  // does): a pickup *into* verse 3, so it is sung at the end of rendition 2 and nowhere else
-  it('should place a labelled pickup in the rendition that leads into the verse it names', () => {
-    const renditionsShowingPickup = Array.from(score._scoreData.meiParsed
+  // does): a pickup *into* verse 3, so it is sung at the end of iteration 2 and nowhere else
+  it('should place a labelled pickup in the iteration that leads into the verse it names', () => {
+    const iterationsShowingPickup = Array.from(score._scoreData.meiParsed
       .querySelectorAll('verse label'))
       .filter(label => label.textContent.includes('3'))
-      .map(label => label.closest('section[ch-rendition]')?.getAttribute('ch-rendition'));
-    expect(renditionsShowingPickup.length).toBeGreaterThan(0);
-    for (const rendition of renditionsShowingPickup) expect(rendition).toBe('2');
+      .map(label => label.closest('section[ch-iteration]')?.getAttribute('ch-iteration'));
+    expect(iterationsShowingPickup.length).toBeGreaterThan(0);
+    for (const iteration of iterationsShowingPickup) expect(iteration).toBe('2');
   });
 
   // The "(3.)" pickup is engraved as a triplet, so silencing it note by note leaves three
