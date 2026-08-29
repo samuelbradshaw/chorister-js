@@ -66,6 +66,7 @@
       #score-container::-webkit-scrollbar { display: none; } /* Most browsers */
       [data-ch-footer] {
         border-top: 1px solid #ddd;
+        padding: 1em 0;
       }
       
       /* Custom score form styles */
@@ -351,6 +352,7 @@
         }
         chScore = new ChScore('#score-container');
         scoreData = await chScore.load(format, inputData, options);
+        titleArea.textContent = scoreData?.scoreMetadata?.title ?? demoScores[scoreId].title;
         
         // Load controls
         loadControls(chScore, scoreData)        
@@ -406,7 +408,7 @@
           demoScores['custom-score'].lyricsText = lyricsTextInput.value;
           demoScores['custom-score'].partsTemplate = partsTemplateInput.value;
           if (scoreContentInput.value) {
-            scoreContainer.style.display = 'block';
+            scoreContainer.style.display = 'flex';
             loadScore('custom-score');
           } else {
             alert('Score content is required.');

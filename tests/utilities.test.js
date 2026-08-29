@@ -1419,9 +1419,9 @@ In word and deed and mind.</credit-words></credit>
 
 
 // ============================================================
-// _fixIntroBrackets
+// _optimizeMusicXml — intro brackets
 // ============================================================
-describe('_fixIntroBrackets()', () => {
+describe('_optimizeMusicXml() — intro brackets', () => {
   let score;
 
   beforeAll(() => {
@@ -1446,39 +1446,39 @@ describe('_fixIntroBrackets()', () => {
   it('should return a score with no brackets untouched, without parsing it', () => {
     const musicXml = scoreXml(note(10), note(50));
     // The same string back, not a re-serialized copy
-    expect(score._fixIntroBrackets(musicXml)).toBe(musicXml);
-    expect(score._fixIntroBrackets('<score-partwise/>')).toBe('<score-partwise/>');
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+    expect(score._optimizeMusicXml('<score-partwise/>')).toBe('<score-partwise/>');
   });
 
   it('should leave a bracket already in its printed position', () => {
     const musicXml = scoreXml(note(10), bracket(30), note(50));
-    expect(score._fixIntroBrackets(musicXml)).toBe(musicXml);
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
   });
 
   it('should move a bracket back past notes printed to the right of it', () => {
     // Engraved after the note at x=50, but printed at x=30 — so it belongs before it
     const musicXml = scoreXml(note(10), note(50), bracket(30), note(70));
-    expect(layout(score._fixIntroBrackets(musicXml)))
+    expect(layout(score._optimizeMusicXml(musicXml)))
       .toEqual(['note:10', 'bracket', 'note:50', 'note:70']);
   });
 
   it('should move a bracket forward past notes printed to the left of it', () => {
     const musicXml = scoreXml(note(10), bracket(90), note(50), note(70));
-    expect(layout(score._fixIntroBrackets(musicXml)))
+    expect(layout(score._optimizeMusicXml(musicXml)))
       .toEqual(['note:10', 'note:50', 'note:70', 'bracket']);
   });
 
   it('should leave a bracket that carries no printed position', () => {
     const musicXml = scoreXml(note(10), note(50), '<direction><direction-type><words>\u231C</words></direction-type></direction>');
-    expect(score._fixIntroBrackets(musicXml)).toBe(musicXml);
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
   });
 });
 
 
 // ============================================================
-// _fixCreditStyling
+// _optimizeMusicXml — credit styling
 // ============================================================
-describe('_fixCreditStyling()', () => {
+describe('_optimizeMusicXml() — credit styling', () => {
   let score;
 
   beforeAll(() => {
@@ -1500,17 +1500,17 @@ describe('_fixCreditStyling()', () => {
   }
 
   it('should return a score with no credits untouched, without parsing it', () => {
-    expect(score._fixCreditStyling('<score-partwise/>')).toBe('<score-partwise/>');
+    expect(score._optimizeMusicXml('<score-partwise/>')).toBe('<score-partwise/>');
   });
 
   it('should read italic and bold out of the font name', () => {
     const musicXml = creditXml(['font-family="McKay Neue ldsLat Italic, text"', 'Words: ']);
-    expect(runsOf(score._fixCreditStyling(musicXml))).toEqual([['italic/null', 'Words: ']]);
+    expect(runsOf(score._optimizeMusicXml(musicXml))).toEqual([['italic/null', 'Words: ']]);
   });
 
   it('should leave a credit of one run for its <rend> to carry', () => {
     const musicXml = creditXml(['font-style="italic"', 'Paroles : Stephen A. Reynolds']);
-    expect(runsOf(score._fixCreditStyling(musicXml)))
+    expect(runsOf(score._optimizeMusicXml(musicXml)))
       .toEqual([['italic/null', 'Paroles : Stephen A. Reynolds']]);
   });
 
@@ -1522,7 +1522,7 @@ describe('_fixCreditStyling()', () => {
     );
 
     // The space between the runs moves out of the <em> it was engraved inside
-    expect(runsOf(score._fixCreditStyling(musicXml)))
+    expect(runsOf(score._optimizeMusicXml(musicXml)))
       .toEqual([['normal/normal', '<em>Words:</em> Anon.']]);
   });
 
@@ -1531,7 +1531,7 @@ describe('_fixCreditStyling()', () => {
       ['font-weight="bold"', 'Note: '],
       ['', 'sung a cappella'],
     );
-    expect(runsOf(score._fixCreditStyling(musicXml))[0][1]).toBe('<strong>Note:</strong> sung a cappella');
+    expect(runsOf(score._optimizeMusicXml(musicXml))[0][1]).toBe('<strong>Note:</strong> sung a cappella');
   });
 
   it('should set the merged credit\u2019s font aside, since Verovio drops it', () => {
@@ -1539,20 +1539,26 @@ describe('_fixCreditStyling()', () => {
       ['font-family="McKay Neue ldsLat Italic, text" font-size="7"', 'Words: '],
       ['font-family="McKay Neue ldsLat, text"', 'Anon.'],
     );
-    score._fixCreditStyling(musicXml);
+    score._optimizeMusicXml(musicXml);
 
     // Keyed by the text the block will be read from, with the styling words dropped
     // from the family name now that font-style carries them
-    expect(score._creditStyles.get('<em>Words:</em> Anon.'))
+    expect(score._textBlockStyles.get('<em>Words:</em> Anon.'))
       .toEqual({ fontFamily: 'McKay Neue ldsLat, text', fontSize: '7', halign: null });
   });
 
   it('should set the credit\u2019s halign aside, since Verovio reads justify instead', () => {
     // A title centered on the page but justified left, as Finale engraves them
     const musicXml = creditXml(['justify="left" halign="center"', 'Llevaremos Su verdad al mundo']);
-    score._fixCreditStyling(musicXml);
+    score._optimizeMusicXml(musicXml);
 
-    expect(score._creditStyles.get('Llevaremos Su verdad al mundo').halign).toBe('center');
+    expect(score._textBlockStyles.get('Llevaremos Su verdad al mundo').halign).toBe('center');
+  });
+
+  it('should put a credit on page 1', () => {
+    const musicXml = `<score-partwise><credit page="2"><credit-words>Words: Anon.</credit-words></credit></score-partwise>`;
+    const parsed = new DOMParser().parseFromString(score._optimizeMusicXml(musicXml), 'text/xml');
+    expect(parsed.querySelector('credit').getAttribute('page')).toBe('1');
   });
 });
 
@@ -1742,8 +1748,8 @@ describe('_getScoreMetadata()', () => {
   it('should prefer the credit’s halign over the one Verovio derived from justify', () => {
     // Finale engraves a title centered on the page but justified left, so Verovio writes
     // halign="left" onto the <rend> and the block reads as left-aligned. The credit's own
-    // halign was set aside before conversion (see _fixCreditStyling), and wins here.
-    score._creditStyles = new Map([['Llevaremos Su verdad al mundo', { halign: 'center' }]]);
+    // halign was set aside before conversion (see _optimizeMusicXml), and wins here.
+    score._textBlockStyles = new Map([['Llevaremos Su verdad al mundo', { halign: 'center' }]]);
     const metadata = score._getScoreMetadata(buildMei({
       pgHead: '<pgHead><rend halign="left" valign="top">Llevaremos Su verdad al mundo</rend>' +
               '<rend halign="center" valign="top">1 Nefi 1:1 | Alma 53:18–22</rend></pgHead>',
@@ -1753,7 +1759,7 @@ describe('_getScoreMetadata()', () => {
     // No credit style set aside for this one, so the <rend> still speaks for it
     expect(metadata.header[1].halign).toBe('center');
     expect(metadata.title).toBe('Llevaremos Su verdad al mundo');
-    score._creditStyles = new Map();
+    score._textBlockStyles = new Map();
   });
 
   it('should fall back to titleStmt/title when no centered single-line block exists', () => {

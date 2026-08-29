@@ -343,7 +343,6 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
   }
 
   // Load score into Verovio
-  this._creditStyles = new Map(); // only MusicXML fills this in; see _fixCreditStyling
   if (scoreContent instanceof ArrayBuffer) {
     // MXL (compressed MusicXML)
     this._vrvToolkit.loadZipDataBuffer(scoreContent);
@@ -352,10 +351,7 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
     if (format === 'abc') {
       scoreContent = scoreContent.replace(/^\s+/gm, '');
     } else if (format === 'musicxml' || format === 'mxl') {
-      scoreContent = this._fixIntroBrackets(scoreContent);
-      scoreContent = this._fixLyricStyling(scoreContent);
-      scoreContent = this._fixCreditStyling(scoreContent);
-      scoreContent = this._fixCreditPages(scoreContent);
+      scoreContent = this._optimizeMusicXml(scoreContent);
     }
     this._vrvToolkit.loadData(scoreContent);
   }
@@ -938,30 +934,7 @@ ChScore.prototype._loadMidi = function () {
   }
 }
 
-// Move credits onto page 1. Verovio only turns page 1 credits into <pgHead>/<pgFoot>
-// and drops the rest, which loses verses printed below the music on a later page.
-// Chorister reads those verses out of the metadata and then removes pgHead and pgFoot
-// before drawing, so nothing is rendered twice.
-ChScore.prototype._fixCreditPages = function (musicXml) {
-  if (!musicXml.includes('<credit')) return musicXml;
-
-  const parsed = (new DOMParser()).parseFromString(musicXml, 'text/xml');
-  if (parsed.querySelector('parsererror')) return musicXml;
-
-  let changed = false;
-  for (const credit of parsed.querySelectorAll('credit')) {
-    if (credit.getAttribute('page') === '1') continue;
-    credit.setAttribute('page', '1');
-    changed = true;
-  }
-
-  return changed ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
-}
-
-// Convert bold and italic font names to standard font style and weight attributes.
-// Finale spells styling into the font name ("McKay Neue ldsLat Italic") and Verovio
-// only carries the standard attributes through to MEI, so the styling is lost without
-// this.
+// Extract font styles from font names
 ChScore.prototype._normalizeFontStyling = function (element) {
   const fontFamily = (element.getAttribute('font-family') || '').toLowerCase();
   let changed = false;
@@ -996,83 +969,6 @@ ChScore.prototype._cleanBlockWhitespace = function (text) {
     .replace(/^\n+|\n+$/g, '');
 }
 
-ChScore.prototype._fixLyricStyling = function (musicXml) {
-  if (!musicXml.includes('<lyric')) return musicXml;
-
-  const parsed = (new DOMParser()).parseFromString(musicXml, 'text/xml');
-  if (parsed.querySelector('parsererror')) return musicXml;
-
-  let changed = false;
-  for (const text of parsed.querySelectorAll('lyric > text')) {
-    changed = this._normalizeFontStyling(text) || changed;
-  }
-
-  return changed ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
-}
-
-// Keep a credit's styled runs together, marked up the way lyric syllables are.
-//
-// A credit printed as one paragraph ("Words: Anon.") is written as several
-// <credit-words>, one per styling change, and only the first carries default-x and
-// default-y. Verovio places each run by its own position, so the unpositioned
-// continuations are scattered into <pgFoot>, away from the run they belong to --
-// "Air from " is left in the header while its italic "Orpheus" lands in the footer.
-// Merging the runs before conversion keeps the paragraph whole; since MusicXML has
-// nowhere to put per-run styling once they are one element, the styled runs carry
-// <em>/<strong> instead, which is what _wordBuilder gives lyrics too.
-ChScore.prototype._fixCreditStyling = function (musicXml) {
-  this._creditStyles = new Map();
-  if (!musicXml.includes('<credit')) return musicXml;
-
-  const parsed = (new DOMParser()).parseFromString(musicXml, 'text/xml');
-  if (parsed.querySelector('parsererror')) return musicXml;
-
-  const markUpRun = (run) => {
-    let text = run.textContent;
-    if (run.getAttribute('font-weight') === 'bold') text = `<strong>${text}</strong>`;
-    if (run.getAttribute('font-style') === 'italic') text = `<em>${text}</em>`;
-    return text;
-  };
-
-  let changed = false;
-  for (const credit of parsed.querySelectorAll('credit')) {
-    const runs = [...credit.querySelectorAll('credit-words')];
-    if (!runs.length) continue;
-    for (const run of runs) changed = this._normalizeFontStyling(run) || changed;
-
-    // A credit of one run needs no markup: its styling stays on the element, and
-    // Verovio carries it to the <rend> the block is read from.
-    if (runs.length > 1) {
-      runs[0].textContent = this._normalizeMarkupWhitespace(runs.map(markUpRun).join(''));
-      // The merged element now spans runs of mixed styling, so its own attributes can
-      // no longer describe them.
-      runs[0].setAttribute('font-style', 'normal');
-      runs[0].setAttribute('font-weight', 'normal');
-      for (const run of runs.slice(1)) run.remove();
-      changed = true;
-    }
-
-    // Verovio carries font-family, font-size, and halign onto the <rend> either not at
-    // all or wrongly, so keep them here, keyed by the text they belong to -- the same
-    // text the block is read from, which is what _getScoreMetadata matches them back up
-    // by. The first run names the block's font: a later run changing font is what made
-    // it a run of its own.
-    //
-    // The two attributes describing where a credit sits are not interchangeable: halign
-    // aligns the block against its default-x (where it is on the page), while justify
-    // aligns the text within the block. Verovio reads <rend halign> off justify and
-    // drops halign, so a title anchored centered but justified left -- Finale engraves
-    // them -- reaches the metadata as a left-aligned block and loses the title.
-    this._creditStyles.set(this._cleanBlockWhitespace(runs[0].textContent), {
-      fontFamily: this._fontFamilyWithoutStyling(runs[0].getAttribute('font-family')),
-      fontSize: runs[0].getAttribute('font-size') || null,
-      halign: runs[0].getAttribute('halign'),
-    });
-  }
-
-  return changed ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
-}
-
 // Keep styling whitespace outside its markup, so a run's tags sit against the words
 // they style: "<em>Words: </em>Anon." reads as "<em>Words:</em> Anon.". Scores put the
 // separating space inside the styled run as often as not, and where the tags fall
@@ -1083,47 +979,104 @@ ChScore.prototype._normalizeMarkupWhitespace = function (text) {
     .replace(/([^\S\n]+)<\/(em|strong)>/g, '</$2>$1');
 }
 
-// Move intro brackets (⌜ ⌝) to the correct document order (based on x-position) relative to surrounding notes. When converting MusicXML to MEI, Verovio uses document order to determine element position.
-ChScore.prototype._fixIntroBrackets = function (musicXml) {
-  if (!musicXml.includes('⌜') && !musicXml.includes('⌝')) return musicXml;
+// Clean up MusicXML so it can be cleanly converted to MEI
+ChScore.prototype._optimizeMusicXml = function (musicXml) {
+  const hasIntroBrackets = musicXml.includes('⌜') || musicXml.includes('⌝');
+  const hasLyrics = musicXml.includes('<lyric');
+  const hasTextBlocks = musicXml.includes('<credit');
+  this._textBlockStyles = new Map();
+  if (!hasIntroBrackets && !hasLyrics && !hasTextBlocks) return musicXml;
 
   const parsed = (new DOMParser()).parseFromString(musicXml, 'text/xml');
   if (parsed.querySelector('parsererror')) return musicXml;
 
-  const adjacentNote = (element, direction) => {
-    let sibling = element[direction];
-    while (sibling && sibling.nodeName !== 'note') sibling = sibling[direction];
-    return sibling;
-  }
-  const previousNote = (element) => adjacentNote(element, 'previousElementSibling');
-  const nextNote = (element) => adjacentNote(element, 'nextElementSibling');
+  let changed = false;
 
-  let moved = false;
-  for (const direction of parsed.querySelectorAll('direction')) {
-    if (!['⌜', '⌝'].includes(direction.textContent.trim())) continue;
-    const positioned = direction.querySelector('[default-x]');
-    const bracketX = positioned ? Number.parseFloat(positioned.getAttribute('default-x')) : null;
-    if (bracketX === null || Number.isNaN(bracketX)) continue;
-
-    for (let note = previousNote(direction); note && Number.parseFloat(note.getAttribute('default-x')) > bracketX; note = previousNote(direction)) {
-      note.parentNode.insertBefore(direction, note);
-      moved = true;
+  // Move intro brackets (⌜ ⌝) to the correct document order (based on x-position)
+  // relative to surrounding notes. When converting MusicXML to MEI, Verovio uses
+  // document order to determine element position.
+  if (hasIntroBrackets) {
+    const adjacentNote = (element, direction) => {
+      let sibling = element[direction];
+      while (sibling && sibling.nodeName !== 'note') sibling = sibling[direction];
+      return sibling;
     }
-    for (let note = nextNote(direction); note && Number.parseFloat(note.getAttribute('default-x')) < bracketX; note = nextNote(direction)) {
-      note.parentNode.insertBefore(direction, note.nextSibling);
-      moved = true;
+    const previousNote = (element) => adjacentNote(element, 'previousElementSibling');
+    const nextNote = (element) => adjacentNote(element, 'nextElementSibling');
+
+    for (const direction of parsed.querySelectorAll('direction')) {
+      if (!['⌜', '⌝'].includes(direction.textContent.trim())) continue;
+      const positioned = direction.querySelector('[default-x]');
+      const bracketX = positioned ? Number.parseFloat(positioned.getAttribute('default-x')) : null;
+      if (bracketX === null || Number.isNaN(bracketX)) continue;
+
+      for (let note = previousNote(direction); note && Number.parseFloat(note.getAttribute('default-x')) > bracketX; note = previousNote(direction)) {
+        note.parentNode.insertBefore(direction, note);
+        changed = true;
+      }
+      for (let note = nextNote(direction); note && Number.parseFloat(note.getAttribute('default-x')) < bracketX; note = nextNote(direction)) {
+        note.parentNode.insertBefore(direction, note.nextSibling);
+        changed = true;
+      }
     }
   }
 
-  return moved ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
+  // Convert bold and italic font names like "McKay Neue ldsLat Italic" to font style and weight attributes
+  if (hasLyrics) {
+    for (const text of parsed.querySelectorAll('lyric > text')) {
+      changed = this._normalizeFontStyling(text) || changed;
+    }
+  }
+
+  // Clean up text blocks
+  if (hasTextBlocks) {
+    const markUpRun = (run) => {
+      let text = run.textContent;
+      if (run.getAttribute('font-weight') === 'bold') text = `<strong>${text}</strong>`;
+      if (run.getAttribute('font-style') === 'italic') text = `<em>${text}</em>`;
+      return text;
+    };
+
+    for (const textBlock of parsed.querySelectorAll('credit')) {
+      if (textBlock.getAttribute('page') !== '1') {
+        textBlock.setAttribute('page', '1');
+        changed = true;
+      }
+
+      const runs = [...textBlock.querySelectorAll('credit-words')];
+      if (!runs.length) continue;
+      for (const run of runs) changed = this._normalizeFontStyling(run) || changed;
+
+      // A text block of one run needs no markup: its styling stays on the element, and
+      // Verovio carries it to the <rend> the block is read from.
+      if (runs.length > 1) {
+        runs[0].textContent = this._normalizeMarkupWhitespace(runs.map(markUpRun).join(''));
+        // The merged element now spans runs of mixed styling, so its own attributes can
+        // no longer describe them.
+        runs[0].setAttribute('font-style', 'normal');
+        runs[0].setAttribute('font-weight', 'normal');
+        for (const run of runs.slice(1)) run.remove();
+        changed = true;
+      }
+
+      // Verovio doesn't consistently transfer font information when converting MusicXML to MEI. This captures the info so it can be referenced later.
+      this._textBlockStyles.set(this._cleanBlockWhitespace(runs[0].textContent), {
+        fontFamily: this._fontFamilyWithoutStyling(runs[0].getAttribute('font-family')),
+        fontSize: runs[0].getAttribute('font-size') || null,
+        halign: runs[0].getAttribute('halign'),
+      });
+    }
+  }
+
+  return changed ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
 }
 
 // Get metadata from the MEI fileDesc, pgHead, and pgFoot elements
 ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
 
-  // Styling a <rend> carries, as the <em>/<strong> markup lyrics use. A credit of
-  // mixed runs was marked up before conversion instead (see _fixCreditStyling), so
-  // this covers what stays on the element: a credit styled as a whole, and the nested
+  // Styling a <rend> carries, as the <em>/<strong> markup lyrics use. A text block of
+  // mixed runs was marked up before conversion instead (see _optimizeMusicXml), so
+  // this covers what stays on the element: a text block styled as a whole, and the nested
   // <rend> of MEI-native input.
   const styleText = (text, rend) => {
     if (!text) return text;
@@ -1151,14 +1104,14 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
       for (const rend of container.querySelectorAll(':scope > rend')) {
         const text = getText(rend);
         if (!text) continue;
-        const creditStyle = this._creditStyles?.get(text);
+        const textBlockStyle = this._textBlockStyles?.get(text);
         blocks.push({
           html: text.split('\n').map(line => styleText(line, rend)).join('\n'),
           text: text.replace(this._patterns.stylingMarkup, ''),
-          halign: creditStyle?.halign ?? rend.getAttribute('halign'),
+          halign: textBlockStyle?.halign ?? rend.getAttribute('halign'),
           valign: rend.getAttribute('valign'),
-          fontFamily: rend.getAttribute('fontfam') ?? creditStyle?.fontFamily ?? null,
-          fontSize: rend.getAttribute('fontsize') ?? creditStyle?.fontSize ?? null,
+          fontFamily: rend.getAttribute('fontfam') ?? textBlockStyle?.fontFamily ?? null,
+          fontSize: rend.getAttribute('fontsize') ?? textBlockStyle?.fontSize ?? null,
           elementId: rend.getAttribute('xml:id'),
         });
       }
@@ -1278,12 +1231,6 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   this._scoreData.meiParsed = (new DOMParser()).parseFromString(this._scoreData.meiStringOriginal, 'text/xml');
   this._scoreData.scoreMetadata = this._getScoreMetadata(this._scoreData.meiParsed, scoreId, lang);
 
-  // Build table of hyphenated words (combining hard-coded words, and words from the song title and lyrics below)
-  this._scoreData.hyphenPositions = this._hyphenPositionsTable(
-    this._hyphenatedWords[lang] ?? [],
-    [this._scoreData.scoreMetadata.title, ...this._scoreData.scoreMetadata.stanzas].filter(Boolean)
-  );
-
   // Enable collapsing empty staves. Example: "True to the Faith" (1985 Hymns).
   for (const scoreDef of this._scoreData.meiParsed.querySelectorAll('scoreDef')) {
     scoreDef.setAttribute('optimize', 'true');
@@ -1339,11 +1286,22 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   const notesAndRests = this._scoreData.meiParsed.querySelectorAll('note, rest');
   for (const meiElement of notesAndRests) {
     const elementId = meiElement.getAttribute('xml:id');
-    const meiChordElement = meiElement.closest('chord') ?? null;
-    const meiBeamElement = meiElement.closest('beam') ?? null;
-    const meiLayerElement = meiElement.closest('layer');
-    const meiStaffElement = meiElement.closest('staff');
-    const meiMeasureElement = meiElement.closest('measure');
+    // Single traversal of the note's ancestors instead of separate closest() calls, for efficiency
+    let meiChordElement = null;
+    let meiBeamElement = null;
+    let meiLayerElement = null;
+    let meiStaffElement = null;
+    let meiMeasureElement = null;
+    for (let ancestor = meiElement.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      switch (ancestor.tagName) {
+        case 'chord': meiChordElement ??= ancestor; break;
+        case 'beam': meiBeamElement ??= ancestor; break;
+        case 'layer': meiLayerElement = ancestor; break;
+        case 'staff': meiStaffElement = ancestor; break;
+        case 'measure': meiMeasureElement = ancestor; break;
+      }
+      if (meiLayerElement && meiStaffElement && meiMeasureElement) break;
+    }
     const isTiedNote = tiedNoteEndIds.has(elementId);
     const isRest = meiElement.matches('rest');
     const isCue = meiElement.getAttribute('cue') === 'true';
@@ -1642,11 +1600,51 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   previousChordPositionInfo.endQ = vrvTimemap.at(-1).qstamp;
   previousChordPositionInfo.durationQ = previousChordPositionInfo.endQ - previousChordPositionInfo.startQ;
 
+  // Fix unterminated melisma underscores
+  const staffNumbers = new Set([...this._scoreData.meiParsed.querySelectorAll('staff')]
+    .map(staff => staff.getAttribute('n')));
+  for (const staffNumber of staffNumbers) {
+    const activeLineNumbers = new Set();
+    const events = [...this._scoreData.meiParsed.querySelectorAll(`staff[n="${staffNumber}"] note, staff[n="${staffNumber}"] chord`)]
+      .filter(element => !element.parentElement.closest('chord'));
+
+    for (const event of events) {
+      const versesByLine = new Map([...event.children]
+        .filter(child => child.matches('verse'))
+        .map(verse => [verse.getAttribute('n'), verse]));
+      const realVerses = [...versesByLine.values()].filter(verse => verse.querySelector('syl')?.textContent.trim());
+
+      if (realVerses.length > 0) {
+        for (const lineNumber of activeLineNumbers) {
+          if (versesByLine.has(lineNumber)) continue;
+          const stubVerse = this._createMeiElement(this._scoreData.meiParsed, 'verse');
+          stubVerse.setAttribute('n', lineNumber);
+          const label = realVerses[0].getAttribute('label');
+          if (label) stubVerse.setAttribute('label', label);
+          // Syllable is left empty to not interfere with lyric line counting
+          const stubSyl = this._createMeiElement(this._scoreData.meiParsed, 'syl');
+          stubSyl.setAttribute('con', 's');
+          stubSyl.setAttribute('ch-end-underscore', '');
+          stubVerse.appendChild(stubSyl);
+          event.appendChild(stubVerse);
+          activeLineNumbers.delete(lineNumber);
+        }
+      }
+
+      for (const [lineNumber, verse] of versesByLine) {
+        const syl = verse.querySelector('syl');
+        if (!syl?.textContent.trim()) continue;
+        if (syl.getAttribute('con') === 'u') activeLineNumbers.add(lineNumber);
+        else activeLineNumbers.delete(lineNumber);
+      }
+    }
+  }
+
   // Add attributes to verse elements: @ch-lyric-line-id, @ch-secondary
   for (const verse of this._scoreData.meiParsed.querySelectorAll('verse')) {
     if (verse.textContent.trim() === '') {
-      // Remove empty verse elements
-      verse.remove();
+      // Keep empty syllables used to mark the end of a melisma underscore
+      if (!verse.querySelector('[ch-end-underscore]')) verse.remove();
       continue;
     }
     const staffNumber = verse.closest('staff').getAttribute('n');
@@ -2617,11 +2615,21 @@ ChScore.prototype._updateSvg = function (svg) {
 
   // Add data-related attribute to accidentals, noteheads, ties, stems, etc.
   for (const note of svgParsed.querySelectorAll('g.note')) {
-    note.querySelector('g.accid')?.setAttribute('data-related', note.id);
-    note.querySelector('g.notehead')?.setAttribute('data-related', note.id);
-    note.querySelector('g.dots ellipse')?.setAttribute('data-related', note.id);
-    note.querySelector('g.stem path')?.setAttribute('data-related', note.id);
-    note.querySelector('g.flag')?.setAttribute('data-related', note.id);
+    // Single traversal of the note's descendants instead of separate querySelector() calls, for efficiency
+    let accid, notehead, dot, stem, flag;
+    for (const el of note.querySelectorAll('*')) {
+      if (!accid && el.matches('g.accid')) accid = el;
+      else if (!notehead && el.matches('g.notehead')) notehead = el;
+      else if (!dot && el.matches('.dots ellipse')) dot = el;
+      else if (!stem && el.matches('.stem path')) stem = el;
+      else if (!flag && el.matches('g.flag')) flag = el;
+      if (accid && notehead && dot && stem && flag) break;
+    }
+    accid?.setAttribute('data-related', note.id);
+    notehead?.setAttribute('data-related', note.id);
+    dot?.setAttribute('data-related', note.id);
+    stem?.setAttribute('data-related', note.id);
+    flag?.setAttribute('data-related', note.id);
   }
   for (const spanningElement of svgParsed.querySelectorAll('g.tie')) {
     spanningElement.querySelector('path')?.setAttribute('data-related', spanningElement.dataset.startid.substring(1));
@@ -3692,7 +3700,7 @@ ChScore.prototype._chLoadDependencies = async function () {
     // https://github.com/magenta/magenta-js/issues/684
     // import('https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1/es6/core.min.js'),
     import('https://cdn.jsdelivr.net/gh/samuelbradshaw/magenta-js@master/music/es6/core.js'),
-    import('https://cdn.jsdelivr.net/npm/verovio@6.1.0/dist/verovio-toolkit-wasm.min.js'),
+    import('https://cdn.jsdelivr.net/npm/verovio@6.2.0/dist/verovio-toolkit-wasm.min.js'),
     verovioInitialized(),
   ]);
   return true;
@@ -3754,7 +3762,7 @@ ChScore.prototype._defaultVerovioOptions = {
     'chord@ch-chord-position', 'note@ch-chord-position', 'rest@ch-chord-position',
     'dir@ch-chord-position', 'harm@ch-chord-position', 'fermata@ch-chord-position',
     'verse@ch-lyric-line-id',
-    'dir@ch-intro-bracket', 'dir@ch-round-marker', 'rend@ch-superscript', 'syl@end-underscore',
+    'dir@ch-intro-bracket', 'dir@ch-round-marker', 'rend@ch-superscript', 'syl@ch-end-underscore',
     // Chorister.js advanced attributes (based on parts and sections data)
     'chord@ch-expanded-chord-position', 'note@ch-expanded-chord-position', 'rest@ch-expanded-chord-position',
     'dir@ch-expanded-chord-position', 'harm@ch-expanded-chord-position', 'fermata@ch-expanded-chord-position',
@@ -5595,10 +5603,6 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
       extractedLyricSyllables.push({
         label: label ? label.textContent.trim() : null,
         text: text,
-        // The syllables as engraved, kept for _getLyricsFromSyllables: joining
-        // them back into words needs @wordpos, which the flattened text loses.
-        // fontstyle/fontweight (set by _fixLyricStyling for MusicXML input, or
-        // native to MEI input) mark words to wrap in <em>/<strong>.
         syls: sylElements.map(syl => ({
           text: syl.textContent.trim(),
           wordpos: syl.getAttribute('wordpos'),
@@ -5972,10 +5976,14 @@ ChScore.prototype._syllableStanzaRuns = function (syllables) {
   return runs;
 }
 
-// Build lyric stanzas from the syllables engraved in the score, when no lyrics were
-// given to align against. A stanza is a run of syllables sharing one lyric line, in
-// sung order, then any line playback never reached — and syllables aren't lines.
+// Build lyric stanzas from score syllables, when no lyrics are provided
 ChScore.prototype._getLyricsFromSyllables = function (syllables) {
+  // Build table of hyphenated words (combining hard-coded words, and words from the song title and lyrics below)
+  this._scoreData.hyphenPositions = this._hyphenPositionsTable(
+    this._hyphenatedWords[this._scoreData.scoreMetadata.lang] ?? [],
+    [this._scoreData.scoreMetadata.title, ...this._scoreData.scoreMetadata.stanzas].filter(Boolean)
+  );
+
   const runs = this._syllableStanzaRuns(syllables);
   const phraseStarts = this._getPhraseStartChordPositions(syllables, runs);
 
@@ -6604,7 +6612,7 @@ ChScore.prototype._punctuationCharacter = '[^\\p{L}\\p{N}]';
 
 // Regular expressions
 ChScore.prototype._patterns = {
-  // Verse markers and styling in credit text
+  // Verse markers and styling in text blocks
   verseMarker: /^\s*\d{1,2}\s*[.)]/,
   nonVerseMarker: /^\s*\d{3,}\s*[.)]/,
   stylingMarkup: /<\/?(?:em|strong)>/g,
