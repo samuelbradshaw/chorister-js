@@ -388,6 +388,8 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
     sectionsById: null,
     chordSets: chordSets ?? [],
     chordSetsById: null,
+    harmStaffNumber: '1',
+    trebleClefStaffNumbersSelector: '',
     fermatas: fermatas ?? [],
   };
 
@@ -1116,15 +1118,6 @@ ChScore.prototype._fixIntroBrackets = function (musicXml) {
   return moved ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
 }
 
-ChScore.prototype._verseMarker = /^\s*\d{1,2}\s*[.)]/;
-ChScore.prototype._nonVerseMarker = /^\s*\d{3,}\s*[.)]/;
-ChScore.prototype._stylingMarkup = /<\/?(?:em|strong)>/g;
-ChScore.prototype._capoMark = /^capo\b[\s:.,-]*\d+[\s:.,-]*$/i;
-ChScore.prototype._standaloneNumber = /^\d+$/;
-ChScore.prototype._stripStyling = function (text) {
-  return (text ?? '').replace(this._stylingMarkup, '');
-}
-
 // Get metadata from the MEI fileDesc, pgHead, and pgFoot elements
 ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
 
@@ -1161,7 +1154,7 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
         const creditStyle = this._creditStyles?.get(text);
         blocks.push({
           html: text.split('\n').map(line => styleText(line, rend)).join('\n'),
-          text: this._stripStyling(text),
+          text: text.replace(this._patterns.stylingMarkup, ''),
           halign: creditStyle?.halign ?? rend.getAttribute('halign'),
           valign: rend.getAttribute('valign'),
           fontFamily: rend.getAttribute('fontfam') ?? creditStyle?.fontFamily ?? null,
@@ -1182,12 +1175,12 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
   const date = meiParsed.querySelector('fileDesc pubStmt date');
   const header = getTextBlocks('pgHead');
   const footer = getTextBlocks('pgFoot');
-  const looksLikeNonVerseMarker = paragraph => this._nonVerseMarker.test(paragraph);
-  const looksLikeVerseMarker = paragraph => this._verseMarker.test(paragraph);
+  const looksLikeNonVerseMarker = paragraph => this._patterns.nonVerseMarker.test(paragraph);
+  const looksLikeVerseMarker = paragraph => this._patterns.verseMarker.test(paragraph);
   const paragraphs = text => text.split(/\n\s*\n/);
   const isStanzaBlock = block => block.text.includes('\n') && paragraphs(block.text).some(looksLikeVerseMarker);
-  const isCapoBlock = block => this._capoMark.test(block.text.trim());
-  const isNumberBlock = block => this._standaloneNumber.test(block.text.trim()) && Number.parseInt(block.text) > 0;
+  const isCapoBlock = block => this._patterns.capoMark.test(block.text.trim());
+  const isNumberBlock = block => this._patterns.standaloneNumber.test(block.text.trim()) && Number.parseInt(block.text) > 0;
 
   // Detect title (largest centered heading). Metadata title fields are sometimes empty or outdated. Anything centered above or below the title is a supertitle or subtitle.
   const headings = header.filter(block => block.halign === 'center'
@@ -1280,10 +1273,6 @@ ChScore.prototype._unzipMusicXml = async function (arrayBuffer) {
 
   return null;
 }
-
-// Detect round numbers
-ChScore.prototype._roundMarkerPattern = /^[➀-➈]$/;
-ChScore.prototype._ostinatoMark = /ostinato/i;
 
 ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   this._scoreData.meiParsed = (new DOMParser()).parseFromString(this._scoreData.meiStringOriginal, 'text/xml');
@@ -1504,6 +1493,8 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
     return;
   }
   this._scoreData.staffNumbers = Array.from(this._scoreData.meiParsed.querySelectorAll('staffDef')).map(sf => Number.parseInt(sf.getAttribute('n')));
+  this._scoreData.trebleClefStaffNumbersSelector = Array.from(this._scoreData.meiParsed.querySelectorAll('clef[shape="G"]'))
+    .map(cf => `[n="${Number.parseInt(cf.closest('staffDef').getAttribute('n'))}"]`).join(',');
   this._scoreData.features.hasLyrics = this._scoreData.meiParsed.querySelector('verse') !== null;
   const chordPositionIndex = this._indexChordPositions(vrvTimemap);
   this._scoreData.numChordPositions = chordPositionIndex.qstamps.length - 1;
@@ -1674,7 +1665,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   let currentMeasureId = null;
   this._scoreData.features.hasOstinato = (this._scoreData.scoreMetadata.header ?? [])
     .concat(this._scoreData.scoreMetadata.footer ?? [])
-    .some(block => this._ostinatoMark.test(block.text));
+    .some(block => this._patterns.ostinato.test(block.text));
   const chordPositionQstamps = this._scoreData.chordPositions.map(cpInfo => cpInfo.startQ).concat([this._scoreData.chordPositions.at(-1).endQ]);
   for (const element of this._scoreData.meiParsed.querySelectorAll('measure, dir, harm, fermata')) {
     if (element.matches('measure')) {
@@ -1721,11 +1712,11 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
         element.setAttribute('ch-intro-bracket', 'start');
       } else if (elementText === '⌝') {
         element.setAttribute('ch-intro-bracket', 'end');
-      } else if (this._roundMarkerPattern.test(elementText)) {
+      } else if (this._patterns.roundMarker.test(elementText)) {
         element.setAttribute('ch-round-marker', '');
         this._scoreData.features.hasRound = true;
       }
-      if (this._ostinatoMark.test(elementText)) this._scoreData.features.hasOstinato = true;
+      if (this._patterns.ostinato.test(elementText)) this._scoreData.features.hasOstinato = true;
 
       // If qstamp is at the end of the measure, right-align it to prevent it from sticking out too far
       // See https://github.com/rism-digital/verovio/issues/4239
@@ -1751,6 +1742,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
     .filter(pitch => Number.isInteger(pitch));
   this._normalizeSections(); // After parts and intro brackets are available
   this._normalizeChordSets(); // After <harm> elements have chord positions
+  this._scoreData.harmStaffNumber = this._scoreData.meiParsed.querySelector('[ch-melody]')?.closest('staff')?.getAttribute('n') ?? '1';
 
   // Get key signature info
   // On scores converted from MXL, use <keySig> attributes (sig, pname, accid, mode)
@@ -2016,7 +2008,6 @@ ChScore.prototype._updateMei = function () {
   // Set chord set visibility
   // Add attributes to chord symbols: @ch-superscript
   if (this._scoreData.features.hasChordSets) {
-    const harmStaffNumber = this._scoreData.meiParsed.querySelector('[ch-melody]')?.closest('staff')?.getAttribute('n') ?? '1';
     const chordSet = this._scoreData.chordSetsById[this._currentOptions.showChordSet];
     if (chordSet) {
       if (!chordSet.chordInfoList || chordSet.chordInfoList.length === 0) {
@@ -2031,18 +2022,14 @@ ChScore.prototype._updateMei = function () {
           chordInfo.measureId = measure.getAttribute('xml:id');
           chordInfo.tstamp = noteTstamp;
           chordInfo.chordPosition = chordPosition;
+          chordInfo.textMarkup = this._chordSymbolMarkup(chordInfo);
           chordSet.chordInfoList.push(chordInfo);
         }
       }
       for (const chordInfo of chordSet.chordInfoList) {
         const harm = this._createMeiElement(this._scoreData.meiParsed, 'harm');
-        harm.setAttribute('staff', harmStaffNumber);
-        let text = chordInfo.text ?? '';
-        text = text.replaceAll(/♭|b/g, '\u200A<rend glyph.auth="smufl">♭</rend>\u200A');
-        text = text.replaceAll(/♯|#/g, '\u200A<rend glyph.auth="smufl">♯</rend>\u200A');
-        text = text.replace(/\d+/g, '<rend ch-superscript="">$&</rend>');
-        if (chordInfo.prefix) text = chordInfo.prefix + ' ' + text;
-        harm.innerHTML = text;
+        harm.setAttribute('staff', this._scoreData.harmStaffNumber);
+        harm.innerHTML = chordInfo.textMarkup ??= this._chordSymbolMarkup(chordInfo);
         harm.setAttribute('tstamp', chordInfo.tstamp);
         harm.setAttribute('ch-chord-position', chordInfo.chordPosition);
         this._scoreData.meiParsed.querySelector(`measure[*|id="${chordInfo.measureId}"]`).append(harm);
@@ -2079,9 +2066,7 @@ ChScore.prototype._updateMei = function () {
     // lose all but the first
     if (this._scoreData.melodyPartIds.length <= 1) {
       // Move melody notes to a single staff and layer (preferring treble clef staff if any melody notes are on one)
-      const trebleClefStaffNumbers = Array.from(this._scoreData.meiParsed.querySelectorAll('clef[shape="G"]')).map(cf => Number.parseInt(cf.closest('staffDef').getAttribute('n')));
-      const trebleClefStaffNumbersSelector = trebleClefStaffNumbers.map(sn => `[n="${sn}"]`).join(',');
-      let melodyStaffNumber = this._scoreData.meiParsed.querySelector(`staff:is(${trebleClefStaffNumbersSelector}) [ch-melody]`)?.closest('staff')?.getAttribute('n') ?? null;
+      let melodyStaffNumber = this._scoreData.meiParsed.querySelector(`staff:is(${this._scoreData.trebleClefStaffNumbersSelector}) [ch-melody]`)?.closest('staff')?.getAttribute('n') ?? null;
       for (const [chordPosition, chordPositionInfo] of this._scoreData.chordPositions.entries()) {
         if (!chordPositionInfo.melodyNote) continue;
         if (!melodyStaffNumber) melodyStaffNumber = chordPositionInfo.melodyNote.staffNumber;
@@ -3841,7 +3826,6 @@ ChScore.prototype._getKeySignatures = function (tonality = 'major') {
 }
 
 ChScore.prototype._tempoNotes = { 1: 'whole', 2: 'half', 4: 'quarter', 8: 'eighth' };
-ChScore.prototype._tempoRange = /=\s*(\d+)(?:\s*[-–]\s*(\d+))?/;
 ChScore.prototype._tempoNoteChars = {
   '': 'whole', '': 'half', '': 'half', '': 'quarter',
   '': 'quarter', '': 'eighth', '': 'eighth',
@@ -3863,7 +3847,7 @@ ChScore.prototype._glyphTempoNote = function (text) {
 ChScore.prototype._normalizeTempos = function (tempoElements) {
   const tempos = [];
   for (const tempoElement of tempoElements) {
-    const range = this._tempoRange.exec(tempoElement.textContent);
+    const range = this._patterns.tempoRange.exec(tempoElement.textContent);
     if (!range) continue;
     const tempoLower = Number.parseInt(range[1]);
     const tempoUpper = range[2] ? Number.parseInt(range[2]) : tempoLower;
@@ -3975,6 +3959,17 @@ ChScore.prototype._getInlineVerseNumbers = function (meiParsed) {
   return hasVerseNumberMismatch ? [] : verseNumbers;
 }
 
+// Render a chord symbol's text as MEI markup. A pure function of @text and @prefix, so the
+// result is cached on the chordInfo and reused on every reload.
+ChScore.prototype._chordSymbolMarkup = function (chordInfo) {
+  let text = chordInfo.text ?? '';
+  text = text.replaceAll(this._patterns.chordFlat, '\u200A<rend glyph.auth="smufl">♭</rend>\u200A');
+  text = text.replaceAll(this._patterns.chordSharp, '\u200A<rend glyph.auth="smufl">♯</rend>\u200A');
+  text = text.replace(this._patterns.chordDigits, '<rend ch-superscript="">$&</rend>');
+  if (chordInfo.prefix) text = chordInfo.prefix + ' ' + text;
+  return text;
+}
+
 ChScore.prototype._normalizeChordSets = function () {
   // Add default chord set
   const harmElements = this._scoreData.meiParsed.querySelectorAll('harm');
@@ -3994,6 +3989,7 @@ ChScore.prototype._normalizeChordSets = function () {
         measureId: harmElement.closest('measure').getAttribute('xml:id'),
         tstamp: harmElement.getAttribute('tstamp'),
       }
+      chordInfo.textMarkup = this._chordSymbolMarkup(chordInfo);
       defaultChordSet.chordInfoList.push(chordInfo);
       if (harmElement.getAttribute('ch-chord-position')) {
         const chordPosition = Number.parseInt(harmElement.getAttribute('ch-chord-position'));
@@ -5814,7 +5810,7 @@ ChScore.prototype._foldText = function (text, { strip = null, edges = false, whi
   // happened to encode its accents.
   if (strip) folded = folded.normalize('NFD').replace(strip, '');
   folded = folded.normalize('NFC');
-  if (edges) folded = folded.replace(this._punctuationAtEdges, '');
+  if (edges) folded = folded.replace(this._patterns.punctuationAtEdges, '');
   if (whitespace === 'collapse') folded = folded.replace(/\s+/g, ' ').trim();
   else if (whitespace === 'remove') folded = folded.replace(/\s+/g, '');
   return folded.toLowerCase();
@@ -5834,7 +5830,7 @@ ChScore.prototype._foldForMatching = function (text, whitespace = 'collapse') {
 // _foldForMatching, because accents tell hyphen-table entries apart ("ében-ézer") and
 // dropping the apostrophe would collapse "we'll" onto "well" and "I'll" onto "ill".
 ChScore.prototype._foldWord = function (word) {
-  const bare = (word ?? '').split(this._hyphenPattern).join('').replace(this._apostrophes, '’');
+  const bare = (word ?? '').split(this._patterns.hyphen).join('').replace(this._patterns.apostrophes, '’');
   return this._foldText(bare, { edges: true });
 }
 
@@ -5849,14 +5845,14 @@ ChScore.prototype._normalizeLyricsForMatching = function (expandedLyrics, withPo
   const normChars = [];
   const posMap = withPosMap ? [] : null;
   const rubyRegex = /<ruby[^>]*>[\s\S]*?<\/ruby>/gi;
-  const stripRe = this._matchingStrip;
+  const stripRe = this._patterns.matchingStrip;
   let lastPlainIndex = 0;
   let rubyMatch;
 
   // Normalize a single character into normChars/posMap.
   // When collapseWhitespace is true, runs of whitespace become a single space.
   function addNormChar(char, position, collapseWhitespace) {
-    const norm = char.normalize('NFD').replace(ChScore.prototype._diacriticMarks, '').toLowerCase();
+    const norm = char.normalize('NFD').replace(ChScore.prototype._patterns.diacriticMarks, '').toLowerCase();
     if (norm && !/\s/.test(norm)) {
       for (const ch of norm) {
         normChars.push(ch);
@@ -6061,9 +6057,6 @@ ChScore.prototype._phraseStartWeights = {
   breakCost: 1.9, lengthCost: 0.3,
 };
 
-// Phrase punctuation, allowing a closing quote or bracket after it
-ChScore.prototype._phrasePunctuation = /[.,:;?!—–…]["'’”\)\]]*$/u;
-
 // Words a line doesn't end on, because they attach to whatever follows: articles,
 // conjunctions and possessives leave a phrase visibly unfinished ("You have a work that no /
 // other can do"). Deliberately that closed class only — a wider list picks up words that
@@ -6162,7 +6155,7 @@ ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
       bump(cp, 'count');
 
       const previousText = (previous.syls?.at(-1)?.text ?? previous.text ?? '').trim();
-      if (this._phrasePunctuation.test(previousText)) bump(cp, 'punctuation');
+      if (this._patterns.phrasePunctuation.test(previousText)) bump(cp, 'punctuation');
       // A line ending on a word that leans on the next one is evidence against a break.
       // Compared as a whole word, gathered back across the notes it's sung over: a word
       // split between them arrives a fragment at a time, and matching on the fragment it
@@ -6609,23 +6602,47 @@ ChScore.prototype._hyphenCharacters = '-‐‑';
 // agree on a key no matter what quotes or sentence punctuation a word is printed with.
 ChScore.prototype._punctuationCharacter = '[^\\p{L}\\p{N}]';
 
-// The two character sets above as patterns, compiled once here rather than per call:
-// _insertKnownHyphens and _foldWord run on every word of the lyrics.
-ChScore.prototype._hyphenPattern = new RegExp(`[${ChScore.prototype._hyphenCharacters}]`);
-ChScore.prototype._punctuationAtEdges = new RegExp(
-  `^${ChScore.prototype._punctuationCharacter}+|${ChScore.prototype._punctuationCharacter}+$`, 'gu');
-ChScore.prototype._leadingPunctuation = new RegExp(`^${ChScore.prototype._punctuationCharacter}*`, 'u');
+// Regular expressions
+ChScore.prototype._patterns = {
+  // Verse markers and styling in credit text
+  verseMarker: /^\s*\d{1,2}\s*[.)]/,
+  nonVerseMarker: /^\s*\d{3,}\s*[.)]/,
+  stylingMarkup: /<\/?(?:em|strong)>/g,
+  capoMark: /^capo\b[\s:.,-]*\d+[\s:.,-]*$/i,
+  standaloneNumber: /^\d+$/,
 
-// Combining marks, left behind by an NFD decomposition once the base letter is out
-ChScore.prototype._diacriticMarks = /[̀-ͯ]/g;
+  // Round numbers and ostinato directions
+  roundMarker: /^[➀-➈]$/,
+  ostinato: /ostinato/i,
 
-// Everything a fold for *matching* drops. Symbols because nothing sung is one, digits
-// because a printed verse number ("3. Sweet hour") isn't sung either -- dropping it is
-// what lines a printed line up with the syllables.
-ChScore.prototype._matchingStrip = /[̀-ͯ\p{P}\p{N}\p{S}]/u;
+  // Metronome mark, as a single tempo or a range
+  tempoRange: /=\s*(\d+)(?:\s*[-–]\s*(\d+))?/,
 
-// The apostrophe spelled one way, whichever the engraver used
-ChScore.prototype._apostrophes = /['‘’ʼ]/g;
+  // Accidentals and superscripts in chord symbols
+  chordFlat: /♭|b/g,
+  chordSharp: /♯|#/g,
+  chordDigits: /\d+/g,
+
+  // Phrase punctuation, allowing a closing quote or bracket after it
+  phrasePunctuation: /[.,:;?!—–…]["'’”\)\]]*$/u,
+
+  // The two character sets above, as patterns
+  hyphen: new RegExp(`[${ChScore.prototype._hyphenCharacters}]`),
+  punctuationAtEdges: new RegExp(
+    `^${ChScore.prototype._punctuationCharacter}+|${ChScore.prototype._punctuationCharacter}+$`, 'gu'),
+  leadingPunctuation: new RegExp(`^${ChScore.prototype._punctuationCharacter}*`, 'u'),
+
+  // Combining marks, left behind by an NFD decomposition once the base letter is out
+  diacriticMarks: /[̀-ͯ]/g,
+
+  // Everything a fold for *matching* drops. Symbols because nothing sung is one, digits
+  // because a printed verse number ("3. Sweet hour") isn't sung either -- dropping it is
+  // what lines a printed line up with the syllables.
+  matchingStrip: /[̀-ͯ\p{P}\p{N}\p{S}]/u,
+
+  // The apostrophe spelled one way, whichever the engraver used
+  apostrophes: /['‘’ʼ]/g,
+};
 
 // A dictionary of hyphenated words, indexed by the word with its hyphens removed and
 // lowercased, to the character positions (into that stripped word) a hyphen goes
@@ -6635,10 +6652,10 @@ ChScore.prototype._apostrophes = /['‘’ʼ]/g;
 // word inside quotes/guillemets or followed by sentence punctuation (e.g.
 // "« Ében-Ézer »,") is still found.
 ChScore.prototype._hyphenPositionsTable = function (words, texts = []) {
-  const hyphenChars = ChScore.prototype._hyphenPattern;
+  const hyphenChars = ChScore.prototype._patterns.hyphen;
   const scannedWords = texts
     .flatMap(text => text.split(/\s+/))
-    .map(token => token.replace(ChScore.prototype._punctuationAtEdges, ''));
+    .map(token => token.replace(ChScore.prototype._patterns.punctuationAtEdges, ''));
 
   // Scanned words first, so a score's own printed hyphenation wins over the
   // hard-coded list on a conflict -- whichever is seen first for a given word claims
@@ -6670,8 +6687,8 @@ ChScore.prototype._hyphenPositionsTable = function (words, texts = []) {
 // ending a line ("AdamondiAhman.") still matches -- and since the looked-up positions
 // count from the first letter, anything trimmed off the front shifts them back.
 ChScore.prototype._insertKnownHyphens = function (word) {
-  const leadingPunctuation = word.match(this._leadingPunctuation)[0].length;
-  const trimmed = word.replace(this._punctuationAtEdges, '');
+  const leadingPunctuation = word.match(this._patterns.leadingPunctuation)[0].length;
+  const trimmed = word.replace(this._patterns.punctuationAtEdges, '');
 
   const hyphenPositions = this._scoreData?.hyphenPositions?.[trimmed.toLowerCase()];
   if (!hyphenPositions) return word;

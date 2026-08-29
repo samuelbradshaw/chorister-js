@@ -936,7 +936,11 @@ describe('_normalizeChordSets()', () => {
 
   function callNormalize(meiParsed, chordSets = []) {
     const scoreData = { meiParsed, chordSets: [...chordSets], chordSetsById: {} };
-    ChScore.prototype._normalizeChordSets.call({ _scoreData: scoreData });
+    // Prototype-backed rather than a bare object, so the method can reach its siblings
+    // (_chordSymbolMarkup and the chord symbol patterns) the way it does on a real score.
+    const stub = Object.create(ChScore.prototype);
+    stub._scoreData = scoreData;
+    ChScore.prototype._normalizeChordSets.call(stub);
     return scoreData;
   }
 
