@@ -937,12 +937,14 @@ ChScore.prototype._loadMidi = function () {
 // Extract font styles from font names
 ChScore.prototype._normalizeFontStyling = function (element) {
   const fontFamily = (element.getAttribute('font-family') || '').toLowerCase();
+  const currentStyle = element.getAttribute('font-style');
+  const currentWeight = element.getAttribute('font-weight');
   let changed = false;
-  if (!element.getAttribute('font-style') && fontFamily.includes('italic')) {
+  if ((!currentStyle || currentStyle === 'normal') && fontFamily.includes('italic')) {
     element.setAttribute('font-style', 'italic');
     changed = true;
   }
-  if (!element.getAttribute('font-weight') && fontFamily.includes('bold')) {
+  if ((!currentWeight || currentWeight === 'normal') && fontFamily.includes('bold')) {
     element.setAttribute('font-weight', 'bold');
     changed = true;
   }
@@ -1128,7 +1130,7 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
   const date = meiParsed.querySelector('fileDesc pubStmt date');
   const header = getTextBlocks('pgHead');
   const footer = getTextBlocks('pgFoot');
-  const looksLikeNonVerseMarker = paragraph => this._patterns.nonVerseMarker.test(paragraph);
+  const looksLikeAttributions = paragraph => this._patterns.nonVerseMarker.test(paragraph);
   const looksLikeVerseMarker = paragraph => this._patterns.verseMarker.test(paragraph);
   const paragraphs = text => text.split(/\n\s*\n/);
   const isStanzaBlock = block => block.text.includes('\n') && paragraphs(block.text).some(looksLikeVerseMarker);
@@ -1155,7 +1157,7 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
       const words = paragraphs(block.text);
       return paragraphs(block.html)
         .map((paragraph, p) => [paragraph, words[p] ?? paragraph])
-        .filter(([, paragraphWords]) => !looksLikeNonVerseMarker(paragraphWords));
+        .filter(([, paragraphWords]) => !looksLikeAttributions(paragraphWords));
     })
     .filter(block => block.some(([, paragraphWords]) => looksLikeVerseMarker(paragraphWords)))
     .flat()
@@ -1452,7 +1454,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   }
   this._scoreData.staffNumbers = Array.from(this._scoreData.meiParsed.querySelectorAll('staffDef')).map(sf => Number.parseInt(sf.getAttribute('n')));
   this._scoreData.trebleClefStaffNumbersSelector = Array.from(this._scoreData.meiParsed.querySelectorAll('clef[shape="G"]'))
-    .map(cf => `[n="${Number.parseInt(cf.closest('staffDef').getAttribute('n'))}"]`).join(',');
+    .map(cf => `[n="${Number.parseInt(cf.closest('staffDef, staff').getAttribute('n'))}"]`).join(',');
   this._scoreData.features.hasLyrics = this._scoreData.meiParsed.querySelector('verse') !== null;
   const chordPositionIndex = this._indexChordPositions(vrvTimemap);
   this._scoreData.numChordPositions = chordPositionIndex.qstamps.length - 1;
@@ -5000,12 +5002,10 @@ ChScore.prototype._normalizeSections = function () {
   const foldWords = text => text?.replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase() ?? '';
   const foldedReferenceChorus = foldWords(referenceChorus?.annotatedLyrics);
   for (const stanzaText of this._scoreData.scoreMetadata?.stanzas ?? []) {
-    // A verse marker is 1 or 2 digits (a longer run, e.g. a copyright year, is
-    // already excluded from scoreMetadata.stanzas -- see looksLikeNonVerseMarker in
-    // _getScoreMetadata). Text with no marker at all -- an unmarked lead-in chorus
-    // -- is skipped here rather than upstream, since it isn't a verse itself.
-    const [, marker, annotatedLyrics] = /^\s*(\d{1,2})\s*[.)]\s*([\s\S]*)$/.exec(stanzaText) ?? [];
-    if (!annotatedLyrics) continue;
+    // A verse marker is 1 or 2 digits at the beginning of a line (skipping text in parentheses)
+    const [, prefix, marker, lyrics] = /^([\s\S]*?)(?:^|\n)\s*(\d{1,2})\s*[.)]\s*([\s\S]*)$/.exec(stanzaText) ?? [];
+    if (!lyrics) continue;
+    const annotatedLyrics = prefix ? `${prefix.trim()}\n${lyrics}` : lyrics;
 
     // Skip verses that are already sung from the staff
     const alreadyPresent = otherSections.some(section => this._cleanMarker(section.marker) === marker);
@@ -5104,6 +5104,27 @@ ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasI
     }
 
     expansion.setAttribute('type', hasComplexSections ? 'complex' : hasInitialChorus ? 'chorus-verse-chorus' : 'verse-chorus');
+
+    // Patch expansion plist IDs to handle "to Coda" better. Example: Teacher, Do You Love Me (Children’s Songbook)
+    // TODO: See if this can be fixed in Verovio, which generated the original expansion plist
+    const toCodaChordPosition = Number.parseInt(
+      meiParsed.querySelector('dir[type="tocoda"]')?.getAttribute('ch-chord-position'));
+    if (expansionIds.length > 2 && !Number.isNaN(toCodaChordPosition)) {
+      const span = (ref) => {
+        const chordPositions = meiParsed.querySelector(`[*|id="${ref.substring(1)}"]`)
+          ?.getAttribute('ch-chord-position')?.trim().split(' ') ?? [];
+        return [Number.parseInt(chordPositions[0]), Number.parseInt(chordPositions.at(-1))];
+      };
+      let cut = expansionIds.length - 1;
+      if (span(expansionIds[cut])[0] > toCodaChordPosition) {
+        while (cut > 1 && span(expansionIds[cut - 1])[0] > toCodaChordPosition) cut -= 1;
+        const [markSectionStart, markSectionEnd] = span(expansionIds[cut - 1]);
+        if (markSectionStart <= toCodaChordPosition && toCodaChordPosition <= markSectionEnd) {
+          expansionIds = [...expansionIds.slice(0, cut - 1), expansionIds.at(-1)];
+          expansion.setAttribute('plist', expansionIds.join(' '));
+        }
+      }
+    }
   } else if (
     hasRepeatOrJump
     || measures.at(-1).getAttribute('right') !== 'end' // Last measure isn't end of song
@@ -5976,6 +5997,123 @@ ChScore.prototype._syllableStanzaRuns = function (syllables) {
   return runs;
 }
 
+// Fix pickup syllables that are grouped with the wrong section. Example: Teacher, Do You Love Me (Children’s Songbook)
+ChScore.prototype._movePickupSyllables = function (runs, phraseStarts, syllables) {
+  // A pickup is the notes before a downbeat -- a word or two, never a line. Without a
+  // bound, a run that merely starts well after the last phrase start would pull that
+  // whole phrase across; measured in syllables actually sung, not chord positions
+  // spanned, so held notes and rests between them don't count against it.
+  const MAX_PICKUP_SYLLABLES = 3;
+
+  const sungChordPositions = new Set();
+  for (const syllable of syllables) {
+    for (const chordPosition of syllable.chordPositions) sungChordPositions.add(chordPosition);
+  }
+
+  for (let r = 1; r < runs.length; r++) {
+    const previous = runs[r - 1];
+    const run = runs[r];
+    const firstChordPosition = run.syllables[0]?.chordPositions[0];
+    // A run opening on a phrase start is whole; it was entered from the front
+    if (firstChordPosition == null || phraseStarts.has(firstChordPosition)) continue;
+
+    let phraseStart = null;
+    for (const candidate of phraseStarts) {
+      if (candidate < firstChordPosition && (phraseStart === null || candidate > phraseStart)) {
+        phraseStart = candidate;
+      }
+    }
+    if (phraseStart === null) continue;
+
+    // What this run is missing of that phrase is what was sung ahead of it
+    let missing = 0;
+    for (let chordPosition = phraseStart; chordPosition < firstChordPosition; chordPosition++) {
+      if (sungChordPositions.has(chordPosition)) missing += 1;
+    }
+    if (missing === 0 || missing > MAX_PICKUP_SYLLABLES) continue;
+    if (previous.syllables.length <= missing) continue;
+
+    run.syllables.unshift(...previous.syllables.splice(-missing));
+    previous.lastChordPosition = previous.syllables.at(-1).chordPositions.at(-1);
+  }
+  return runs;
+}
+
+// A passage engraved with one lyric line -- a second ending, a coda lead-in -- carries
+// one line because everyone sings the same words there, not because those words belong
+// to verse 1. The line number changing at its edge is what ends the run, so those words
+// land in a stanza of their own instead of finishing the verse that ran into them
+// ("Teacher, Do You Love Me?", 1989 CSB: verse 2 stops on "And", and "lead me safely
+// with his light." starts a stanza). Give them back to that verse, up to the phrase
+// start where the next section's own words begin -- which is also what leaves a trailing
+// pickup ("I", into the chorus) behind as a fragment for _mergePickupStanzas.
+//
+// Only a boundary the music runs straight through: a jump back into a repeat is a real
+// stanza break, and so is a labelled or section-starting syllable.
+ChScore.prototype._mergeSingleLineRuns = function (runs, phraseStarts) {
+  // In a two-part score the stacked lines are parts singing at once, not a verse's
+  // alternatives, so a later single-line passage isn't the two of them converging and
+  // the sibling-line test below doesn't mean what it means elsewhere.
+  if (this._scoreData.features.hasTwoPartMelody) return runs;
+
+  // Min and max rather than first and last: a run that was handed a pickup opens on the
+  // chord position that pickup was engraved at, which is later than everything after it.
+  // Only each syllable's own position counts -- a syllable held across a jump collects
+  // the silent positions that follow it, which would otherwise stretch the run's span
+  // over music it never sang and make it a sibling of everything.
+  const spanOf = (run) => {
+    let start = Infinity;
+    let end = -Infinity;
+    for (const syllable of run.syllables) {
+      const chordPosition = syllable.chordPositions[0];
+      if (chordPosition == null) continue;
+      if (chordPosition < start) start = chordPosition;
+      if (chordPosition > end) end = chordPosition;
+    }
+    return [start, end];
+  };
+
+  for (let r = 1; r < runs.length; r++) {
+    const previous = runs[r - 1];
+    const run = runs[r];
+    const first = run.syllables[0];
+    const previousLast = previous.syllables.at(-1);
+    if (!first || !previousLast) continue;
+    if (first.chordPositions[0] <= previousLast.chordPositions.at(-1)) continue;
+    if (previous.type !== run.type || previous.lyricLineId === run.lyricLineId) continue;
+    if (first.label || first.startsSection) continue;
+
+    // A chorus after a verse has this same "forward, new lyric line" shape and must not
+    // be swallowed. What separates them is whose line it is: a second ending reuses one
+    // of the lines already stacked on the verse it follows -- everyone converges onto it
+    // -- where a chorus is engraved on a line of its own, belonging to no verse. So the
+    // passage continues the verse only if its line is one the verse's own music carries.
+    // (The first syllable being a phrase start can't tell them apart: a run boundary is
+    // an implicit phrase start and never appears in the set.)
+    const [previousStart, previousEnd] = spanOf(previous);
+    const siblingLineIds = new Set(runs
+      .filter(other => other !== previous && other !== run)
+      .filter(other => {
+        const [start, end] = spanOf(other);
+        return start <= previousEnd && previousStart <= end;
+      })
+      .map(other => other.lyricLineId));
+    if (!siblingLineIds.has(run.lyricLineId)) continue;
+
+    // Where the next section's words start. A run with none of its own opens no section
+    // -- it is all continuation -- so it joins the verse whole; the empty run left behind
+    // is dropped below. What keeps that from swallowing a chorus is the sibling-line test
+    // above, not the presence of a phrase start here.
+    let end = 1;
+    while (end < run.syllables.length
+      && !phraseStarts.has(run.syllables[end].chordPositions[0])) end += 1;
+
+    previous.syllables.push(...run.syllables.splice(0, end));
+    previous.lastChordPosition = previous.syllables.at(-1).chordPositions.at(-1);
+  }
+  return runs.filter(run => run.syllables.length > 0);
+}
+
 // Build lyric stanzas from score syllables, when no lyrics are provided
 ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   // Build table of hyphenated words (combining hard-coded words, and words from the song title and lyrics below)
@@ -5984,8 +6122,14 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
     [this._scoreData.scoreMetadata.title, ...this._scoreData.scoreMetadata.stanzas].filter(Boolean)
   );
 
-  const runs = this._syllableStanzaRuns(syllables);
-  const phraseStarts = this._getPhraseStartChordPositions(syllables, runs);
+  const provisionalRuns = this._syllableStanzaRuns(syllables);
+  // Phrase starts come from the runs as engraved; both passes below read them to decide
+  // where a verse actually began and ended, so they have to follow rather than precede
+  // them. Pickups move first: shedding a trailing pickup is what can leave a run that is
+  // pure continuation, which is what the merge then hands back to the verse.
+  const phraseStarts = this._getPhraseStartChordPositions(syllables, provisionalRuns);
+  const withPickups = this._movePickupSyllables(provisionalRuns, phraseStarts, syllables);
+  const runs = this._mergeSingleLineRuns(withPickups, phraseStarts);
 
   // Walk the syllables in the order they're sung
   const built = [];
@@ -6614,7 +6758,7 @@ ChScore.prototype._punctuationCharacter = '[^\\p{L}\\p{N}]';
 ChScore.prototype._patterns = {
   // Verse markers and styling in text blocks
   verseMarker: /^\s*\d{1,2}\s*[.)]/,
-  nonVerseMarker: /^\s*\d{3,}\s*[.)]/,
+  nonVerseMarker: /\d{4}|©/,
   stylingMarkup: /<\/?(?:em|strong)>/g,
   capoMark: /^capo\b[\s:.,-]*\d+[\s:.,-]*$/i,
   standaloneNumber: /^\d+$/,
