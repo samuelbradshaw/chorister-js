@@ -1308,7 +1308,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
     const isRest = meiElement.matches('rest');
     const isCue = meiElement.getAttribute('cue') === 'true';
     // TODO: This only gets lyric text attached to the current note (or note chord) in the MEI; but the same lyrics might be sung on other simultaneous notes (such as the TB notes in an SATB chord). Lyrics on those notes aren't currently handled.
-    const lyricSyllableElements = (meiChordElement ?? meiElement).querySelectorAll('syl') ?? [];
+    const lyricSyllableElements = (meiChordElement ?? meiElement).querySelectorAll('syl:not(:empty)') ?? [];
     const lyricSyllables = Array.from(lyricSyllableElements).map(syl => syl.textContent);
 
     this._scoreData.notesAndRestsById[elementId] = {
@@ -1614,7 +1614,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
       const versesByLine = new Map([...event.children]
         .filter(child => child.matches('verse'))
         .map(verse => [verse.getAttribute('n'), verse]));
-      const realVerses = [...versesByLine.values()].filter(verse => verse.querySelector('syl')?.textContent.trim());
+      const realVerses = [...versesByLine.values()].filter(verse => verse.matches('verse:has(syl:not(:empty))'));
 
       if (realVerses.length > 0) {
         for (const lineNumber of activeLineNumbers) {
@@ -1634,8 +1634,9 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
       }
 
       for (const [lineNumber, verse] of versesByLine) {
-        const syl = verse.querySelector('syl');
-        if (!syl?.textContent.trim()) continue;
+        // The last syllable with words, not the first (so the right @con is used for elisions where there are multiple syllables on a note (common in languages like Spanish)
+        const syl = Array.from(verse.querySelectorAll('syl:not(:empty)')).at(-1);
+        if (!syl) continue;
         if (syl.getAttribute('con') === 'u') activeLineNumbers.add(lineNumber);
         else activeLineNumbers.delete(lineNumber);
       }
@@ -1840,7 +1841,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
           const text = label.textContent.trim();
           if (text) lyricLabels.push(text);
         }
-        for (const syl of lyricElement.querySelectorAll('syl')) {
+        for (const syl of lyricElement.querySelectorAll('syl:not(:empty)')) {
           const text = syl.textContent.trim();
           if (text) lyricSyllables.push(text);
         }
@@ -1977,7 +1978,7 @@ ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
   for (const versesByLineNumber of versesByStaff.values()) {
     let engravesNumbersInline = true;
     for (let lineNumber = 1; lineNumber <= versesByLineNumber.size; lineNumber++) {
-      const syl = versesByLineNumber.get(lineNumber)?.[0].querySelector('syl');
+      const syl = versesByLineNumber.get(lineNumber)?.[0].querySelector('syl:not(:empty)');
       const match = syl && CH_INLINE_VERSE_NUMBER.exec(syl.textContent);
       if (!match || Number.parseInt(match[1]) !== lineNumber) {
         engravesNumbersInline = false;
@@ -1989,7 +1990,7 @@ ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
     // Each stanza's number moves out of the syllable it was engraved in
     for (const verses of versesByLineNumber.values()) {
       for (const verse of verses) {
-        const syl = verse.querySelector('syl');
+        const syl = verse.querySelector('syl:not(:empty)');
         const match = syl && CH_INLINE_VERSE_NUMBER.exec(syl.textContent);
         if (!match) continue;
         const labelElement = this._createMeiElement(meiParsed, 'label');
@@ -4909,12 +4910,18 @@ ChScore.prototype._normalizeSections = function () {
   } else if (this._scoreData.features.hasExpansion) {
     const expansion = this._scoreData.meiParsed.querySelector('expansion[plist]');
     const expansionSectionElementIds = expansion.getAttribute('plist').trim().split(' ').map(sid => sid.substring(1));
+    // Separate repeated sections (choruses)
+    const timesPlayed = new Map();
+    for (const id of expansionSectionElementIds) {
+      timesPlayed.set(id, (timesPlayed.get(id) ?? 0) + 1);
+    }
     for (const expansionSectionElementId of expansionSectionElementIds) {
       const sectionElement = this._scoreData.meiParsed.querySelector(`[*|id="${expansionSectionElementId}"]`);
       const sectionElementChordPositions = sectionElement.getAttribute('ch-chord-position').trim().split(' ').map(cp => Number.parseInt(cp));
       lyricChordPositionRanges.push({
         start: sectionElementChordPositions[0],
         end: sectionElementChordPositions.at(-1) + 1,
+        startsRepeatedSection: timesPlayed.get(expansionSectionElementId) > 1,
       });
     }
   } else {
@@ -5252,7 +5259,7 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
     // carrying an extra syllable or two. It only ever relaxes the gap threshold, so a
     // language that doesn't mark phrases with case is simply left on the threshold.
     const startsNewPhrase = (chordPosition) => {
-      const syl = versesByCp[chordPosition]?.[0]?.querySelector('syl');
+      const syl = versesByCp[chordPosition]?.[0]?.querySelector('syl:not(:empty)');
       if (!syl || ['m', 't'].includes(syl.getAttribute('wordpos'))) return false;
       return /^\p{Lu}/u.test(syl.textContent.trim());
     };
@@ -5485,14 +5492,17 @@ ChScore.prototype._getMelodyVerseElementsByChordPosition = function (verses) {
   return versesByChordPosition;
 }
 
-// Which verse element engraved at one chord position is sounding on this pass, as an
-// index into the list (-1 for none). Score expansion and lyric extraction both need this
-// answer, so it lives in one place. Pure over its arguments: expansion calls it over the
-// cloned, expanded MEI, where the per-chord-position maps no longer line up.
+// Which verse element engraved at one chord position is sounding on this pass, as an index into the list (-1 for none). Used for score expansion and lyric extraction.
 // isSingleLine is caller-supplied because the two derive it differently.
 ChScore.prototype._verseSoundingAt = function (verseElements, passNumber, isSingleLine) {
-  const verses = Array.from(verseElements);
+  const engraved = Array.from(verseElements);
+  // Skip verses with empty syllables (melisma underscore end)
+  const sungIndices = engraved
+    .map((verse, index) => index)
+    .filter(index => engraved[index].matches('verse:has(syl:not(:empty))'));
+  const verses = sungIndices.map(index => engraved[index]);
   if (verses.length === 0) return -1;
+  const soundingIndex = (index) => (index >= 0 && index < verses.length ? sungIndices[index] : -1);
 
   // A pickup engraved inside a repeat carries only the verses it leads into, each
   // labelled ("2.", "3."), so @n doesn't line up with the pass count — take them in
@@ -5504,12 +5514,11 @@ ChScore.prototype._verseSoundingAt = function (verseElements, passNumber, isSing
     !== Number.parseInt(verses[0].getAttribute('n'));
   if (allLabelled && (verses.length > 1 || namesAnotherVerse())) {
     // Out of range on later passes, which is correct: the pickup is sung once per verse
-    const index = passNumber - 1;
-    return index < verses.length ? index : -1;
+    return soundingIndex(passNumber - 1);
   }
 
-  if (isSingleLine) return 0;
-  return verses.findIndex(ve => Number.parseInt(ve.getAttribute('n')) === passNumber);
+  if (isSingleLine) return soundingIndex(0);
+  return soundingIndex(verses.findIndex(ve => Number.parseInt(ve.getAttribute('n')) === passNumber));
 }
 
 // Round markers, by the chord position they're engraved at. The marker is the dir's own
@@ -5586,6 +5595,9 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
     }
   }
   let isFirstSyllableOfSection = false;
+  // Carried alongside rather than folded into the flag above: this one must not break a
+  // run before phrase detection has read it (see _splitRunsAtRepeatedSections).
+  let isFirstSyllableOfRepeatedSection = false;
 
   // Test cases:
   // "Gethsemane" (Hymns—For Home and Church), "This Is the Christ" (Hymns—For Home and Church), "Beautiful Savior" (1989 CSB) – complex sections
@@ -5593,7 +5605,10 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
   // "Have I Done Any Good?" (1985 Hymns) – simple verses and chorus, but verses have chord positions with only one lyric syllable. When there's only one lyric syllable, it should be extracted only in the correct verse.
   for (const { range, chordPosition: cp, expandedChordPosition: ecpCounter, passNumber }
     of this._walkSungChordPositions(lyricChordPositionRanges, { ecpStart })) {
-    if (cp === range.start) isFirstSyllableOfSection = range.startsSection ?? false;
+    if (cp === range.start) {
+      isFirstSyllableOfSection = range.startsSection ?? false;
+      isFirstSyllableOfRepeatedSection = range.startsRepeatedSection ?? false;
+    }
     // _markSingleLineChordPositions' isSingleLine is scoped per staff (built for divisi
     // sharing one staff, e.g. Soprano 1/2), so it reads true at every chord position of a
     // 'Two-Part' score — each part's own verse is alone on its own staff. That signal
@@ -5616,7 +5631,7 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
 
     if (verseElement) {
       const label = verseElement.querySelector('label');
-      const sylElements = Array.from(verseElement.querySelectorAll('syl'));
+      const sylElements = Array.from(verseElement.querySelectorAll('syl:not(:empty)'));
       const text = sylElements.map(syl => (syl.textContent.replace(/[\-\‑\s]+$/, '').trim() + ' ').trim()).join(' ').trim() || null;
       const startsWord = !['m', 't'].includes(sylElements[0]?.getAttribute('wordpos'));
       const roundMarker = startsWord ? pendingRoundMarker : null;
@@ -5639,9 +5654,11 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
         expandedChordPositions: [ecpCounter],
         lyricLineIds: [verseElement.getAttribute('ch-lyric-line-id')],
         startsSection: isFirstSyllableOfSection,
+        startsRepeatedSection: isFirstSyllableOfRepeatedSection,
         sectionType: range.sectionType ?? null,
       });
       isFirstSyllableOfSection = false;
+      isFirstSyllableOfRepeatedSection = false;
     } else {
       const currentSyllable = extractedLyricSyllables.at(-1);
       currentSyllable.chordPositions.push(cp);
@@ -5997,14 +6014,65 @@ ChScore.prototype._syllableStanzaRuns = function (syllables) {
   return runs;
 }
 
+// Start a stanza wherever a section the score plays more than once begins. On a
+// complex-sections song nothing else marks that boundary: a chorus following a verse on
+// the same lyric line, unlabelled and running forward, reads as more of the same verse.
+//
+// Deliberately not folded into _syllableStanzaRuns' own break rules, which would be the
+// obvious place: phrase starts are derived from the runs, so breaking there first hides
+// the phrases that straddle the new boundary, and the pickups anchored on them go too
+// ("Teacher, Do You Love Me?", 1989 CSB, loses the phrase starts at the chorus's "I" and
+// verse 3's "Oh"). Splitting after detection lets both passes see the shape they need.
+// A pickup is the notes before a downbeat -- a word or two, never a line. Both passes
+// below bound themselves by it: without one, a run that merely starts well after the last
+// phrase start would pull a whole phrase across. Measured in syllables actually sung, not
+// chord positions spanned, so held notes and rests between them don't count against it.
+ChScore.prototype._maxPickupSyllables = 3;
+
+ChScore.prototype._splitRunsAtRepeatedSections = function (runs, phraseStarts) {
+  // How many syllables have been sung since the last phrase start, or Infinity if this
+  // piece holds no phrase start at all. Zero means the piece ends exactly on one.
+  const sinceLastPhraseStart = (syllables, phraseStarts) => {
+    for (let index = syllables.length - 1; index >= 0; index--) {
+      if (phraseStarts.has(syllables[index].chordPositions[0])) return syllables.length - 1 - index;
+    }
+    return Infinity;
+  };
+
+  const split = [];
+  for (const run of runs) {
+    let current = null;
+    for (const syllable of run.syllables) {
+      // A section boundary is where the engraving repeats, not necessarily where a stanza
+      // ends, so it is only taken when it also falls at a phrase boundary. Two ways it
+      // doesn't: the section opens after the verse's own upbeat ("To Be a Pioneer", 1989
+      // CSB -- "You" is engraved before the repeat), which the length test catches; or it
+      // opens mid-line, a word short of the verse's end ("Isaiah Said", HHC -- "...
+      // through His | love."), which the phrase test catches. Either way the boundary is
+      // ignored and the words stay in one stanza.
+      //
+      // The phrase test wants the boundary exactly on a phrase start -- either the
+      // section's own first syllable, or the syllable after a pickup that opens it, which
+      // is how the chorus in "Teacher, Do You Love Me?" splits on its "I". Allowing a
+      // pickup's worth of slack instead was too loose: it also split "A Child's Prayer"
+      // (1989 CSB) at "the kingdom of | heav'n.", three syllables into a line.
+      const startsHere = current && syllable.startsRepeatedSection
+        && current.syllables.length > this._maxPickupSyllables
+        && (phraseStarts.has(syllable.chordPositions[0])
+          || sinceLastPhraseStart(current.syllables, phraseStarts) === 0);
+      if (!current || startsHere) {
+        current = { ...run, syllables: [] };
+        split.push(current);
+      }
+      current.syllables.push(syllable);
+      current.lastChordPosition = syllable.chordPositions.at(-1);
+    }
+  }
+  return split;
+}
+
 // Fix pickup syllables that are grouped with the wrong section. Example: Teacher, Do You Love Me (Children’s Songbook)
 ChScore.prototype._movePickupSyllables = function (runs, phraseStarts, syllables) {
-  // A pickup is the notes before a downbeat -- a word or two, never a line. Without a
-  // bound, a run that merely starts well after the last phrase start would pull that
-  // whole phrase across; measured in syllables actually sung, not chord positions
-  // spanned, so held notes and rests between them don't count against it.
-  const MAX_PICKUP_SYLLABLES = 3;
-
   const sungChordPositions = new Set();
   for (const syllable of syllables) {
     for (const chordPosition of syllable.chordPositions) sungChordPositions.add(chordPosition);
@@ -6030,7 +6098,7 @@ ChScore.prototype._movePickupSyllables = function (runs, phraseStarts, syllables
     for (let chordPosition = phraseStart; chordPosition < firstChordPosition; chordPosition++) {
       if (sungChordPositions.has(chordPosition)) missing += 1;
     }
-    if (missing === 0 || missing > MAX_PICKUP_SYLLABLES) continue;
+    if (missing === 0 || missing > this._maxPickupSyllables) continue;
     if (previous.syllables.length <= missing) continue;
 
     run.syllables.unshift(...previous.syllables.splice(-missing));
@@ -6081,7 +6149,7 @@ ChScore.prototype._mergeSingleLineRuns = function (runs, phraseStarts) {
     if (!first || !previousLast) continue;
     if (first.chordPositions[0] <= previousLast.chordPositions.at(-1)) continue;
     if (previous.type !== run.type || previous.lyricLineId === run.lyricLineId) continue;
-    if (first.label || first.startsSection) continue;
+    if (first.label || first.startsSection || first.startsRepeatedSection) continue;
 
     // A chorus after a verse has this same "forward, new lyric line" shape and must not
     // be swallowed. What separates them is whose line it is: a second ending reuses one
@@ -6128,7 +6196,8 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   // them. Pickups move first: shedding a trailing pickup is what can leave a run that is
   // pure continuation, which is what the merge then hands back to the verse.
   const phraseStarts = this._getPhraseStartChordPositions(syllables, provisionalRuns);
-  const withPickups = this._movePickupSyllables(provisionalRuns, phraseStarts, syllables);
+  const sectionRuns = this._splitRunsAtRepeatedSections(provisionalRuns, phraseStarts);
+  const withPickups = this._movePickupSyllables(sectionRuns, phraseStarts, syllables);
   const runs = this._mergeSingleLineRuns(withPickups, phraseStarts);
 
   // Walk the syllables in the order they're sung
@@ -7008,7 +7077,7 @@ ChScore.prototype._markerNumber = function (marker) {
 // Whether a verse (or syllable) opens a word rather than continuing one. Continuations
 // carry no label of their own, so callers tracking a word-level mark reset on a word start.
 ChScore.prototype._startsWord = function (verseOrSyl) {
-  const syl = verseOrSyl.matches('syl') ? verseOrSyl : verseOrSyl.querySelector('syl');
+  const syl = verseOrSyl.matches('syl') ? verseOrSyl : verseOrSyl.querySelector('syl:not(:empty)');
   return !['m', 't'].includes(syl?.getAttribute('wordpos'));
 }
 
