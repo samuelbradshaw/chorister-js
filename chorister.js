@@ -1397,6 +1397,9 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
 
     const partIdsDict = { 1: [], 2: [], 3: [], 4: [] };
     const fullPartIds = [];
+    // Whichever parts carry the tune on this staff at this chord position, under whatever
+    // name ('alto' where the tune has moved down a voice). Not _scoreData.twoPartMelodyPartIds,
+    // which is the whole score's 'Two-Part' answer and holds only part-N.
     const melodyPartIds = [];
     let autoPlacementCounter = 1;
 
@@ -2002,6 +2005,84 @@ ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
   }
 }
 
+// Move the melody's words onto the melody itself, for showMelodyOnly to keep when it strips
+// everything else away: a lower voice carrying the tune ('SATB#A') keeps its words engraved
+// on the voice above, which is about to go. Which verses are the melody's is
+// _melodyVerseElements' question, asked here too so rendering and extraction agree.
+ChScore.prototype._moveMelodyLyricsOntoMelody = function () {
+  const melodyByChordPosition = new Map();
+  const melodyRests = new Set();
+  for (const element of this._scoreData.meiParsed.querySelectorAll(':is(note, rest)[ch-melody]')) {
+    const chordPosition = Number.parseInt(element.getAttribute('ch-chord-position'));
+    if (Number.isNaN(chordPosition)) continue;
+    // The chord, when there is one: a note inside it is removed, but the chord stays
+    if (element.matches('rest')) melodyRests.add(chordPosition);
+    else if (!melodyByChordPosition.has(chordPosition)) melodyByChordPosition.set(chordPosition, element.closest('chord') ?? element);
+  }
+
+  const melodyLayers = this._melodyLayerByStaffAndChordPosition();
+  const versesByChordPosition = new Map();
+  for (const verse of this._scoreData.meiParsed.querySelectorAll(':is(note, chord) verse')) {
+    const holder = verse.closest('note, chord');
+    if (this._carriesMelody(holder)) continue;
+    // Extraction reads a verse above the melody on the melody's own staff, since words below
+    // it there are a second voice's. Rendering removes whole staves too, so the same
+    // convention applies a level up: a staff above the tune's holds its words ('SS+A#A').
+    const chordPosition = Number.parseInt(holder.getAttribute('ch-chord-position'));
+    const melodyStaffNumber = this._staffNumberOf(melodyByChordPosition.get(chordPosition));
+    if (!this._isAboveMelody(holder, melodyLayers) && !(this._staffNumberOf(holder) < melodyStaffNumber)) continue;
+    if (!versesByChordPosition.has(chordPosition)) versesByChordPosition.set(chordPosition, []);
+    versesByChordPosition.get(chordPosition).push(verse);
+  }
+
+  const lateEntry = this._lateMelodyLyricTargets(melodyByChordPosition, melodyRests, versesByChordPosition);
+  for (const [chordPosition, verses] of versesByChordPosition) {
+    const target = melodyByChordPosition.get(lateEntry.get(chordPosition) ?? chordPosition);
+    for (const verse of verses) {
+      if (!target || target === verse.closest('note, chord')) continue;
+      // Verses stack in @n order, so put it in place rather than on the end
+      const lineNumber = Number.parseInt(verse.getAttribute('n'));
+      const below = Array.from(target.children).find(child => child.matches('verse')
+        && Number.parseInt(child.getAttribute('n')) > lineNumber);
+      target.insertBefore(verse, below ?? null);
+    }
+  }
+}
+
+// Which note each chord position's words belong on where the melody rests under a word: the
+// voice carrying the tune entered late and is catching up, so pair its notes with the words
+// in order until the counts come back level. No corpus score reaches this — theirs is
+// answered by the parts template naming the part that holds the words — but filtering to an
+// arbitrary part (see the TODO in _updateMei) has no template to rely on.
+ChScore.prototype._lateMelodyLyricTargets = function (melodyByChordPosition, melodyRests, versesByChordPosition) {
+  // A stretch longer than this is two phrases read as one, not a voice catching up
+  const CH_MAX_LATE_ENTRY_SPAN = 24;
+  const lastChordPosition = this._scoreData.numChordPositions - 1;
+  const targets = new Map();
+  let consumedThrough = -1;
+
+  for (const start of [...melodyRests].filter(cp => versesByChordPosition.has(cp)).sort((a, b) => a - b)) {
+    if (start <= consumedThrough) continue;
+
+    // Walk forward, collecting the words still owed a note and the notes still owed a word,
+    // until the two balance — the melody has then said everything the words say
+    const owed = [];
+    const notes = [];
+    const balanced = () => notes.length > 0 && notes.length === owed.length;
+    let at = start;
+    for (; at <= lastChordPosition && at - start < CH_MAX_LATE_ENTRY_SPAN; at++) {
+      if (versesByChordPosition.has(at)) owed.push(at);
+      if (melodyByChordPosition.has(at)) notes.push(at);
+      if (balanced()) break;
+    }
+    if (!balanced()) continue;
+
+    for (let i = 0; i < owed.length; i++) targets.set(owed[i], notes[i]);
+    consumedThrough = at;
+  }
+  return targets;
+}
+
 // Clean up and add metadata to MEI document based on rendering options
 ChScore.prototype._updateMei = function () {
   this._scoreData.meiParsed = this._scoreData.meiParsedComplete.cloneNode(true);
@@ -2053,10 +2134,15 @@ ChScore.prototype._updateMei = function () {
 
   // Show melody only
   // Edge cases for testing: "I Am a Child of God" (1989 Children’s Songbook); "The Morning Breaks" (1985 Hymns)
-  // TODO: Fix cases where the melody includes a part without lyrics attached. Known cases in 1985 Hymns: "The Lord Is My Shepherd" (#108, #316) (melody starts on Alto, then Soprano); "High on the Mountain Top" (#333) (melody starts on Tenor, then Bass); "I Need Thee Every Hour" (#334) (melody on Tenor 2); "Brightly Beams Our Father’s Mercy" (#335) (melody on Tenor 2); "School Thy Feelings" (#336) (melody starts on Tenor 2, then Tenor 1, then Tenor 2). For now, I marked the part with lyrics as the melody on those hymns.
+  // A melody carrying no lyrics of its own is handled by _moveMelodyLyricsOntoMelody: its
+  // words are engraved on the part above, which is about to be removed.
   // TODO: Allow filtering to any part(s). Challenges: If layer/voice 1 in a staff is removed, the layer that remains may have empty spaces that need to be filled in with notes or rests copied from layer 1. Also, lyrics need to be attached to a part that remains visible.
   // See https://github.com/music-encoding/music-encoding/issues/1709
   if (this._currentOptions.showMelodyOnly && this._scoreData.features.hasMelodyInfo) {
+    // Before anything is removed: where a lower voice carries the tune, its words are
+    // engraved on the voice above it, and that voice is about to go
+    this._moveMelodyLyricsOntoMelody();
+
     const deletedElementIds = [];
     // Remove non-melody notes and rests
     for (const element of this._scoreData.meiParsed.querySelectorAll(`note:not([ch-melody]), rest:not([ch-melody]), mRest`)) {
@@ -2065,14 +2151,24 @@ ChScore.prototype._updateMei = function () {
     }
     // Independent melody lines are already one per staff, so consolidating onto one would
     // lose all but the first
-    if (this._scoreData.melodyPartIds.length <= 1) {
+    if (this._scoreData.twoPartMelodyPartIds.length <= 1) {
       // Move melody notes to a single staff and layer (preferring treble clef staff if any melody notes are on one)
-      let melodyStaffNumber = this._scoreData.meiParsed.querySelector(`staff:is(${this._scoreData.trebleClefStaffNumbersSelector}) [ch-melody]`)?.closest('staff')?.getAttribute('n') ?? null;
+      // A men's-choir score has no treble staff to prefer, and an empty :is() throws, so
+      // the preference is only expressed when there is one to express
+      const trebleStaves = this._scoreData.trebleClefStaffNumbersSelector;
+      let melodyStaffNumber = trebleStaves
+        ? this._scoreData.meiParsed.querySelector(`staff:is(${trebleStaves}) [ch-melody]`)?.closest('staff')?.getAttribute('n') ?? null
+        : null;
       for (const [chordPosition, chordPositionInfo] of this._scoreData.chordPositions.entries()) {
         if (!chordPositionInfo.melodyNote) continue;
         if (!melodyStaffNumber) melodyStaffNumber = chordPositionInfo.melodyNote.staffNumber;
-        // Melody element may be a note, rest, or chord
-        const melodyElement = this._scoreData.meiParsed.querySelector(`[ch-chord-position="${chordPosition}"]:is(chord, note, rest)`);
+        // Melody element may be a note, rest, or chord — and must be the one carrying the
+        // melody, not merely the first at this chord position. Removing the other parts
+        // leaves an emptied <chord> shell behind on the staves above until the orphan sweep
+        // below, and gathering the words onto that shell would delete them with it.
+        const melodyElement = this._scoreData.meiParsed.querySelector(
+          `[ch-chord-position="${chordPosition}"]:is(chord:has([ch-melody]), note[ch-melody], rest[ch-melody])`);
+        if (!melodyElement) continue;
         const measureElement = melodyElement.closest('measure');
         melodyElement.removeAttribute('stem.dir');
         const lyrics = measureElement.querySelectorAll(`[ch-chord-position="${chordPosition}"]:is(chord, note) verse`);
@@ -2241,7 +2337,7 @@ ChScore.prototype._updateMei = function () {
 
       // For a two-part song, @ch-iteration indicates which part is singing, not the walk's pass number. The walk counts visits per chord position, so a repeat ending whose positions no body range covered reads as pass 1 however many iterations precede it. _gatherSyllables' tail-word handling works around the same mismatch.
       const iterationOf = section => Number.parseInt(section.getAttribute('ch-iteration')) || 0;
-      const melodyPartIds = this._scoreData.melodyPartIds;
+      const twoPartMelodyPartIds = this._scoreData.twoPartMelodyPartIds;
       // A chord takes its part from the notes inside it
       const partIdOf = element => element.getAttribute('ch-part-id')
         ?? element.querySelector('note[ch-part-id]')?.getAttribute('ch-part-id');
@@ -2278,7 +2374,7 @@ ChScore.prototype._updateMei = function () {
       const soundsInIteration = (element, iteration) => {
         const pickupIteration = pickupIterationByElement.get(element);
         if (pickupIteration != null) return iteration === pickupIteration;
-        const singingPartId = melodyPartIds[iteration - 1]; // undefined once all have sung
+        const singingPartId = twoPartMelodyPartIds[iteration - 1]; // undefined once all have sung
         return !singingPartId || partIdOf(element) === singingPartId;
       };
       // Replay the sequence recorded at parse time rather than walking it again.
@@ -2324,7 +2420,7 @@ ChScore.prototype._updateMei = function () {
           if (verseElements.length > 0 && !isIntroduction) {
             // A note belonging to no melody part (an accompaniment staff carrying words)
             // falls through to the ordinary per-pass rule
-            const isTwoPartMelodyNote = isTwoPart && melodyPartIds.includes(partIdOf(element));
+            const isTwoPartMelodyNote = isTwoPart && twoPartMelodyPartIds.includes(partIdOf(element));
             let keptVerseIndex = -1;
             if (isTwoPartMelodyNote) {
               if (soundsInIteration(element, currentIteration)) keptVerseIndex = 0;
@@ -2359,7 +2455,7 @@ ChScore.prototype._updateMei = function () {
           for (const element of section.querySelectorAll('note, chord')) {
             // A chord is rested out as a whole, so its own notes aren't handled separately
             if (element.matches('note') && element.parentElement.closest('chord')) continue;
-            if (!melodyPartIds.includes(partIdOf(element))) continue;
+            if (!twoPartMelodyPartIds.includes(partIdOf(element))) continue;
             if (!soundsInIteration(element, iteration)) silentSet.add(element);
           }
         }
@@ -4036,13 +4132,15 @@ ChScore.prototype._normalizeParts = function (chordPositionIndex) {
     this._scoreData.partsById[part.partId] = part;
   }
 
-  // The melody-eligible parts, in the order they sing: for a 'Two-Part' template ('P+P',
-  // independent melody lines on separate staves) part-N sings iteration N, so the order is
-  // load-bearing. More than one means two-part; 'Duet' ('PP', one shared staff) yields one.
-  this._scoreData.melodyPartIds = Object.values(this._scoreData.partsById)
+  // A 'Two-Part' template's melody lines ('P+P', independent lines on separate staves), in
+  // the order they sing: part-N sings iteration N, so the order is load-bearing. More than
+  // one means two-part; 'Duet' ('PP', one shared staff) yields one. Only ever holds part-N,
+  // so a named-voice score ('SATB') leaves it empty however its melody is voiced — which
+  // part carries the tune at a given chord position is getStaffPartIds' own local list.
+  this._scoreData.twoPartMelodyPartIds = Object.values(this._scoreData.partsById)
     .filter(part => /^part-\d+$/.test(part.partId) && Object.values(part.chordPositionRefs).some(ref => ref.isMelody))
     .map(part => part.partId);
-  this._scoreData.features.hasTwoPartMelody = this._scoreData.melodyPartIds.length > 1;
+  this._scoreData.features.hasTwoPartMelody = this._scoreData.twoPartMelodyPartIds.length > 1;
 }
 
 // Derive a likely parts template heuristically, from what each staff looks like
@@ -4063,7 +4161,9 @@ ChScore.prototype._derivePartsTemplate = function (chordPositionIndex) {
 
   // A song announcing this many changes is using its directions for something else
   const CH_MAX_SEGMENT_BOUNDARIES = 6;
-  const boundaries = this._getPartsSegmentBoundaries(measureData, wholeStaves, chordPositionIndex);
+  const melodyBoundaries = this._getMelodySwitchBoundaries(measureData, wholeStaves, chordPositionIndex);
+  const boundaries = this._mergeSegmentBoundaries(
+    this._getPartsSegmentBoundaries(measureData, wholeStaves, chordPositionIndex), melodyBoundaries);
   if (boundaries.length < 2 || boundaries.length > CH_MAX_SEGMENT_BOUNDARIES) return whole;
 
   // What belongs to the song rather than to a section of it: who sings (a descant joining
@@ -4077,18 +4177,167 @@ ChScore.prototype._derivePartsTemplate = function (chordPositionIndex) {
   const segments = [];
   for (let b = 0; b < boundaries.length; b++) {
     const endMeasure = boundaries[b + 1]?.measureIndex ?? Infinity;
-    const template = joinPartsTemplate(this._deriveStaffPartsChars(
+    // A voice that has handed the tune over is resting, not gone, so a section it sits out
+    // is voiced as the song is; only who carries the tune has changed
+    const melodyChar = boundaries[b].melodyChar;
+    const voicing = melodyChar ? whole : joinPartsTemplate(this._deriveStaffPartsChars(
       measureData, boundaries[b].measureIndex, endMeasure, songFacts));
+    // The marker goes last in the section: _buildPartsFromTemplate splits a section on '#'
+    // before it splits it on '+', so anything after the marker would be read as part of it
+    const template = melodyChar && voicing !== 'I' ? `${voicing}#${melodyChar}` : voicing;
     const previous = segments.at(-1);
     // A section that reads the same as the one before it wasn't a change, and an
     // interlude nobody sings says nothing about how the singing around it is voiced
-    if (previous && (template === previous.template || template === 'I')) continue;
+    if (previous && (template === previous.template || voicing === 'I')) continue;
     segments.push({ chordPosition: boundaries[b].chordPosition, template: template });
   }
 
   // Nothing changed after all, so answer for the whole song
   if (segments.length < 2) return whole;
   return segments.map(segment => `${segment.chordPosition}:${segment.template}`).join('; ');
+}
+
+// Where the tune moves off the voice that has been carrying it, as boundaries naming the
+// voice that takes it up ("0:SATB; 21:SATB#A; 32:SATB" — the sopranos rest for three
+// measures while the altos sing the line). Read from the music rather than from a
+// direction, since nothing is written over the staff to announce it.
+ChScore.prototype._getMelodySwitchBoundaries = function (measureData, wholeStaves, chordPositionIndex) {
+  // Whose tune it is when nothing says otherwise, read the way _buildPartsFromTemplate
+  // reads an unmarked template — the first likely melody character. Not staff.isMelodyStaff,
+  // which answers for the staff that leads and so names the lower one on a song the men
+  // open ("What Was Witnessed in the Heavens"), leaving the switch invisible from there.
+  const melodyStaff = wholeStaves.find(staff => staff.hasLyrics
+    && [...(staff.partsChars ?? '')].some(char => 'MSP'.includes(char)))
+    ?? wholeStaves.find(staff => staff.isMelodyStaff);
+  if (!melodyStaff || !chordPositionIndex) return [];
+
+  // A run this short is a voice crossing or a held note, not the tune changing hands
+  const CH_MIN_MELODY_SWITCH_MEASURES = 2;
+
+  // Read once per staff: the fallback below asks about every singing staff, and rebuilding
+  // this inside that loop would rescan the whole score for each measure of each staff
+  const singingLayers = new Map(wholeStaves.map(staff =>
+    [staff.staffNumber, this._singingLayersByMeasure(measureData, staff.staffNumber)]));
+  const carriedBy = singingLayers.get(melodyStaff.staffNumber);
+  const topLayer = Math.min(...carriedBy.flatMap(measure => measure.layersWithNotes));
+  if (!Number.isFinite(topLayer)) return [];
+
+  // Who carries the tune in each measure the voice that usually carries it is written
+  // nothing in. A voice merely resting for a beat leaves the words where they were, so this
+  // asks about whole measures — the same reading as "a run of measures with no syllables".
+  const carriers = carriedBy.map((measure, mi) => {
+    if (measure.layersWithNotes.includes(topLayer)) return null;
+    const below = measure.layersWithSyllables.filter(layer => layer > topLayer);
+    if (below.length > 0) return { staffNumber: melodyStaff.staffNumber, layer: Math.min(...below) };
+    // Nothing at all on the melody's staff: the tune has gone to another staff's singers
+    const staff = wholeStaves.find(other => other !== melodyStaff && other.hasLyrics
+      && singingLayers.get(other.staffNumber)[mi].layersWithSyllables.length > 0);
+    return staff ? { staffNumber: staff.staffNumber, layer: null } : null;
+  });
+
+  const boundaries = [];
+  const sameCarrier = (a, b) => a && b && a.staffNumber === b.staffNumber && a.layer === b.layer;
+  for (let mi = 0; mi < carriers.length;) {
+    if (!carriers[mi]) { mi++; continue; }
+    let end = mi;
+    while (end < carriers.length && sameCarrier(carriers[end], carriers[mi])) end++;
+
+    const carrier = carriers[mi];
+    const melodyChar = end - mi < CH_MIN_MELODY_SWITCH_MEASURES
+      ? null : this._partsCharForCarrier(wholeStaves, topLayer, carrier);
+    if (melodyChar) {
+      // Where the voice taking the tune over comes in. Its phrase can start as a pickup in
+      // the measure before, which the voice handing over is still singing in, so that
+      // measure is searched too — from after the last word sung there by the voice above.
+      const sungFrom = Math.max(0, mi - 1);
+      const handedOverAt = this._sungChordPositions(
+        measureData, chordPositionIndex, melodyStaff.staffNumber, topLayer, sungFrom, mi).at(-1) ?? -1;
+      const takesOver = this._sungChordPositions(
+        measureData, chordPositionIndex, carrier.staffNumber, carrier.layer, sungFrom, end)
+        .find(chordPosition => chordPosition > handedOverAt) ?? null;
+      const handsBack = end < carriers.length ? this._sungChordPositions(
+        measureData, chordPositionIndex, melodyStaff.staffNumber, topLayer, end, carriers.length, 1)[0] ?? null : null;
+      if (takesOver !== null) boundaries.push({ measureIndex: mi, chordPosition: takesOver, melodyChar: melodyChar });
+      if (handsBack !== null) boundaries.push({ measureIndex: end, chordPosition: handsBack, melodyChar: null });
+    }
+    mi = end;
+  }
+  return boundaries;
+}
+
+// The chord positions one voice of a staff sings a syllable at, over a range of measures, in
+// order. Read from the index rather than from @ch-chord-position, which isn't annotated yet
+// when the template is being derived. `limit` stops the scan once a caller wanting only the
+// first few has them, since the range can be the rest of the score.
+ChScore.prototype._sungChordPositions = function (measureData, chordPositionIndex, staffNumber, layer, startMeasure, endMeasure, limit = Infinity) {
+  const inLayer = layer === null ? '' : ` layer[n="${layer}"]`;
+  const selector = `staff[n="${staffNumber}"]${inLayer} :is(note, chord):has(syl:not(:empty))`;
+  const chordPositions = [];
+  for (let mi = startMeasure; mi < endMeasure && chordPositions.length < limit; mi++) {
+    for (const element of measureData.measures[mi].querySelectorAll(selector)) {
+      // A verse hangs off the chord as readily as off a note, and only notes are indexed
+      const note = element.matches('chord') ? element.querySelector('note') : element;
+      const chordPosition = chordPositionIndex.byElementId[note?.getAttribute('xml:id')];
+      if (chordPosition !== undefined) chordPositions.push(chordPosition);
+    }
+  }
+  return chordPositions;
+}
+
+// Which voices of one staff are written notes, and which of them are given syllables, in
+// each measure. Read straight from the engraving: @ch-melody is assigned from the template
+// this is helping to derive, so it can't be leaned on here.
+ChScore.prototype._singingLayersByMeasure = function (measureData, staffNumber) {
+  return measureData.measures.map(measure => {
+    const layersWithNotes = [];
+    const layersWithSyllables = [];
+    const staff = measure.querySelector(`staff[n="${staffNumber}"]`);
+    for (const layer of staff?.querySelectorAll('layer') ?? []) {
+      const layerNumber = Number.parseInt(layer.getAttribute('n'));
+      if (Number.isNaN(layerNumber) || !layer.querySelector('note')) continue;
+      layersWithNotes.push(layerNumber);
+      if (layer.querySelector('syl:not(:empty)')) layersWithSyllables.push(layerNumber);
+    }
+    return { layersWithNotes, layersWithSyllables };
+  });
+}
+
+// The template character naming the voice that has taken the tune over — a lower voice of
+// the melody's own staff, or the top voice of another staff. Numbered when the same
+// character stands for more than one voice in the template ("T2" for Tenor 2 of "TT+BB"),
+// which is how _buildPartsFromTemplate's getPartId tells them apart.
+ChScore.prototype._partsCharForCarrier = function (wholeStaves, topLayer, carrier) {
+  const staff = wholeStaves.find(other => other.staffNumber === carrier.staffNumber);
+  const chars = staff?.partsChars ?? '';
+  const index = carrier.layer === null ? 0 : carrier.layer - topLayer;
+  const char = chars[index];
+  if (!char) return null;
+
+  const occurrences = text => [...text].filter(c => c === char).length;
+  const allChars = wholeStaves.map(other => other.partsChars ?? '').join('');
+  if (occurrences(allChars) < 2) return char;
+
+  const before = chars.slice(0, index)
+    + wholeStaves.slice(0, wholeStaves.indexOf(staff)).map(other => other.partsChars ?? '').join('');
+  return `${char}${occurrences(before) + 1}`;
+}
+
+// Boundaries from the directions and from the tune changing hands, in measure order, each
+// carrying whichever melody marker is in force there. A boundary of either kind opens a
+// section, so the marker has to be carried across the ones that don't name it.
+ChScore.prototype._mergeSegmentBoundaries = function (directionBoundaries, melodyBoundaries) {
+  if (melodyBoundaries.length === 0) return directionBoundaries;
+  const namesMelody = new Set(melodyBoundaries);
+
+  const boundaries = [];
+  let melodyChar = null;
+  for (const boundary of [...directionBoundaries, ...melodyBoundaries].sort((a, b) => a.measureIndex - b.measureIndex)) {
+    if (namesMelody.has(boundary)) melodyChar = boundary.melodyChar;
+    const previous = boundaries.at(-1);
+    if (previous && previous.measureIndex === boundary.measureIndex) previous.melodyChar = melodyChar;
+    else boundaries.push({ ...boundary, melodyChar: melodyChar });
+  }
+  return boundaries;
 }
 
 // What each staff holds in each measure, read once for the whole score. A song that
@@ -5399,7 +5648,10 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
 // TODO: Some of the logic in _markSingleLineChordPositions overlaps chorus detection in _generateSectionsFromSimpleScore – maybe they can be unified.
 ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRanges, maxAllowedGap = 3) {
   const lyricLinesByStaffAndCp = {};
-  const lyrics = Array.from(this._scoreData.meiParsed.querySelectorAll(':is(note[ch-melody], chord:has([ch-melody])) verse:has(syl:not(:empty))'));
+  // Through _melodyVerseElements so this reads the same verses extraction does. Reading only
+  // verses on the melody note would miss a lower voice's words entirely, and the padding
+  // expansion below would then absorb those chord positions as though nothing were sung.
+  const lyrics = this._melodyVerseElements().filter(verse => verse.querySelector('syl:not(:empty)'));
   for (const lyric of lyrics) {
     const chordPosition = Number.parseInt(lyric.closest('[ch-chord-position]').getAttribute('ch-chord-position'));
     const lyricLineId = lyric.getAttribute('ch-lyric-line-id');
@@ -5472,13 +5724,85 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
 // Lyric elements sung on the melody, in document order. Restricted to notes and chords on
 // purpose: <section> also carries @ch-chord-position — as a space-separated list — so
 // matching the attribute alone would sweep in every verse in the section, melody or not.
+// Where a lower voice carries the tune ('SATB#A'), its words stay engraved on the voice
+// above, so a verse there counts as the melody's. Above and same staff both matter: lyrics
+// sit on a staff's top voice, so words *below* the melody are a second voice singing its
+// own ("may rest, may rest" in "Come unto Jesus").
 ChScore.prototype._melodyVerseElements = function () {
-  return this._scoreData.meiParsed.querySelectorAll(
-    ':is(note[ch-melody], chord:has([ch-melody])) verse');
+  const melodyLayers = this._melodyLayerByStaffAndChordPosition();
+  const verseElements = [];
+  for (const verse of this._scoreData.meiParsed.querySelectorAll(':is(note, chord) verse')) {
+    const holder = verse.closest('note, chord');
+    if (this._carriesMelody(holder) || this._isAboveMelody(holder, melodyLayers)) verseElements.push(verse);
+  }
+  return verseElements;
+}
+
+// Whether a note or chord is the one carrying the tune. Only a chord can hold the melody in
+// a descendant; a bare note answers for itself.
+ChScore.prototype._carriesMelody = function (element) {
+  return element.matches('[ch-melody]')
+    || (element.localName === 'chord' && element.querySelector('[ch-melody]') !== null);
+}
+
+// Whether a note or chord sits above the voice carrying the tune, on that voice's own staff.
+ChScore.prototype._isAboveMelody = function (element, melodyLayers) {
+  const chordPosition = Number.parseInt(element.getAttribute('ch-chord-position'));
+  const melodyLayer = melodyLayers.get(this._staffNumberOf(element))?.get(chordPosition);
+  const layer = this._layerNumberOf(element);
+  return layer !== null && melodyLayer !== undefined && layer < melodyLayer;
+}
+
+// Which staff an element is written on, as a number (NaN when it is on none, which compares
+// false against every staff number rather than throwing).
+ChScore.prototype._staffNumberOf = function (element) {
+  return Number.parseInt(element?.closest('staff')?.getAttribute('n'));
+}
+
+// Which voice carries the tune on each staff, at every chord position it is being sung
+// through — including the ones it doesn't articulate on, since a voice above it can be
+// written more notes than it has ("In Deseret's" over a resting Tenor 2 in "High on the
+// Mountain Top"). Across such a gap the answer is the lowest voice the tune is written in
+// on either side of it, so a phrase's pickup is read the same way as the phrase.
+ChScore.prototype._melodyLayerByStaffAndChordPosition = function () {
+  const sungByStaff = new Map();
+  for (const note of this._scoreData.meiParsed.querySelectorAll('note[ch-melody]')) {
+    const staffNumber = this._staffNumberOf(note);
+    const chordPosition = Number.parseInt(note.getAttribute('ch-chord-position'));
+    const layer = this._layerNumberOf(note);
+    if (Number.isNaN(staffNumber) || Number.isNaN(chordPosition) || layer === null) continue;
+    if (!sungByStaff.has(staffNumber)) sungByStaff.set(staffNumber, new Map());
+    const sung = sungByStaff.get(staffNumber);
+    sung.set(chordPosition, Math.max(sung.get(chordPosition) ?? layer, layer));
+  }
+
+  const melodyLayers = new Map();
+  const lastChordPosition = this._scoreData.numChordPositions - 1;
+  for (const [staffNumber, sung] of sungByStaff) {
+    const filled = new Map();
+    const articulated = [...sung.keys()].sort((a, b) => a - b);
+    for (let a = 0; a < articulated.length; a++) {
+      const from = articulated[a];
+      const next = articulated[a + 1];
+      const gapLayer = Math.max(sung.get(from), sung.get(next) ?? sung.get(from));
+      filled.set(from, sung.get(from));
+      for (let cp = from + 1; cp < (next ?? lastChordPosition + 1); cp++) filled.set(cp, gapLayer);
+    }
+    melodyLayers.set(staffNumber, filled);
+  }
+  return melodyLayers;
+}
+
+// Which voice of its staff an element is written in. Odd layers are stems up (the upper
+// voice), so a smaller number is the voice above — the same convention the parse reads
+// stem direction from.
+ChScore.prototype._layerNumberOf = function (element) {
+  const layer = Number.parseInt(element.closest('layer')?.getAttribute('n'));
+  return Number.isNaN(layer) ? null : layer;
 }
 
 // The same elements grouped by chord position. Takes the flat list when the caller already
-// has it, since the selector above is one of the more expensive queries in the file.
+// has it, to save walking every verse in the score a second time.
 ChScore.prototype._getMelodyVerseElementsByChordPosition = function (verses) {
   const versesByChordPosition = new Map();
   for (const verse of verses ?? this._melodyVerseElements()) {
@@ -5574,7 +5898,7 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
   // their own and so are tracked per lyric line until the next word starts.
   const excludedVerses = new Set();
   if (this._scoreData.features.hasTwoPartMelody) {
-    const partCount = this._scoreData.melodyPartIds.length;
+    const partCount = this._scoreData.twoPartMelodyPartIds.length;
     const skipStateByLine = {};
     for (const verse of melodyVerses) {
       const lineId = verse.getAttribute('ch-lyric-line-id');
@@ -5984,6 +6308,16 @@ ChScore.prototype._consolidateChordPositionRanges = function (ranges) {
   return result;
 }
 
+// Whether one lyric line carries on into another. A line is identified per staff ("2.1" is
+// staff 2's first line), so the tune moving staves mid-verse reads as a change of line where
+// the same words are really continuing. Two-part scores keep the distinction: there each
+// staff's line is its own part's.
+ChScore.prototype._continuesLyricLine = function (lyricLineId, nextLyricLineId) {
+  if (lyricLineId === nextLyricLineId) return true;
+  if (this._scoreData.features.hasTwoPartMelody) return false;
+  return lyricLineId?.split('.')[1] === nextLyricLineId?.split('.')[1];
+}
+
 // Group syllables into the runs that become stanzas: one lyric line, one section, one
 // verse type, up to a label or a jump back into a repeat. Split out so phrase-start
 // detection and stanza building can't drift apart about where a stanza begins.
@@ -5999,7 +6333,7 @@ ChScore.prototype._syllableStanzaRuns = function (syllables) {
 
     const startsNewRun = !current
       || syllable.startsSection
-      || current.lyricLineId !== lyricLineId
+      || !this._continuesLyricLine(current.lyricLineId, lyricLineId)
       || current.type !== type
       || Boolean(syllable.label)
       || syllable.chordPositions[0] < current.lastChordPosition;

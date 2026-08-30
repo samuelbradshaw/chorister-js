@@ -492,7 +492,7 @@
         });
         
         // Fingering marks toggle
-        if (scoreData.hasFingeringMarks) {
+        if (scoreData.features.hasFingeringMarks) {
           fingeringMarksToggle.addEventListener('change', (event) => {
             chScore.setOptions({ showFingeringMarks: event.target.checked });
           });
@@ -506,7 +506,7 @@
         });
         
         // Melody only toggle
-        if (scoreData.hasMelodyInfo) {
+        if (scoreData.features.hasMelodyInfo) {
           melodyOnlyToggle.addEventListener('change', (event) => {
             chScore.setOptions({ showMelodyOnly: event.target.checked });
           });
