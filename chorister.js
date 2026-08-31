@@ -974,11 +974,32 @@ ChScore.prototype._cleanBlockWhitespace = function (text) {
 // Keep styling whitespace outside its markup, so a run's tags sit against the words
 // they style: "<em>Words: </em>Anon." reads as "<em>Words:</em> Anon.". Scores put the
 // separating space inside the styled run as often as not, and where the tags fall
-// shouldn't depend on that.
+// shouldn't depend on that. Newlines count too: a run ending its own text with a blank
+// line would otherwise close its tag *after* that line, putting the blank-line boundary
+// _getScoreMetadata splits text blocks on inside the markup and orphaning the tag onto
+// the next block.
 ChScore.prototype._normalizeMarkupWhitespace = function (text) {
   return text
-    .replace(/<(em|strong)>([^\S\n]+)/g, '$2<$1>')
-    .replace(/([^\S\n]+)<\/(em|strong)>/g, '</$2>$1');
+    .replace(/<(em|strong)>(\s+)/g, '$2<$1>')
+    .replace(/(\s+)<\/(em|strong)>/g, '</$2>$1');
+}
+
+// The verses printed on the page rather than sung from the staff, as text blocks.
+// The one place `type === 'stanza'` is spelled, for the several readers that want them.
+ChScore.prototype._stanzaTextBlocks = function () {
+  return (this._scoreData.scoreMetadata?.textBlocks ?? []).filter(block => block.type === 'stanza');
+}
+
+// Items bucketed by a key, in first-seen order.
+ChScore.prototype._groupBy = function (items, keyOf) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = keyOf(item);
+    const group = groups.get(key) ?? [];
+    group.push(item);
+    groups.set(key, group);
+  }
+  return groups;
 }
 
 // Clean up MusicXML so it can be cleanly converted to MEI
@@ -1038,9 +1059,30 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
       if (run.getAttribute('font-style') === 'italic') text = `<em>${text}</em>`;
       return text;
     };
+    const numericAttribute = (element, name) => {
+      const value = Number.parseFloat(element.getAttribute(name));
+      return Number.isNaN(value) ? null : value;
+    };
+    // What a credit says about itself that the conversion to MEI would otherwise lose:
+    // Verovio doesn't consistently carry font information across; `halign` is a literal
+    // MusicXML attribute some engravers (Finale) set to override Verovio's own
+    // derivation from `justify`; and printed position survives nowhere in the MEI, but
+    // is what _getScoreMetadata puts the blocks back in reading order by. Keyed by the
+    // text the block will be read from, since that's all the two sides share.
+    const setStyle = (run, position) => {
+      this._textBlockStyles.set(this._cleanBlockWhitespace(run.textContent), {
+        fontFamily: this._fontFamilyWithoutStyling(run.getAttribute('font-family')),
+        fontSize: run.getAttribute('font-size') || null,
+        halign: run.getAttribute('halign') ?? run.getAttribute('justify'),
+        ...position,
+      });
+    };
 
+    // Merge runs *within* each credit into one, marking up mixed styling as literal
+    // <em>/<strong> text (stripped back out downstream by `_patterns.stylingMarkup`).
     for (const textBlock of parsed.querySelectorAll('credit')) {
-      if (textBlock.getAttribute('page') !== '1') {
+      const originalPage = textBlock.getAttribute('page');
+      if (originalPage !== '1') {
         textBlock.setAttribute('page', '1');
         changed = true;
       }
@@ -1061,11 +1103,15 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
         changed = true;
       }
 
-      // Verovio doesn't consistently transfer font information when converting MusicXML to MEI. This captures the info so it can be referenced later.
-      this._textBlockStyles.set(this._cleanBlockWhitespace(runs[0].textContent), {
-        fontFamily: this._fontFamilyWithoutStyling(runs[0].getAttribute('font-family')),
-        fontSize: runs[0].getAttribute('font-size') || null,
-        halign: runs[0].getAttribute('halign'),
+      // The *original* page, before it was forced onto page 1 above. Which MEI
+      // container Verovio then buckets the credit into is deliberately not relied on --
+      // it splits them by y-position, so two lines of one printed block can land in
+      // different containers; _getScoreMetadata reads header and footer together and
+      // re-sorts by this position, which makes the split irrelevant.
+      setStyle(runs[0], {
+        page: Number.parseInt(originalPage) || 1,
+        x: numericAttribute(runs[0], 'default-x'),
+        y: numericAttribute(runs[0], 'default-y'),
       });
     }
   }
@@ -1076,10 +1122,9 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
 // Get metadata from the MEI fileDesc, pgHead, and pgFoot elements
 ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
 
-  // Styling a <rend> carries, as the <em>/<strong> markup lyrics use. A text block of
-  // mixed runs was marked up before conversion instead (see _optimizeMusicXml), so
-  // this covers what stays on the element: a text block styled as a whole, and the nested
-  // <rend> of MEI-native input.
+  // Styling that stayed on the element rather than being marked up before conversion
+  // (see _optimizeMusicXml): a text block styled as a whole, or a nested <rend> of
+  // MEI-native input.
   const styleText = (text, rend) => {
     if (!text) return text;
     if (rend.getAttribute('fontweight') === 'bold') text = `<strong>${text}</strong>`;
@@ -1100,21 +1145,40 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
     return this._cleanBlockWhitespace(text);
   }
 
+  // A text block is where a blank line marks a real break within one credit's printed
+  // text; a single '\n' is just another line of the same block.
+  const textBlockPieces = text => text.split(/\n\s*\n/);
+
+  // Pieces split from the same <rend> (the same original credit) share a group, so a
+  // stanza-classified piece can pull its siblings along later (see groupsWithVerseMarker).
+  let groupCounter = 0;
   const getTextBlocks = (containerName) => {
     const blocks = [];
     for (const container of meiParsed.querySelectorAll(containerName)) {
       for (const rend of container.querySelectorAll(':scope > rend')) {
         const text = getText(rend);
         if (!text) continue;
-        const textBlockStyle = this._textBlockStyles?.get(text);
-        blocks.push({
-          html: text.split('\n').map(line => styleText(line, rend)).join('\n'),
-          text: text.replace(this._patterns.stylingMarkup, ''),
-          halign: textBlockStyle?.halign ?? rend.getAttribute('halign'),
-          valign: rend.getAttribute('valign'),
-          fontFamily: rend.getAttribute('fontfam') ?? textBlockStyle?.fontFamily ?? null,
-          fontSize: rend.getAttribute('fontsize') ?? textBlockStyle?.fontSize ?? null,
-          elementId: rend.getAttribute('xml:id'),
+        const html = text.split('\n').map(line => styleText(line, rend)).join('\n');
+        const textPieces = textBlockPieces(text);
+        const htmlPieces = textBlockPieces(html);
+        const group = groupCounter++;
+        textPieces.forEach((textPiece, i) => {
+          const htmlPiece = htmlPieces[i] ?? textPiece;
+          const textBlockStyle = this._textBlockStyles?.get(htmlPiece);
+          blocks.push({
+            html: htmlPiece,
+            text: textPiece.replace(this._patterns.stylingMarkup, ''),
+            halign: textBlockStyle?.halign ?? rend.getAttribute('halign'),
+            valign: rend.getAttribute('valign'),
+            fontFamily: textBlockStyle?.fontFamily ?? rend.getAttribute('fontfam') ?? null,
+            fontSize: textBlockStyle?.fontSize ?? rend.getAttribute('fontsize') ?? null,
+            y: textBlockStyle?.y ?? null,
+            page: textBlockStyle?.page ?? 1,
+            x: textBlockStyle?.x ?? null,
+            elementId: rend.getAttribute('xml:id'),
+            group: group,
+            type: null,
+          });
         });
       }
     }
@@ -1126,58 +1190,134 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
     const name = getText(persName);
     if (name) contributors.push({ role: persName.getAttribute('role'), name: name });
   }
-  
+
   const date = meiParsed.querySelector('fileDesc pubStmt date');
-  const header = getTextBlocks('pgHead');
-  const footer = getTextBlocks('pgFoot');
-  const looksLikeAttributions = paragraph => this._patterns.nonVerseMarker.test(paragraph);
-  const looksLikeVerseMarker = paragraph => this._patterns.verseMarker.test(paragraph);
-  const paragraphs = text => text.split(/\n\s*\n/);
-  const isStanzaBlock = block => block.text.includes('\n') && paragraphs(block.text).some(looksLikeVerseMarker);
+  // pgHead/pgFoot concatenation is container order, not reading order, so sort by true
+  // page/row/column position instead. Two blocks printed side by side rarely land at
+  // *exactly* the same y, so treat anything within `_sameRowTolerance` as one row and
+  // break the tie by x (left to right); beyond that, y wins outright.
+  const textBlocks = getTextBlocks('pgHead').concat(getTextBlocks('pgFoot'))
+    .sort((a, b) => {
+      if (a.page !== b.page) return a.page - b.page;
+      if (Math.abs(a.y - b.y) <= this._sameRowTolerance) return a.x - b.x;
+      return b.y - a.y;
+    });
+
   const isCapoBlock = block => this._patterns.capoMark.test(block.text.trim());
   const isNumberBlock = block => this._patterns.standaloneNumber.test(block.text.trim()) && Number.parseInt(block.text) > 0;
+  const isFootnoteBlock = block => block.text.trimStart().startsWith('*');
+  const attributionWords = [...this._attributionWords._any, ...(this._attributionWords[lang] ?? [])];
+  const looksLikeAttributions = block => {
+    if (contributors.some(({ name }) => name && block.text.includes(name))) return true;
+    // French and Spanish typography puts a space before a colon ("Paroles : ..."), so
+    // it comes off here rather than being listed as a second spelling of every phrase.
+    const lowerText = block.text.toLowerCase().replace(/\s+:/g, ':');
+    return attributionWords.some(phrase => lowerText.includes(phrase));
+  };
 
-  // Detect title (largest centered heading). Metadata title fields are sometimes empty or outdated. Anything centered above or below the title is a supertitle or subtitle.
-  const headings = header.filter(block => block.halign === 'center'
-    && !isStanzaBlock(block) && !isNumberBlock(block) && !isCapoBlock(block));
+  // A block naming a marker anywhere counts as a stanza in full, not just the piece the
+  // marker itself sits in (see groupsWithVerseMarker), and a repeated line marks a
+  // stanza even with no other signal. Both need the whole pool seen first, so this runs
+  // as its own pass before classification.
+  const looksLikeVerseMarker = block => this._patterns.verseMarker.test(block.text);
+  const lineCounts = new Map();
+  const groupsWithVerseMarker = new Set();
+  for (const block of textBlocks) {
+    for (const line of block.text.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed) lineCounts.set(trimmed, (lineCounts.get(trimmed) ?? 0) + 1);
+    }
+    if (looksLikeVerseMarker(block)) groupsWithVerseMarker.add(block.group);
+  }
+  const looksLikeStanza = block => {
+    const lines = block.text.split('\n');
+    if (lines.some(line => line.length > this._longLineThreshold)) return false;
+    if (looksLikeVerseMarker(block)) return true;
+    if (groupsWithVerseMarker.has(block.group)) return true;
+    if (lines.length < 2) return false;
+    return lines.some(line => lineCounts.get(line.trim()) > 1);
+  };
+
+  // Classify every text block, most literal/narrow match first: capo and number
+  // markings, then footnotes, then attributions, then stanzas. Nothing left
+  // unmatched stays `null` (ambiguous) rather than guessing.
+  for (const block of textBlocks) {
+    if (isCapoBlock(block)) block.type = 'capo';
+    else if (isNumberBlock(block)) block.type = 'number';
+    else if (isFootnoteBlock(block)) block.type = 'footnote';
+    else if (looksLikeAttributions(block)) block.type = 'attribution';
+    else if (looksLikeStanza(block)) block.type = 'stanza';
+  }
+
+  // Title is the largest centered heading among what's left unclassified (metadata
+  // title fields are sometimes empty or outdated); centered blocks above/below it are
+  // a supertitle/subtitle. Restricted to the title's own page, or a centered aside
+  // printed at the top of a later page (e.g. "Optional verses for ...:") reads as a
+  // subtitle candidate too.
+  const titlePage = Math.min(...textBlocks.map(block => block.page));
+  const headings = textBlocks.filter(block => block.type === null && block.halign === 'center' && block.page === titlePage);
   const sizes = headings.map(block => Number.parseFloat(block.fontSize));
   const largest = Math.max(...sizes.filter(size => !Number.isNaN(size)));
   const titleIndex = sizes.some(size => !Number.isNaN(size))
     ? sizes.indexOf(largest)
     : headings.findIndex(block => !block.html.includes('\n'));
   const printedTitle = headings[titleIndex];
-  const subheadings = blocks => blocks.filter(block => !block.html.includes('\n')).map(block => block.html);
-  const pageBlocks = header.concat(footer);
-  const capoBlock = pageBlocks.find(isCapoBlock);
-  const numbers = pageBlocks.filter(isNumberBlock).map(block => block.text.trim());
+  if (printedTitle) {
+    printedTitle.type = 'title';
+    // Multi-line stays `null` rather than 'supertitle'/'subtitle' -- reads like a
+    // lyrics/credits block, not a subheading.
+    for (const block of headings.slice(0, titleIndex)) {
+      if (!block.html.includes('\n')) block.type = 'supertitle';
+    }
+    for (const block of headings.slice(titleIndex + 1)) {
+      if (!block.html.includes('\n')) block.type = 'subtitle';
+    }
+  }
 
-  // Detect stanzas
-  const stanzas = pageBlocks
-    .map(block => {
-      const words = paragraphs(block.text);
-      return paragraphs(block.html)
-        .map((paragraph, p) => [paragraph, words[p] ?? paragraph])
-        .filter(([, paragraphWords]) => !looksLikeAttributions(paragraphWords));
-    })
-    .filter(block => block.some(([, paragraphWords]) => looksLikeVerseMarker(paragraphWords)))
-    .flat()
-    .map(([paragraph]) => paragraph);
+  // Anything still unclaimed (a scripture reference, a performance note, an
+  // unrecognized aside) becomes a footnote rather than staying ambiguous.
+  for (const block of textBlocks) {
+    if (block.type === null) block.type = 'footnote';
+  }
+
+  // Column reading order (finish one column top to bottom before starting the next),
+  // for a group whose blocks are otherwise in row order. A short column beside a taller
+  // one interleaves under row order: in do-as-im-doing.mxl a two-block left column sits
+  // beside a single-block right one, so by row the right block lands *between* the left
+  // column's two, instead of after them.
+  const columnOrder = blocks => {
+    const ordered = [];
+    const byPage = this._groupBy(blocks, block => block.page);
+    for (const page of [...byPage.keys()].sort((a, b) => a - b)) {
+      const columns = [];
+      for (const block of byPage.get(page).sort((a, b) => a.x - b.x)) {
+        const column = columns.find(col => Math.abs(col[0].x - block.x) <= this._sameColumnTolerance);
+        if (column) column.push(block); else columns.push([block]);
+      }
+      for (const column of columns) column.sort((a, b) => b.y - a.y);
+      ordered.push(...columns.flat());
+    }
+    return ordered;
+  };
+
+  // Footnotes and attributions sort to the end (footnotes first) regardless of where
+  // they printed -- both read like an aside wherever they sit. Everything else keeps
+  // the reading order established above.
+  const orderedTextBlocks = [
+    ...textBlocks.filter(block => block.type !== 'footnote' && block.type !== 'attribution'),
+    ...columnOrder(textBlocks.filter(block => block.type === 'footnote')),
+    ...columnOrder(textBlocks.filter(block => block.type === 'attribution')),
+  ];
 
   return {
     scoreId: scoreId,
     lang: lang,
     title: printedTitle?.html ?? (getText(meiParsed.querySelector('fileDesc titleStmt title')) || null),
-    supertitles: printedTitle ? subheadings(headings.slice(0, titleIndex)) : [],
-    subtitles: printedTitle ? subheadings(headings.slice(titleIndex + 1)) : [],
-    capoMark: capoBlock?.html ?? null,
-    numbers: numbers,
     contributors: contributors,
     date: date ? (date.getAttribute('isodate') ?? getText(date)) : null,
     distributor: getText(meiParsed.querySelector('fileDesc pubStmt distributor')) || null,
     availability: getText(meiParsed.querySelector('fileDesc pubStmt availability')) || null,
-    header: header,
-    footer: footer,
-    stanzas: stanzas,
+    textBlocks: orderedTextBlocks,
   };
 }
 
@@ -1667,8 +1807,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   // Add attributes to intro brackets: @ch-intro-bracket
   // Add attributes to dir, harm, and fermata: @ch-chord-position
   let currentMeasureId = null;
-  this._scoreData.features.hasOstinato = (this._scoreData.scoreMetadata.header ?? [])
-    .concat(this._scoreData.scoreMetadata.footer ?? [])
+  this._scoreData.features.hasOstinato = (this._scoreData.scoreMetadata.textBlocks ?? [])
     .some(block => this._patterns.ostinato.test(block.text));
   const chordPositionQstamps = this._scoreData.chordPositions.map(cpInfo => cpInfo.startQ).concat([this._scoreData.chordPositions.at(-1).endQ]);
   for (const element of this._scoreData.meiParsed.querySelectorAll('measure, dir, harm, fermata')) {
@@ -5252,25 +5391,48 @@ ChScore.prototype._normalizeSections = function () {
     annotatedLyricsCounts.set(section.annotatedLyrics, (annotatedLyricsCounts.get(section.annotatedLyrics) ?? 0) + 1);
   }
   const referenceChorus = otherSections.find(section => annotatedLyricsCounts.get(section.annotatedLyrics) > 1);
-  // For comparing against a below verse's own text, which keeps the page's own line
-  // breaks rather than the sung chorus's normalized single line ("nearer-my-god-to-thee",
-  // where the printed verse already ends with its own copy of the refrain).
-  const foldWords = text => text?.replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase() ?? '';
+  // For comparing a below verse's own text -- which keeps the page's own line breaks --
+  // against the sung chorus's normalized single line ("nearer-my-god-to-thee", where the
+  // printed verse already ends with its own copy of the refrain). This is printed text
+  // against sung text typeset by different hands, which is exactly what
+  // _foldForMatching is for: it is HTML-aware (a block's `html` carries <em>/<strong>,
+  // whose tag *names* are letters and would otherwise survive a letters-only fold) and
+  // it drops the accents and verse-number digits the two sides spell differently.
+  const foldWords = text => this._foldForMatching(text, 'remove');
   const foldedReferenceChorus = foldWords(referenceChorus?.annotatedLyrics);
-  for (const stanzaText of this._scoreData.scoreMetadata?.stanzas ?? []) {
+  const stanzaBlocks = this._stanzaTextBlocks();
+  for (const block of stanzaBlocks) {
+    const stanzaText = block.html;
     // A verse marker is 1 or 2 digits at the beginning of a line (skipping text in parentheses)
     const [, prefix, marker, lyrics] = /^([\s\S]*?)(?:^|\n)\s*(\d{1,2})\s*[.)]\s*([\s\S]*)$/.exec(stanzaText) ?? [];
-    if (!lyrics) continue;
-    const annotatedLyrics = prefix ? `${prefix.trim()}\n${lyrics}` : lyrics;
 
-    // Skip verses that are already sung from the staff
-    const alreadyPresent = otherSections.some(section => this._cleanMarker(section.marker) === marker);
-    if (alreadyPresent) continue;
+    let annotatedLyrics;
+    let sectionMarker = null;
+    let sectionName;
+    if (lyrics) {
+      annotatedLyrics = prefix ? `${prefix.trim()}\n${lyrics}` : lyrics;
+      sectionMarker = marker;
+      sectionName = `Verse ${marker}`;
+
+      // Skip verses that are already sung from the staff
+      const alreadyPresent = otherSections.some(section => this._cleanMarker(section.marker) === marker);
+      if (alreadyPresent) continue;
+    } else {
+      // No numeric marker — e.g. "Optional verse:" or a "(Child)"/"(Mother)" speaker
+      // label introducing the verse instead of a number. The whole block is the verse;
+      // with no marker to dedupe on, compare folded text against what's already sung
+      // from the staff instead.
+      annotatedLyrics = stanzaText;
+      sectionName = 'Verse';
+      const foldedStanza = foldWords(stanzaText);
+      const alreadyPresent = otherSections.some(section => foldWords(section.annotatedLyrics) === foldedStanza);
+      if (alreadyPresent) continue;
+    }
 
     otherSections.push(newSectionBelow(sectionBelowCounter, {
       type: 'verse',
-      name: `Verse ${marker}`,
-      marker: marker,
+      name: sectionName,
+      marker: sectionMarker,
       annotatedLyrics: annotatedLyrics,
     }));
     sectionBelowCounter += 1;
@@ -6521,7 +6683,8 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   // Build table of hyphenated words (combining hard-coded words, and words from the song title and lyrics below)
   this._scoreData.hyphenPositions = this._hyphenPositionsTable(
     this._hyphenatedWords[this._scoreData.scoreMetadata.lang] ?? [],
-    [this._scoreData.scoreMetadata.title, ...this._scoreData.scoreMetadata.stanzas].filter(Boolean)
+    [this._scoreData.scoreMetadata.title,
+      ...this._stanzaTextBlocks().map(block => block.html)].filter(Boolean)
   );
 
   const provisionalRuns = this._syllableStanzaRuns(syllables);
@@ -6612,15 +6775,24 @@ ChScore.prototype._phraseStartWeights = {
   breakCost: 1.9, lengthCost: 0.3,
 };
 
-// Words a line doesn't end on, because they attach to whatever follows: articles,
-// conjunctions and possessives leave a phrase visibly unfinished ("You have a work that no /
-// other can do"). Deliberately that closed class only — a wider list picks up words that
-// merely happen to sit mid-line in this repertoire. Keyed by language like
-// _hyphenatedWords; a language with no list simply doesn't get the signal.
+// Words a line doesn't end on
 ChScore.prototype._phraseFunctionWords = {
   en: new Set(['a', 'an', 'the', 'and', 'or', 'nor', 'but', 'my', 'i’m', 'i’ll', 'thy',
     'your', 'you’re', 'you’ll', 'our', 'we’re', 'we’ll', 'their', 'they’re', 'they’ll',
     'very', 'every', 'ev’ry']),
+};
+
+// Phrases used only in attributions
+ChScore.prototype._attributionWords = {
+  _any: ['©'],
+  en: ['words by', 'music by', 'words:', 'music:', 'text:', 'arranged by',
+    'arrangement:', 'copyright', 'all rights reserved', 'used by permission'],
+  fr: ['paroles:', 'musique:', 'texte:', 'traduction française', 'arrangement',
+    'droits réservés'],
+  es: ['letra:', 'música:', 'texto:', 'traducción al español', 'arreglo',
+    'derechos reservados'],
+  pt: ['letra:', 'música:', 'texto:', 'tradução para o português', 'arranjo',
+    'direitos reservados'],
 };
 
 
@@ -6819,7 +6991,7 @@ ChScore.prototype._addBeatPhaseBonus = function (scores) {
 // makes a typo in the middle harmless. Strong evidence, not an override: printed verses
 // are sometimes wrapped to fit a column rather than by phrase.
 ChScore.prototype._addPrintedLineBonus = function (scores, runs) {
-  const printedStanzas = this._scoreData.scoreMetadata?.stanzas ?? [];
+  const printedStanzas = this._stanzaTextBlocks().map(block => block.html);
   if (printedStanzas.length === 0) return;
   // Memoized: syllable texts repeat heavily across a song's verses, and the normalizer is
   // built for whole documents rather than the 2–5 characters it's handed here.
@@ -7157,14 +7329,28 @@ ChScore.prototype._hyphenCharacters = '-‐‑';
 // agree on a key no matter what quotes or sentence punctuation a word is printed with.
 ChScore.prototype._punctuationCharacter = '[^\\p{L}\\p{N}]';
 
+// A single printed line longer than this reads as a legal notice or performance
+// instruction, not a lyric line -- an initial estimate pending calibration against the
+// longest genuine printed-verse line across both corpora (see corpus/lyric-extraction-notes.md).
+ChScore.prototype._longLineThreshold = 70;
+
+// How far apart two printed text blocks can sit and still count as one row (or one
+// column) when _getScoreMetadata puts them in reading order. Both are MusicXML tenths,
+// as `default-x`/`default-y` are, so they assume scores at a comparable <scaling> --
+// true across both corpora, where these were calibrated: a row tolerance wide enough
+// for side-by-side verses engraved a tenth or two apart vertically, and a column
+// tolerance wide enough for a column whose blocks don't share an exact left edge.
+ChScore.prototype._sameRowTolerance = 10;
+ChScore.prototype._sameColumnTolerance = 100;
+
 // Regular expressions
 ChScore.prototype._patterns = {
   // Verse markers and styling in text blocks
   verseMarker: /^\s*\d{1,2}\s*[.)]/,
-  nonVerseMarker: /\d{4}|©/,
   stylingMarkup: /<\/?(?:em|strong)>/g,
   capoMark: /^capo\b[\s:.,-]*\d+[\s:.,-]*$/i,
-  standaloneNumber: /^\d+$/,
+  // A hymn/song number, optionally followed by a hyphen and/or letter
+  standaloneNumber: /^\d+-?[A-Za-z]?$/,
 
   // Round numbers and ostinato directions
   roundMarker: /^[➀-➈]$/,

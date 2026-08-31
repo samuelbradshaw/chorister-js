@@ -1544,7 +1544,7 @@ describe('_optimizeMusicXml() — credit styling', () => {
     // Keyed by the text the block will be read from, with the styling words dropped
     // from the family name now that font-style carries them
     expect(score._textBlockStyles.get('<em>Words:</em> Anon.'))
-      .toEqual({ fontFamily: 'McKay Neue ldsLat, text', fontSize: '7', halign: null });
+      .toEqual({ fontFamily: 'McKay Neue ldsLat, text', fontSize: '7', halign: null, y: null, x: null, page: 1 });
   });
 
   it('should set the credit\u2019s halign aside, since Verovio reads justify instead', () => {
@@ -1577,6 +1577,11 @@ describe('_getScoreMetadata()', () => {
       `<music><body><mdiv><score>${pgHead}${pgFoot}</score></mdiv></body></music></mei>`,
       'text/xml'
     );
+  }
+
+  /** textBlocks of a given `type`, as their `.html`. */
+  function typed(metadata, type) {
+    return metadata.textBlocks.filter(block => block.type === type).map(block => block.html);
   }
 
   beforeAll(() => {
@@ -1617,8 +1622,7 @@ describe('_getScoreMetadata()', () => {
     expect(metadata.distributor).toBeNull();
     // An empty respStmt yields no contributors rather than failing
     expect(metadata.contributors).toEqual([]);
-    expect(metadata.header).toEqual([]);
-    expect(metadata.stanzas).toEqual([]);
+    expect(metadata.textBlocks).toEqual([]);
   });
 
   it('should keep line breaks in a text block but lose stray whitespace', () => {
@@ -1627,14 +1631,21 @@ describe('_getScoreMetadata()', () => {
               '  <rend>second</rend>   line  </rend></pgHead>',
     }));
 
-    expect(metadata.header).toEqual([{
+    expect(metadata.textBlocks).toEqual([{
       html: 'Hymns of Praise\nsecond line',
       text: 'Hymns of Praise\nsecond line',
       halign: 'center',
       valign: 'top',
       fontFamily: null,
       fontSize: null,
+      y: null,
+      x: null,
       elementId: 'h1',
+      group: 0,
+      page: 1,
+      // Centered but multi-line with no font size to break a tie against anything
+      // else on the page -- not read as a title, so it falls to the footnote catch-all.
+      type: 'footnote',
     }]);
   });
 
@@ -1643,8 +1654,8 @@ describe('_getScoreMetadata()', () => {
       pgHead: '<pgHead><rend fontfam="McKay Neue ldsLat" fontsize="7">Words: Anon.</rend></pgHead>',
     }));
 
-    expect(metadata.header[0].fontFamily).toBe('McKay Neue ldsLat');
-    expect(metadata.header[0].fontSize).toBe('7');
+    expect(metadata.textBlocks[0].fontFamily).toBe('McKay Neue ldsLat');
+    expect(metadata.textBlocks[0].fontSize).toBe('7');
   });
 
   it('should mark a styled text block up as <em>/<strong>, a line at a time', () => {
@@ -1653,11 +1664,11 @@ describe('_getScoreMetadata()', () => {
               '<rend fontweight="bold">Second verse sung a cappella</rend></pgHead>',
     }));
 
-    expect(metadata.header[0].html)
+    expect(metadata.textBlocks[0].html)
       .toBe('<em>Words: Anon.</em>\n<em>Music: J. Battishill</em>');
-    expect(metadata.header[1].html).toBe('<strong>Second verse sung a cappella</strong>');
+    expect(metadata.textBlocks[1].html).toBe('<strong>Second verse sung a cappella</strong>');
     // The same words, for reading rather than printing
-    expect(metadata.header[0].text).toBe('Words: Anon.\nMusic: J. Battishill');
+    expect(metadata.textBlocks[0].text).toBe('Words: Anon.\nMusic: J. Battishill');
   });
 
   it('should mark a styled run inside a text block up where it sits', () => {
@@ -1665,8 +1676,8 @@ describe('_getScoreMetadata()', () => {
       pgHead: '<pgHead><rend>Air from <rend fontstyle="italic">Orpheus</rend></rend></pgHead>',
     }));
 
-    expect(metadata.header[0].html).toBe('Air from <em>Orpheus</em>');
-    expect(metadata.header[0].text).toBe('Air from Orpheus');
+    expect(metadata.textBlocks[0].html).toBe('Air from <em>Orpheus</em>');
+    expect(metadata.textBlocks[0].text).toBe('Air from Orpheus');
   });
 
   it('should carry a block’s printed lines as newlines, not paragraph markup', () => {
@@ -1678,9 +1689,7 @@ describe('_getScoreMetadata()', () => {
     // <p> is the TSV export's own wrapper (see extract_to_tsv.py), not something a
     // score says -- a block is the words printed, and <lb/> is where they break.
     expect(metadata.title).toBe('Sweet Hour of Prayer');
-    expect(metadata.stanzas).toEqual(['3. Sweet hour of prayer\nThat calls me from a world of care']);
-    expect(metadata.footer[0].html)
-      .toBe('3. Sweet hour of prayer\nThat calls me from a world of care');
+    expect(typed(metadata, 'stanza')).toEqual(['3. Sweet hour of prayer\nThat calls me from a world of care']);
   });
 
   it('should still find the verse marker on a stanza printed in italics', () => {
@@ -1691,28 +1700,28 @@ describe('_getScoreMetadata()', () => {
 
     // The marker is behind the <em> the styling became, and the copyright year that
     // only looks like one is still dropped
-    expect(metadata.stanzas).toEqual(['<em>3. Sweet hour of prayer</em>']);
+    expect(typed(metadata, 'stanza')).toEqual(['<em>3. Sweet hour of prayer</em>']);
   });
 
   it('should collect only numbered verse blocks as stanzas', () => {
     const metadata = score._getScoreMetadata(buildMei({
       pgHead: '<pgHead><rend>Hymns of Praise</rend></pgHead>',
-      pgFoot: '<pgFoot><rend>5. Prayer is the soul\u2019s sincere desire<lb/>Uttered or unexpressed</rend>' +
+      pgFoot: '<pgFoot><rend>5. Prayer is the soul’s sincere desire<lb/>Uttered or unexpressed</rend>' +
               '<rend>6. The saints, in prayer, appear as one</rend>' +
               '<rend>Text: James Montgomery</rend></pgFoot>',
     }));
 
     // The title above and the attribution below are text blocks, but not stanzas
-    expect(metadata.header.length).toBe(1);
-    expect(metadata.footer.length).toBe(3);
-    expect(metadata.stanzas.length).toBe(2);
+    expect(metadata.textBlocks.length).toBe(4);
+    const stanzas = typed(metadata, 'stanza');
+    expect(stanzas.length).toBe(2);
     // The verse number stays in the text, and the printed lines are kept
-    expect(metadata.stanzas[0]).toBe('5. Prayer is the soul\u2019s sincere desire\nUttered or unexpressed');
-    expect(metadata.stanzas[1]).toBe('6. The saints, in prayer, appear as one');
+    expect(stanzas[0]).toBe('5. Prayer is the soul’s sincere desire\nUttered or unexpressed');
+    expect(stanzas[1]).toBe('6. The saints, in prayer, appear as one');
   });
 
   it('should collect a stanza block that opens with an unmarked chorus, one item per verse/chorus', () => {
-    // "He Is Born, the Divine Christ Child" prints its chorus before "1." \u2014 the whole
+    // "He Is Born, the Divine Christ Child" prints its chorus before "1." — the whole
     // block still counts as a stanza block, chorus included, but each blank-line-
     // separated verse/chorus becomes its own stanzas entry.
     const metadata = score._getScoreMetadata(buildMei({
@@ -1721,7 +1730,7 @@ describe('_getScoreMetadata()', () => {
               '1. For long ago the prophets said<lb/>He would come to bless us all.</rend></pgHead>',
     }));
 
-    expect(metadata.stanzas).toEqual([
+    expect(typed(metadata, 'stanza')).toEqual([
       'He is born, the Child divine,\nSing all around and pipe and reed;',
       '1. For long ago the prophets said\nHe would come to bless us all.',
     ]);
@@ -1733,7 +1742,7 @@ describe('_getScoreMetadata()', () => {
               '1982. Text © Hymnal Committee</rend></pgFoot>',
     }));
 
-    expect(metadata.stanzas).toEqual(['1. Prayer is the soul’s sincere desire']);
+    expect(typed(metadata, 'stanza')).toEqual(['1. Prayer is the soul’s sincere desire']);
   });
 
   it('should prefer a centered, single-line printed title over titleStmt/title', () => {
@@ -1755,9 +1764,9 @@ describe('_getScoreMetadata()', () => {
               '<rend halign="center" valign="top">1 Nefi 1:1 | Alma 53:18–22</rend></pgHead>',
     }));
 
-    expect(metadata.header[0].halign).toBe('center');
+    expect(metadata.textBlocks[0].halign).toBe('center');
     // No credit style set aside for this one, so the <rend> still speaks for it
-    expect(metadata.header[1].halign).toBe('center');
+    expect(metadata.textBlocks[1].halign).toBe('center');
     expect(metadata.title).toBe('Llevaremos Su verdad al mundo');
     score._textBlockStyles = new Map();
   });
@@ -1792,8 +1801,8 @@ describe('_getScoreMetadata()', () => {
     }));
 
     expect(metadata.title).toBe('In Humility, Our Savior');
-    expect(metadata.supertitles).toEqual(['Sacrament']);
-    expect(metadata.subtitles).toEqual(['Alma 5:26–27']);
+    expect(typed(metadata, 'supertitle')).toEqual(['Sacrament']);
+    expect(typed(metadata, 'subtitle')).toEqual(['Alma 5:26–27']);
   });
 
   it('should read a centered block of several lines beside the title as neither', () => {
@@ -1805,7 +1814,7 @@ describe('_getScoreMetadata()', () => {
     }));
 
     expect(metadata.title).toBe('Angels We Have Heard on High');
-    expect(metadata.subtitles).toEqual([]);
+    expect(typed(metadata, 'subtitle')).toEqual([]);
   });
 
   it('should let a title run to more than one printed line', () => {
@@ -1815,7 +1824,7 @@ describe('_getScoreMetadata()', () => {
     }));
 
     expect(metadata.title).toBe('Come, Ye Thankful\nPeople, Come');
-    expect(metadata.subtitles).toEqual(['Mark 4:26–29']);
+    expect(typed(metadata, 'subtitle')).toEqual(['Mark 4:26–29']);
   });
 
   it('should read neither printed verses nor a bare number as a heading', () => {
@@ -1826,19 +1835,22 @@ describe('_getScoreMetadata()', () => {
     }));
 
     expect(metadata.title).toBe('This House We Dedicate to Thee');
-    expect(metadata.supertitles).toEqual([]);
-    expect(metadata.subtitles).toEqual([]);
-    expect(metadata.numbers).toEqual(['245']);
+    expect(typed(metadata, 'supertitle')).toEqual([]);
+    expect(typed(metadata, 'subtitle')).toEqual([]);
+    expect(typed(metadata, 'number')).toEqual(['245']);
   });
 
-  it('should look for headings in the page header only', () => {
+  it('should compete for the title regardless of which container it printed in', () => {
+    // The pgHead/pgFoot split is Verovio's own bucketing by y-position within the
+    // merged credit block (see _optimizeMusicXml's cross-credit merge) -- not a
+    // reliable position signal, so heading detection doesn't restrict itself to
+    // pgHead. The largest centered, unclassified block still wins, wherever it landed.
     const metadata = score._getScoreMetadata(buildMei({
       pgHead: '<pgHead><rend halign="center" fontsize="16">Israel, Israel, God Is Calling</rend></pgHead>',
       pgFoot: '<pgFoot><rend halign="center" fontsize="20">Printed larger, but a footer</rend></pgFoot>',
     }));
 
-    expect(metadata.title).toBe('Israel, Israel, God Is Calling');
-    expect(metadata.subtitles).toEqual([]);
+    expect(metadata.title).toBe('Printed larger, but a footer');
   });
 
   it('should report no headings when the title came from titleStmt', () => {
@@ -1848,8 +1860,8 @@ describe('_getScoreMetadata()', () => {
     }));
 
     expect(metadata.title).toBe('Come, Follow Me');
-    expect(metadata.supertitles).toEqual([]);
-    expect(metadata.subtitles).toEqual([]);
+    expect(typed(metadata, 'supertitle')).toEqual([]);
+    expect(typed(metadata, 'subtitle')).toEqual([]);
   });
 
   it('should report a capo marking, wherever it is printed', () => {
@@ -1857,18 +1869,18 @@ describe('_getScoreMetadata()', () => {
     const inHeader = score._getScoreMetadata(buildMei({
       pgHead: '<pgHead><rend halign="left" fontstyle="italic">Capo 5 :</rend></pgHead>',
     }));
-    expect(inHeader.capoMark).toBe('<em>Capo 5 :</em>');
+    expect(typed(inHeader, 'capo')).toEqual(['<em>Capo 5 :</em>']);
 
     const inFooter = score._getScoreMetadata(buildMei({
       pgFoot: '<pgFoot><rend halign="left">Capo 3:</rend></pgFoot>',
     }));
-    expect(inFooter.capoMark).toBe('Capo 3:');
+    expect(typed(inFooter, 'capo')).toEqual(['Capo 3:']);
 
     // A block that only mentions a capo is prose, not the marking
     const inProse = score._getScoreMetadata(buildMei({
       pgHead: '<pgHead><rend halign="left">Guitarists may capo 3 to play along.</rend></pgHead>',
     }));
-    expect(inProse.capoMark).toBeNull();
+    expect(typed(inProse, 'capo')).toEqual([]);
   });
 
   it('should report printed numbers, and nothing else that has digits in it', () => {
@@ -1880,7 +1892,8 @@ describe('_getScoreMetadata()', () => {
       pgFoot: '<pgFoot><rend halign="right">1</rend></pgFoot>',
     }));
 
-    expect(metadata.numbers).toEqual(['245', '1']);
+    const numbers = metadata.textBlocks.filter(block => block.type === 'number').map(block => block.text.trim());
+    expect(numbers).toEqual(['245', '1']);
   });
 });
 
