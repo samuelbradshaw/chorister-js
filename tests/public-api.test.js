@@ -2346,8 +2346,10 @@ describe('_generateSectionsFromSimpleScore', () => {
   }
 
   function generate(meiParsed, staffNumbers, numChordPositions, verseNumbers, hasInitialChorus = false) {
+    // Inherits the prototype: the method reads its own score data, but calls shared
+    // helpers (_verseLineNumber) the way any other method does
     return ChScore.prototype._generateSectionsFromSimpleScore.call(
-      { _scoreData: { meiParsed, staffNumbers, numChordPositions } },
+      { __proto__: ChScore.prototype, _scoreData: { meiParsed, staffNumbers, numChordPositions } },
       verseNumbers,
       hasInitialChorus,
     );

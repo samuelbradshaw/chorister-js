@@ -4,7 +4,7 @@
  * Covers: _getKeySignatures, _normalizeParts, _buildPartsFromTemplate, _binaryFind,
  * _bisectLeft, _qstampToTstamp, _getMidiDuration, _debounce, _isThrottled,
  * _getQpmAtTime, _normalizeChordSets, _markSingleLineChordPositions,
- * _getInlineVerseNumbers
+ * _markHelpTextLyrics, _normalizeLyricVerseNumbers, _getInlineVerseNumbers
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
@@ -2190,6 +2190,114 @@ describe('_mergePickupStanzas()', () => {
 
 
 // ============================================================
+// _markHelpTextLyrics
+// ============================================================
+describe('_markHelpTextLyrics()', () => {
+  let score;
+  const parser = new DOMParser();
+
+  /**
+   * Minimal MEI: one staff per entry, each holding one note per syllable position.
+   * `lines` maps a lyric line number to its syllables, which may carry attributes:
+   * `{ text, attributes }`.
+   */
+  function buildMei(staves) {
+    const staffXml = staves.map((lines, staffIndex) => {
+      const lineNumbers = Object.keys(lines);
+      const syllableCount = Math.max(...lineNumbers.map(n => lines[n].length));
+      const notes = Array.from({ length: syllableCount }, (_, position) => {
+        const verses = lineNumbers.map(lineNumber => {
+          const syllable = lines[lineNumber][position];
+          if (syllable == null) return '';
+          const { text, attributes = '' } = typeof syllable === 'string'
+            ? { text: syllable } : syllable;
+          return `<verse n="${lineNumber}"><syl ${attributes}>${text}</syl></verse>`;
+        }).join('');
+        return `<note ch-melody="true">${verses}</note>`;
+      }).join('');
+      return `<staff n="${staffIndex + 1}"><layer>${notes}</layer></staff>`;
+    }).join('');
+    return parser.parseFromString(`<mei>${staffXml}</mei>`, 'text/xml');
+  }
+
+  const lineIsHelpText = (mei, n) =>
+    [...mei.querySelectorAll(`verse[n="${n}"]`)].every(v => v.hasAttribute('ch-help-text'));
+  /** Each lyric line's engraved number paired with the verse it was worked out to be. */
+  const verseNumbers = (mei) => [...new Map([...mei.querySelectorAll('verse')]
+    .map(v => [v.getAttribute('n'), v.getAttribute('ch-verse-number')]))];
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  it('should mark a wholly parenthesized lyric line as help text', () => {
+    // Example: "(grah-see-ahs)" under "Gracias." in "Children All over the World"
+    const mei = buildMei([{ 1: ['“Gra', 'cias.”'], 2: ['(grah', 'see-ahs)'] }]);
+    score._markHelpTextLyrics(mei);
+
+    expect(lineIsHelpText(mei, 1)).toBe(false);
+    expect(lineIsHelpText(mei, 2)).toBe(true);
+  });
+
+  it('should leave a parenthesized line alone when the staff sings nothing else', () => {
+    const mei = buildMei([{ 1: ['(grah', 'see-ahs)'] }]);
+    score._markHelpTextLyrics(mei);
+
+    expect(lineIsHelpText(mei, 1)).toBe(false);
+  });
+
+  it('should number the sung lines with the help lines counted out', () => {
+    // "Feliz Cumpleaños": verse, pronunciation, verse, pronunciation, chorus
+    const mei = buildMei([{
+      1: ['“Fe', 'liz'], 2: ['(fay', 'lees)'], 3: ['They', 'say'],
+      4: ['(mah', 'noo)'], 5: ['But', 'an'],
+    }]);
+    score._markHelpTextLyrics(mei);
+
+    expect(verseNumbers(mei)).toEqual([
+      ['1', '1'], ['2', null], ['3', '2'], ['4', null], ['5', '3'],
+    ]);
+  });
+
+  it('should leave the verse number as engraved when there is no help text', () => {
+    const mei = buildMei([{ 1: ['Heav'] }, { 2: ['Pray,'] }]);
+    score._markHelpTextLyrics(mei);
+
+    expect(verseNumbers(mei)).toEqual([['1', '1'], ['2', '2']]);
+  });
+
+  it('should mark a label elided onto a sung syllable, and keep its italics', () => {
+    // "(Girls)" in "Love Is Spoken Here" is engraved italic, and the italics get carried
+    // onto the word elided with it
+    const mei = parser.parseFromString(
+      '<mei><staff n="1"><layer>'
+      + '<note ch-melody="true"><verse n="1"><label>1.</label>'
+      + '<syl fontstyle="italic">(Girls)</syl><syl fontstyle="italic">I</syl></verse></note>'
+      + '<note ch-melody="true"><verse n="1"><syl>see</syl></verse></note>'
+      + '</layer></staff></mei>', 'text/xml');
+    score._markHelpTextLyrics(mei);
+
+    const syls = [...mei.querySelectorAll('syl')];
+    expect(syls.map(syl => syl.hasAttribute('ch-help-text'))).toEqual([true, false, false]);
+    expect(syls.map(syl => syl.getAttribute('fontstyle'))).toEqual(['italic', null, null]);
+    // The verse is still sung; only the label inside it isn't
+    expect(mei.querySelector('verse').hasAttribute('ch-help-text')).toBe(false);
+  });
+
+  it('should leave a parenthesized verse marker alone', () => {
+    // "(3.)" over a repeat's pickup names the verse it leads into ("A Child’s Prayer")
+    const mei = parser.parseFromString(
+      '<mei><staff n="1"><layer><note ch-melody="true"><verse n="1">'
+      + '<syl>(3.)</syl><syl>Heav</syl></verse></note></layer></staff></mei>', 'text/xml');
+    score._markHelpTextLyrics(mei);
+
+    expect(mei.querySelector('syl').hasAttribute('ch-help-text')).toBe(false);
+  });
+});
+
+
+// ============================================================
 // _normalizeLyricVerseNumbers
 // ============================================================
 describe('_normalizeLyricVerseNumbers()', () => {
@@ -2227,6 +2335,30 @@ describe('_normalizeLyricVerseNumbers()', () => {
 
     expect(firstLabel(mei, 1)).toBeNull();
     expect(firstSyl(mei, 1)).toBe('7.Do');
+  });
+
+  it('should split a number out of a line whose neighbour is already labelled', () => {
+    // "Feliz Cumpleaños" writes verse 1 as "1.“Fe" but elides verse 2's "2." onto its own
+    // first word, which Verovio reads as a label -- so one score does both
+    const mei = parser.parseFromString(
+      '<mei><staff n="1"><layer>'
+      + '<note ch-melody="true"><verse n="1"><syl>1.“Fe</syl></verse></note>'
+      + '<note ch-melody="true"><verse n="2"><label>2.</label><syl>They</syl></verse></note>'
+      + '<note ch-melody="true"><verse n="3"><syl>But</syl></verse></note>'
+      + '</layer></staff></mei>', 'text/xml');
+    score._normalizeLyricVerseNumbers(mei);
+
+    expect([firstLabel(mei, 1), firstLabel(mei, 2), firstLabel(mei, 3)])
+      .toEqual(['1.', '2.', null]);
+    expect(firstSyl(mei, 1)).toBe('“Fe');
+  });
+
+  it('should leave the numbers alone when one appears after the verses', () => {
+    const mei = buildMei(['1.Ve', 'Cho', '3.Bus']);
+    score._normalizeLyricVerseNumbers(mei);
+
+    expect(firstLabel(mei, 1)).toBeNull();
+    expect(firstSyl(mei, 1)).toBe('1.Ve');
   });
 
   it('should leave the lyrics alone when the score already labels its verses', () => {

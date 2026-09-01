@@ -597,6 +597,7 @@ Chorister.js adds the following data attributes to elements in Verovio’s SVG o
 - **@data-ch-section-id** – Indicates the section ID for lyric text. Added to verse and label elements.
 - **@data-ch-secondary** – Indicates that the lyric text is secondary, i.e. not part of the melody (if part information is provided). Added to verse elements.
 - **@data-ch-chorus** – Indicates that the lyric text is part of a chorus or refrain. Added to verse elements.
+- **@data-ch-help-text** – Indicates inline text that helps the singer but is not sung (for example, pronunciation or performance instructions inline with the music).
 
 These data attributes are set on the score container:
 

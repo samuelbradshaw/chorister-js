@@ -1419,7 +1419,9 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   for (const meiElement of this._scoreData.meiParsed.querySelectorAll('[cue="true"]')) meiElement.removeAttribute('cue');
 
   // Correct syllables that carry a verse number before anything reads them, starting
-  // with the syllable text gathered below
+  // with the syllable text gathered below. Help text is marked first, so a lyric line
+  // that isn't sung doesn't count as one when the numbers are read.
+  this._markHelpTextLyrics(this._scoreData.meiParsed);
   this._normalizeLyricVerseNumbers(this._scoreData.meiParsed);
 
   // Gather information about each note and rest
@@ -1794,8 +1796,12 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
       continue;
     }
     const staffNumber = verse.closest('staff').getAttribute('n');
-    const lineNumber = verse.getAttribute('n');
-    verse.setAttribute('ch-lyric-line-id', `${staffNumber}.${lineNumber}`);
+    // A lyric line is named by the verse it is, not the row it's engraved on, so a
+    // pronunciation guide between two verses doesn't shift the line below it. Help text
+    // is left unnamed: it's never sung, so nothing looks it up by line.
+    if (!verse.hasAttribute('ch-help-text')) {
+      verse.setAttribute('ch-lyric-line-id', `${staffNumber}.${this._verseLineNumber(verse)}`);
+    }
     // Mark secondary lyrics (examples: "It Is Well with My Soul"; "Were You There?")
     const parentNoteOrChord = verse.closest('[ch-chord-position]');
     if (!parentNoteOrChord.hasAttribute('ch-melody') && !parentNoteOrChord.querySelector('[ch-melody]')) {
@@ -2099,39 +2105,156 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   this._updateMei();
 }
 
+// Parenthesized text that helps a singer rather than being sung: a pronunciation guide on
+// its own lyric line ("(grah-see-ahs)" under "Gracias." in "Children All over the World"),
+// or a performance label elided onto a verse's first syllable ("(Girls)" in "Love Is Spoken
+// Here"). Marked @ch-help-text -- on the verse for a whole line, on the syllable for a
+// label sharing its verse with sung words -- and skipped everywhere the words are read.
+// A whole parenthesized group, since a syllable's own parentheses open and close on
+// different syllables ("(grah" / "see-" / "ahs)")
+const CH_PARENTHESIZED = /\([^)]*\)/g;
+// A verse marker in parentheses: "(3.)" printed over a repeat's pickup names the verse it
+// leads into, so it isn't help text
+const CH_PARENTHESIZED_MARKER = /^\(\s*\d+\s*[.)]?\s*\)$/;
+ChScore.prototype._markHelpTextLyrics = function (meiParsed) {
+  const versesByStaffAndLine = new Map();
+  for (const verse of meiParsed.querySelectorAll('verse')) {
+    const staffNumber = verse.closest('staff')?.getAttribute('n') ?? '';
+    const key = `${staffNumber}.${verse.getAttribute('n')}`;
+    if (!versesByStaffAndLine.has(key)) versesByStaffAndLine.set(key, []);
+    versesByStaffAndLine.get(key).push(verse);
+  }
+
+  // A whole lyric line of nothing but parentheses, on a staff that has another line to
+  // sing. A staff whose every line reads that way is taken at face value instead.
+  const helpLineKeys = new Set();
+  for (const [key, verses] of versesByStaffAndLine) {
+    const lineText = verses
+      .flatMap(verse => [...verse.querySelectorAll('syl:not(:empty)')])
+      .map(syl => syl.textContent.trim()).join(' ');
+    if (!lineText.includes('(')) continue;
+    if (/[\p{L}\p{N}]/u.test(lineText.replace(CH_PARENTHESIZED, ''))) continue;
+    helpLineKeys.add(key);
+  }
+  const countByStaff = (keys) => {
+    const counts = new Map();
+    for (const key of keys) {
+      const staffNumber = key.split('.')[0];
+      counts.set(staffNumber, (counts.get(staffNumber) ?? 0) + 1);
+    }
+    return counts;
+  };
+  const helpLinesOnStaff = countByStaff(helpLineKeys);
+  const linesOnStaff = countByStaff(versesByStaffAndLine.keys());
+  for (const key of helpLineKeys) {
+    const staffNumber = key.split('.')[0];
+    if (helpLinesOnStaff.get(staffNumber) === linesOnStaff.get(staffNumber)) continue;
+    for (const verse of versesByStaffAndLine.get(key)) verse.setAttribute('ch-help-text', '');
+  }
+
+  // A label elided onto the first syllable of a verse that goes on to be sung
+  for (const [key, verses] of versesByStaffAndLine) {
+    if (helpLineKeys.has(key)) continue;
+    for (const [index, verse] of verses.entries()) {
+      const syls = [...verse.querySelectorAll('syl:not(:empty)')];
+      if (syls.length < 2) continue;
+      const text = syls[0].textContent.trim();
+      if (!/^\([^()]*\)$/.test(text) || CH_PARENTHESIZED_MARKER.test(text)) continue;
+      syls[0].setAttribute('ch-help-text', '');
+
+      // The label's own italics get engraved onto the syllable elided with it, which is a
+      // question of styling rather than of what the word is. Moved back onto the label,
+      // unless the line carries on styled -- there the emphasis belongs to the words.
+      const nextSyl = verses[index + 1]?.querySelector('syl:not(:empty)');
+      if (nextSyl?.getAttribute('fontstyle') || nextSyl?.getAttribute('fontweight')) continue;
+      for (const syl of syls.slice(1)) {
+        syl.removeAttribute('fontstyle');
+        syl.removeAttribute('fontweight');
+      }
+    }
+  }
+
+  // Which verse each remaining line is, counting the help lines out. Ranked over the
+  // score's line numbers rather than each staff's, since a two-part score gives each part
+  // its own staff and its own line number ("2.2" is the second part's verse 2). @n is left
+  // as engraved -- Verovio draws a verse on the row @n names, and renumbering would print
+  // verse 2's words over the pronunciation guide belonging to verse 1. With no help text
+  // this comes back to @n, so a score without any is unchanged.
+  const sungLineNumbers = new Set();
+  for (const verses of versesByStaffAndLine.values()) {
+    if (verses[0].hasAttribute('ch-help-text')) continue;
+    const lineNumber = Number.parseInt(verses[0].getAttribute('n'));
+    if (!Number.isNaN(lineNumber)) sungLineNumbers.add(lineNumber);
+  }
+  const verseNumbersByLineNumber = new Map([...sungLineNumbers]
+    .sort((a, b) => a - b).map((lineNumber, index) => [lineNumber, index + 1]));
+  for (const verses of versesByStaffAndLine.values()) {
+    for (const verse of verses) {
+      if (verse.hasAttribute('ch-help-text')) continue;
+      const verseNumber = verseNumbersByLineNumber.get(Number.parseInt(verse.getAttribute('n')));
+      if (verseNumber != null) verse.setAttribute('ch-verse-number', verseNumber);
+    }
+  }
+}
+
+// Which verse a lyric line is, with any help text between the lines counted out. Falls
+// back to the engraved line number, which is what it is on a score with no help text.
+ChScore.prototype._verseLineNumber = function (verse) {
+  return Number.parseInt(verse.getAttribute('ch-verse-number') ?? verse.getAttribute('n'));
+}
+
 // Clean up verse numbers that were engraved as part of a lyric syllable
 // Example: "Venid a Mí" (Spanish Hymns #61)
 const CH_INLINE_VERSE_NUMBER = /^\s*\(?(\d+\s*[.)])\s*/;
 ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed) {
-  if (meiParsed.querySelector('verse label')) return;
-
   const versesByStaff = new Map();
-  for (const verse of meiParsed.querySelectorAll('verse')) {
+  for (const verse of meiParsed.querySelectorAll('verse:not([ch-help-text])')) {
     if (verse.textContent.trim() === '') continue;
-    const staffNumber = verse.closest('staff')?.getAttribute('n') ?? '';
-    const lineNumber = Number.parseInt(verse.getAttribute('n'));
+    const lineNumber = this._verseLineNumber(verse);
     if (Number.isNaN(lineNumber)) continue;
+    const staffNumber = verse.closest('staff')?.getAttribute('n') ?? '';
     if (!versesByStaff.has(staffNumber)) versesByStaff.set(staffNumber, new Map());
     const versesByLineNumber = versesByStaff.get(staffNumber);
     if (!versesByLineNumber.has(lineNumber)) versesByLineNumber.set(lineNumber, []);
     versesByLineNumber.get(lineNumber).push(verse);
   }
 
+  // What names a line as its own verse: a label already carrying the number, or the number
+  // engraved into the line's first syllable. One score can do both — Verovio reads a
+  // number elided onto the first word as a label, but not one written into the word itself
+  // ("2." on line 3 of "Feliz Cumpleaños", against "1.“Fe" on line 1).
+  const inlineNumberMatch = (verses) => {
+    const syl = verses?.[0].querySelector('syl:not(:empty)');
+    return (syl && CH_INLINE_VERSE_NUMBER.exec(syl.textContent)) || null;
+  };
+  const numberOf = (verses, lineNumber) => {
+    const label = verses?.[0].querySelector('label');
+    if (label) return this._markerNumber(label.textContent);
+    const match = inlineNumberMatch(verses);
+    return match ? Number.parseInt(match[1]) : null;
+  };
+
   for (const versesByLineNumber of versesByStaff.values()) {
-    let engravesNumbersInline = true;
-    for (let lineNumber = 1; lineNumber <= versesByLineNumber.size; lineNumber++) {
-      const syl = versesByLineNumber.get(lineNumber)?.[0].querySelector('syl:not(:empty)');
-      const match = syl && CH_INLINE_VERSE_NUMBER.exec(syl.textContent);
-      if (!match || Number.parseInt(match[1]) !== lineNumber) {
-        engravesNumbersInline = false;
-        break;
+    // The verses run from the first line, and what follows them is unnumbered — a chorus
+    // printed on its own lyric line. A number appearing again after the run says the lines
+    // aren't verse numbers at all, so nothing is moved.
+    let numberedLines = 0;
+    while (numberOf(versesByLineNumber.get(numberedLines + 1), numberedLines + 1)
+      === numberedLines + 1) numberedLines++;
+    if (numberedLines === 0) continue;
+    let hasNumberAfterVerses = false;
+    for (let lineNumber = numberedLines + 1; lineNumber <= versesByLineNumber.size; lineNumber++) {
+      if (numberOf(versesByLineNumber.get(lineNumber), lineNumber) !== null) {
+        hasNumberAfterVerses = true;
       }
     }
-    if (!engravesNumbersInline) continue;
+    if (hasNumberAfterVerses) continue;
 
     // Each stanza's number moves out of the syllable it was engraved in
-    for (const verses of versesByLineNumber.values()) {
+    for (const [lineNumber, verses] of versesByLineNumber) {
+      if (lineNumber > numberedLines) continue;
       for (const verse of verses) {
+        if (verse.querySelector('label')) continue;
         const syl = verse.querySelector('syl:not(:empty)');
         const match = syl && CH_INLINE_VERSE_NUMBER.exec(syl.textContent);
         if (!match) continue;
@@ -2395,10 +2518,15 @@ ChScore.prototype._updateMei = function () {
       for (const section of parentSection.querySelectorAll('section, ending')) {
         const sectionId = section.getAttribute('xml:id');
 
-        // Check if section element has multiple simultaneous lyric lines
-        if (!section.querySelector(':is(note[ch-melody], chord:has([ch-melody])) verse:nth-of-type(2)')) {
-          singleLineSectionIds.add(sectionId);
+        // Check if section element has multiple simultaneous lyric lines. Help text isn't
+        // one of them, so a pronunciation guide under the words doesn't read as a verse 2.
+        const versesPerNote = new Map();
+        for (const verse of section.querySelectorAll(
+          ':is(note[ch-melody], chord:has([ch-melody])) verse:not([ch-help-text])')) {
+          versesPerNote.set(verse.parentElement, (versesPerNote.get(verse.parentElement) ?? 0) + 1);
         }
+        const hasMultipleLyricLines = [...versesPerNote.values()].some(count => count > 1);
+        if (!hasMultipleLyricLines) singleLineSectionIds.add(sectionId);
 
         sectionsById[sectionId] = [];
         sectionIdCounter[sectionId] = 0;
@@ -2566,13 +2694,17 @@ ChScore.prototype._updateMei = function () {
             } else {
               keptVerseIndex = this._verseSoundingAt(verseElements, passNumber, isSingleLine);
             }
+            // Help text belongs to the line engraved above it, and shows on the pass that
+            // line does ("(fay-lees…)" under verse 1 of "Feliz Cumpleaños")
+            let helpTextOwnerIndex = -1;
             for (let i = 0; i < verseElements.length; i++) {
               const verseElement = verseElements[i];
-              if (i === keptVerseIndex) {
-                verseElement.setAttribute('n', 1);
-                verseElement.setAttribute('ch-section-id', sectionInfo.sectionId);
-              } else if (verseElement.hasAttribute('ch-secondary')) {
-                verseElement.setAttribute('n', 2);
+              const isHelpText = verseElement.hasAttribute('ch-help-text');
+              if (!isHelpText) helpTextOwnerIndex = i;
+              if (i === keptVerseIndex
+                || (isHelpText && keptVerseIndex >= 0 && helpTextOwnerIndex === keptVerseIndex)
+                || (!isHelpText && verseElement.hasAttribute('ch-secondary'))) {
+                verseElement.setAttribute('n', i === keptVerseIndex ? 1 : 2);
                 verseElement.setAttribute('ch-section-id', sectionInfo.sectionId);
               } else {
                 verseElement.remove();
@@ -2674,9 +2806,10 @@ ChScore.prototype._updateMei = function () {
       // A verse the replay never reached keeps its engraved lyric line number, which Verovio
       // renders as a second row of words under the staff. An expanded score shows one
       // verse per staff per iteration, so every surviving melody verse belongs on line 1 —
-      // a genuine secondary line, already renumbered to 2 above, is the only exception.
+      // a genuine secondary line and help text, both already renumbered to 2 above, are the
+      // only exceptions.
       for (const verse of this._scoreData.meiParsed.querySelectorAll(
-        ':is(note[ch-melody], chord:has([ch-melody])) verse:not([ch-secondary])')) {
+        ':is(note[ch-melody], chord:has([ch-melody])) verse:not([ch-secondary]):not([ch-help-text])')) {
         verse.setAttribute('n', 1);
       }
 
@@ -4001,6 +4134,7 @@ ChScore.prototype._defaultVerovioOptions = {
     'dir@ch-chord-position', 'harm@ch-chord-position', 'fermata@ch-chord-position',
     'verse@ch-lyric-line-id',
     'dir@ch-intro-bracket', 'dir@ch-round-marker', 'rend@ch-superscript', 'syl@ch-end-underscore',
+    'verse@ch-help-text', 'syl@ch-help-text',
     // Chorister.js advanced attributes (based on parts and sections data)
     'chord@ch-expanded-chord-position', 'note@ch-expanded-chord-position', 'rest@ch-expanded-chord-position',
     'dir@ch-expanded-chord-position', 'harm@ch-expanded-chord-position', 'fermata@ch-expanded-chord-position',
@@ -4183,7 +4317,7 @@ ChScore.prototype._getInlineVerseNumbers = function (meiParsed) {
   for (const verseLabel of verseLabels) {
     const verse = verseLabel.closest('verse');
     const verseNumber = Number.parseInt(this._cleanMarker(verseLabel.textContent));
-    const lineNumber = Number.parseInt(verse.getAttribute('n'));
+    const lineNumber = this._verseLineNumber(verse);
     // Only the first label of a lyric line names the line. A score that lays its
     // stanzas out one after another numbers the same line again further in, and that
     // number is the stanza's, not the line's.
@@ -5647,15 +5781,14 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
     const lyricGaps = [[]];
     const lineNumbersByCp = {};
     const versesByCp = {};
-    const lyrics = meiParsed.querySelectorAll(':is(note[ch-melody], chord:has([ch-melody])) verse:has(syl:not(:empty))');
+    const lyrics = meiParsed.querySelectorAll(':is(note[ch-melody], chord:has([ch-melody])) verse:not([ch-help-text]):has(syl:not(:empty))');
     for (const lyric of lyrics) {
       const chordPosition = lyric.closest('note, chord').getAttribute('ch-chord-position');
       if (!(chordPosition in lineNumbersByCp)) {
         lineNumbersByCp[chordPosition] = [];
         versesByCp[chordPosition] = [];
       }
-      const lineNumber = Number.parseInt(lyric.getAttribute('n'));
-      lineNumbersByCp[chordPosition].push(lineNumber);
+      lineNumbersByCp[chordPosition].push(this._verseLineNumber(lyric));
       versesByCp[chordPosition].push(lyric);
     }
     for (const [chordPosition, lineNumbers] of Object.entries(lineNumbersByCp)) {
@@ -5703,8 +5836,8 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
   // Get line numbers from secondary lyrics
   const additionalSecondaryLyricLineNumbers = new Set();
   const chorusChordPositions = new Set(chorusCpRanges.flat());
-  for (const lyric of meiParsed.querySelectorAll('verse[ch-secondary]')) {
-    const lineNumber = Number.parseInt(lyric.getAttribute('n'));
+  for (const lyric of meiParsed.querySelectorAll('verse[ch-secondary]:not([ch-help-text])')) {
+    const lineNumber = this._verseLineNumber(lyric);
     if (chorusChordPositions.has(Number.parseInt(lyric.closest('note, chord').getAttribute('ch-chord-position')))) {
       chorusLineNumbers.add(lineNumber);
     } else if (!verseNumbers.includes(lineNumber)) {
@@ -5890,10 +6023,13 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
 // above, so a verse there counts as the melody's. Above and same staff both matter: lyrics
 // sit on a staff's top voice, so words *below* the melody are a second voice singing its
 // own ("may rest, may rest" in "Come unto Jesus").
+// Help text is left out; @ch-secondary is not, since a verse engraved above a lower voice
+// carrying the tune is marked secondary and is still the melody's words.
 ChScore.prototype._melodyVerseElements = function () {
   const melodyLayers = this._melodyLayerByStaffAndChordPosition();
   const verseElements = [];
-  for (const verse of this._scoreData.meiParsed.querySelectorAll(':is(note, chord) verse')) {
+  for (const verse of this._scoreData.meiParsed.querySelectorAll(
+    ':is(note, chord) verse:not([ch-help-text])')) {
     const holder = verse.closest('note, chord');
     if (this._carriesMelody(holder) || this._isAboveMelody(holder, melodyLayers)) verseElements.push(verse);
   }
@@ -5982,10 +6118,12 @@ ChScore.prototype._getMelodyVerseElementsByChordPosition = function (verses) {
 // isSingleLine is caller-supplied because the two derive it differently.
 ChScore.prototype._verseSoundingAt = function (verseElements, passNumber, isSingleLine) {
   const engraved = Array.from(verseElements);
-  // Skip verses with empty syllables (melisma underscore end)
+  // Skip verses with empty syllables (melisma underscore end), and verses that are help
+  // text rather than words to sing
   const sungIndices = engraved
     .map((verse, index) => index)
-    .filter(index => engraved[index].matches('verse:has(syl:not(:empty))'));
+    .filter(index => engraved[index].matches(
+      'verse:not([ch-help-text]):has(syl:not(:empty):not([ch-help-text]))'));
   const verses = sungIndices.map(index => engraved[index]);
   if (verses.length === 0) return -1;
   const soundingIndex = (index) => (index >= 0 && index < verses.length ? sungIndices[index] : -1);
@@ -5997,14 +6135,14 @@ ChScore.prototype._verseSoundingAt = function (verseElements, passNumber, isSing
   // otherwise always win and return 0.
   const allLabelled = verses.every(ve => ve.querySelector('label'));
   const namesAnotherVerse = () => this._markerNumber(verses[0].querySelector('label')?.textContent)
-    !== Number.parseInt(verses[0].getAttribute('n'));
+    !== this._verseLineNumber(verses[0]);
   if (allLabelled && (verses.length > 1 || namesAnotherVerse())) {
     // Out of range on later passes, which is correct: the pickup is sung once per verse
     return soundingIndex(passNumber - 1);
   }
 
   if (isSingleLine) return soundingIndex(0);
-  return soundingIndex(verses.findIndex(ve => Number.parseInt(ve.getAttribute('n')) === passNumber));
+  return soundingIndex(verses.findIndex(ve => this._verseLineNumber(ve) === passNumber));
 }
 
 // Round markers, by the chord position they're engraved at. The marker is the dir's own
@@ -6117,7 +6255,8 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
 
     if (verseElement) {
       const label = verseElement.querySelector('label');
-      const sylElements = Array.from(verseElement.querySelectorAll('syl:not(:empty)'));
+      const sylElements = Array.from(
+        verseElement.querySelectorAll('syl:not(:empty):not([ch-help-text])'));
       const text = sylElements.map(syl => (syl.textContent.replace(/[\-\‑\s]+$/, '').trim() + ' ').trim()).join(' ').trim() || null;
       const startsWord = !['m', 't'].includes(sylElements[0]?.getAttribute('wordpos'));
       const roundMarker = startsWord ? pendingRoundMarker : null;
