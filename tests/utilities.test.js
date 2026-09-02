@@ -1564,6 +1564,69 @@ describe('_optimizeMusicXml() — credit styling', () => {
 
 
 // ============================================================
+// _optimizeMusicXml — repeat structure
+// ============================================================
+describe('_optimizeMusicXml() — repeat structure', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  const scoreXml = (...parts) =>
+    `<score-partwise><part id="P1"><measure number="1">${parts.join('')}</measure></part></score-partwise>`;
+
+  /** Every ending's @number, in document order. */
+  const numbers = (musicXml) =>
+    [...new DOMParser().parseFromString(musicXml, 'text/xml').querySelectorAll('ending')]
+      .map(ending => ending.getAttribute('number'));
+
+  it('should number an ending from the label it prints, and its stop with it', () => {
+    // "See the Mighty Priesthood Gathered": the label is engraved as text, not as @number
+    const musicXml = scoreXml('<ending number="" type="start">1. 2.</ending>', '<ending number="" type="stop"/>');
+    expect(numbers(score._optimizeMusicXml(musicXml))).toEqual(['1,2', '1,2']);
+  });
+
+  it('should correct a number that disagrees with the printed label', () => {
+    // "Ring Out, Wild Bells": engraved "1. 2.", numbered 1, so Verovio reads one repeat
+    const musicXml = scoreXml('<ending number="1" type="start">1. 2.</ending>', '<ending number="1" type="stop"/>');
+    expect(numbers(score._optimizeMusicXml(musicXml))).toEqual(['1,2', '1,2']);
+  });
+
+  it('should leave an ending that agrees with its label, without re-serializing', () => {
+    const musicXml = scoreXml('<ending number="1, 2" type="start">1. 2.</ending>', '<ending number="1, 2" type="stop"/>');
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+
+  it('should leave an ending whose label carries no number', () => {
+    const musicXml = scoreXml('<ending number="" type="start">last time</ending>', '<ending number="" type="stop"/>');
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+
+  it('should not carry one ending’s correction into the next', () => {
+    const musicXml = scoreXml(
+      '<ending number="" type="start">1. 2.</ending>', '<ending number="" type="stop"/>',
+      '<ending number="3" type="start">3.</ending>', '<ending number="3" type="discontinue"/>');
+    expect(numbers(score._optimizeMusicXml(musicXml))).toEqual(['1,2', '1,2', '3', '3']);
+  });
+
+  it('should drop time-only from a "to Coda", which Verovio reads instead of the jump', () => {
+    // "Close as a Quiet Prayer": with @time-only the jump is left out of the expansion
+    const musicXml = scoreXml('<direction><sound time-only="3" tocoda="42"/></direction>');
+    const sound = new DOMParser().parseFromString(score._optimizeMusicXml(musicXml), 'text/xml').querySelector('sound');
+    expect(sound.hasAttribute('time-only')).toBe(false);
+    expect(sound.getAttribute('tocoda')).toBe('42');
+  });
+
+  it('should keep time-only where there is no jump beside it', () => {
+    const musicXml = scoreXml('<direction><sound fine="yes" time-only="4"/></direction>');
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+});
+
+
+// ============================================================
 // _getScoreMetadata
 // ============================================================
 describe('_getScoreMetadata()', () => {
@@ -2293,6 +2356,56 @@ describe('_markHelpTextLyrics()', () => {
     score._markHelpTextLyrics(mei);
 
     expect(mei.querySelector('syl').hasAttribute('ch-help-text')).toBe(false);
+  });
+});
+
+
+// ============================================================
+// _stackedVerseLines
+// ============================================================
+describe('_stackedVerseLines()', () => {
+  let score;
+  const parser = new DOMParser();
+
+  /** One melody note per chord position, each carrying the lyric lines named for it. */
+  function loadMei(linesPerChordPosition) {
+    const notes = linesPerChordPosition.map((lines, cp) => {
+      const verses = lines.map(n => `<verse n="${n}"><syl>la</syl></verse>`).join('');
+      return `<note ch-melody="" ch-chord-position="${cp}">${verses}</note>`;
+    }).join('');
+    score._scoreData = {
+      meiParsed: parser.parseFromString(
+        `<mei><staff n="1"><layer n="1">${notes}</layer></staff></mei>`, 'text/xml'),
+      numChordPositions: linesPerChordPosition.length,
+    };
+  }
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  it('should count the verses stacked on the same notes', () => {
+    loadMei([[1, 2, 3], [1, 2, 3]]);
+    expect(score._stackedVerseLines()).toEqual([1, 2, 3]);
+  });
+
+  it('should not count a refrain printed on its own line', () => {
+    // "He's our bishop" sits alone under the verses and is sung on every pass
+    loadMei([[1, 2], [1, 2], [3], [3]]);
+    expect(score._stackedVerseLines()).toEqual([1, 2]);
+  });
+
+  it('should count nothing on a score with one lyric line', () => {
+    loadMei([[1], [1]]);
+    expect(score._stackedVerseLines()).toEqual([]);
+  });
+
+  it('should count two lines that say the same thing as two verses', () => {
+    // "Go the Second Mile" is sung twice; that its MXL engraves verse 1's words on both
+    // lines is a defect in the score, not a reason to play it once
+    loadMei([[1, 2], [1, 2]]);
+    expect(score._stackedVerseLines()).toEqual([1, 2]);
   });
 });
 

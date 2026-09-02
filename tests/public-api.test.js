@@ -1500,6 +1500,144 @@ describe('_updateExpansionElement() — unit tests', () => {
 
 
 // ============================================================
+// _extendPlistForVerses
+// ============================================================
+describe('_extendPlistForVerses()', () => {
+  let score;
+  const parser = new DOMParser();
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  /**
+   * Minimal MEI of sections and endings, each { id, tag?, lines, cps, harmonyLines? }.
+   * Only the melody's lines count, so `harmonyLines` is what a section's own
+   * querySelectorAll('verse') would wrongly sweep in. Verses hang off a note marked
+   * @ch-melody, on a staff and layer, since that is what the melody-verse index reads.
+   */
+  function buildMei(elements) {
+    const xml = elements.map(({ id, tag = 'section', lines, cps, harmonyLines = [] }) => {
+      const verse = n => `<verse n="${n}"><syl>la</syl></verse>`;
+      const melody = `<note ch-melody="" ch-chord-position="${cps[0]}">${lines.map(verse).join('')}</note>`;
+      const harmony = harmonyLines.length
+        ? `<staff n="2"><layer n="1"><note ch-chord-position="${cps[0]}">`
+          + `${harmonyLines.map(verse).join('')}</note></layer></staff>`
+        : '';
+      return `<${tag} xml:id="${id}" n="1" ch-chord-position="${cps.join(' ')}">`
+        + `<measure><staff n="1"><layer n="1">${melody}</layer></staff>${harmony}</measure></${tag}>`;
+    }).join('');
+    return parser.parseFromString(`<mei><body>${xml}</body></mei>`, 'text/xml');
+  }
+
+  // The melody-verse index is keyed on _scoreData.meiParsed, and production passes that same
+  // document in, so the fixture has to be installed there too.
+  const extend = (mei, plist, stacked, numChordPositions) => {
+    score._scoreData = { ...(score._scoreData ?? {}), meiParsed: mei };
+    score._melodyVerseIndexCache = null;
+    return score._extendPlistForVerses(mei, plist, stacked, numChordPositions).join(' ');
+  };
+  const extendRaw = (mei, plist, stacked, numChordPositions) => {
+    score._scoreData = { ...(score._scoreData ?? {}), meiParsed: mei };
+    score._melodyVerseIndexCache = null;
+    return score._extendPlistForVerses(mei, plist, stacked, numChordPositions);
+  };
+
+  it('should play the body once per verse when the repeat plays it fewer times', () => {
+    // "When I Go to Church": an introduction, then a body of three verses played twice
+    const mei = buildMei([
+      { id: 'intro', lines: [], cps: [0, 1] },
+      { id: 'body', lines: [1, 2, 3], cps: [2, 3, 4] },
+    ]);
+    expect(extend(mei, ['#intro', '#body', '#body'], [1, 2, 3], 5))
+      .toBe('#intro #body #body #body');
+  });
+
+  it('should close each verse with the ending that carries its lyric line', () => {
+    // One ending shared by verses 1 and 2, another for verse 3. Read from the lines the
+    // ending carries, since @n spells the same construct several ways.
+    const mei = buildMei([
+      { id: 'body', lines: [1, 2, 3], cps: [0, 1] },
+      { id: 'end12', tag: 'ending', lines: [1, 2], cps: [2] },
+      { id: 'end3', tag: 'ending', lines: [3], cps: [3] },
+    ]);
+    expect(extend(mei, ['#body', '#end12', '#body', '#end3'], [1, 2, 3], 4))
+      .toBe('#body #end12 #body #end12 #body #end3');
+  });
+
+  it('should leave a score alone when every verse already sounds', () => {
+    // "Where Love Is": the second verse lives in a section the engraving already repeats
+    const mei = buildMei([
+      { id: 'a', lines: [1], cps: [0] },
+      { id: 'b', lines: [1, 2], cps: [1, 2] },
+      { id: 'c', lines: [1], cps: [3] },
+    ]);
+    const plist = ['#a', '#b', '#c', '#b'];
+    expect(extendRaw(mei, plist, [1, 2], 4)).toBe(plist);
+  });
+
+  it('should count only the melody’s lines, not the harmony parts’', () => {
+    // "Scatter Sunshine": its chorus is one melody line printed over harmony verses. Read
+    // off the section element they look like two, which makes the chorus verse-carrying
+    // music and splits the plist into a rendition per chorus repeat.
+    const mei = buildMei([
+      { id: 'body', lines: [1, 2, 3], cps: [0, 1] },
+      { id: 'chorus', lines: [1], harmonyLines: [2], cps: [2, 3] },
+      { id: 'end1', tag: 'ending', lines: [1], cps: [4] },
+      { id: 'end2', tag: 'ending', lines: [1], cps: [5] },
+    ]);
+    // One rendition -- the repeat inside it is the chorus's own -- played once per verse
+    expect(extend(mei, ['#body', '#chorus', '#end1', '#chorus', '#end2'], [1, 2, 3], 6))
+      .toBe('#body #chorus #end1 #chorus #end2 '.repeat(3).trim());
+  });
+
+  it('should repeat a whole single rendition, endings and all', () => {
+    // Nothing here closes a verse, so the endings are replayed rather than substituted
+    const mei = buildMei([
+      { id: 'body', lines: [1, 2], cps: [0, 1] },
+      { id: 'end1', tag: 'ending', lines: [1], cps: [2] },
+      { id: 'end2', tag: 'ending', lines: [1], cps: [3] },
+    ]);
+    expect(extend(mei, ['#body', '#end1', '#end2'], [1, 2], 4))
+      .toBe('#body #end1 #end2 #body #end1 #end2');
+  });
+
+  it('should refuse when the plist does not cover the whole score', () => {
+    // Some translated scores of "Gethsemane" expand to a fraction of their own music
+    const mei = buildMei([
+      { id: 'body', lines: [1, 2], cps: [0, 1] },
+      { id: 'tail', lines: [2], cps: [90] },
+    ]);
+    const plist = ['#body', '#tail'];
+    expect(extendRaw(mei, plist, [1, 2], 91)).toBe(plist);
+  });
+
+  it('should refuse when an ending never appears in the plist', () => {
+    // Verovio leaves one out on the translated scores of "Gethsemane". numChordPositions is
+    // what the played sections cover, so this reaches the ending guard rather than stopping
+    // at the coverage one above.
+    const mei = buildMei([
+      { id: 'body', lines: [1, 2, 3], cps: [0, 1] },
+      { id: 'end12', tag: 'ending', lines: [1, 2], cps: [2] },
+      { id: 'end3', tag: 'ending', lines: [3], cps: [3] },
+    ]);
+    const plist = ['#body', '#end3'];
+    expect(extendRaw(mei, plist, [1, 2, 3], 3)).toBe(plist);
+  });
+
+  it('should count passes by the highest line number, not how many lines are stacked', () => {
+    // "Gethsemane" to: lines 2 and 3 are stacked and line 1 is alone, so the music still
+    // has to come round three times -- the first pass sings nothing here.
+    const mei = buildMei([
+      { id: 'body', lines: [2, 3], cps: [0, 1] },
+    ]);
+    expect(extend(mei, ['#body', '#body'], [2, 3], 2)).toBe('#body #body #body');
+  });
+});
+
+
+// ============================================================
 // _getIntroSectionFromChordPositions
 // ============================================================
 describe('_getIntroSectionFromChordPositions()', () => {

@@ -40,7 +40,6 @@ export const sampleMusicXmlFHS = readFileSync(
 // independent melody parts on separate staves each carrying a full lyric line
 // (partsTemplate 'Two-Part'), a repeat with a combined 1st/2nd ending and a separate 3rd
 // ending, and a labelled "(3.)" pickup engraved as a triplet inside the shared ending.
-// See corpus/lyric-extraction-notes.md, "Two-part songs".
 export const sampleMusicXmlTwoPart = readFileSync(
   resolve(resourcesDir, 'two-part-test-song.musicxml'), 'utf-8'
 );

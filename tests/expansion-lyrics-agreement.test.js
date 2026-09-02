@@ -159,9 +159,8 @@ for (const song of songs) {
 
 /**
  * A 'Two-Part' score (partsTemplate 'P+P') is two independent melody lines on separate
- * staves, each carrying its own complete verse, sung together — see
- * corpus/lyric-extraction-notes.md, "Two-part songs". The fixture is synthetic, built to
- * the shape of "A Child’s Prayer" (1989 CSB), the corpus song this was written for. Both
+ * staves, each carrying its own complete verse, sung together. The fixture is synthetic,
+ * built to the shape of "A Child’s Prayer" (1989 CSB). Both
  * staves are tagged ch-melody, so every chord position offers two verses at once and the
  * iteration picks between them: iteration 1 sings Part 1's words, iteration 2 Part 2's,
  * and from there on they sing together.
