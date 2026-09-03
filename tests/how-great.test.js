@@ -120,10 +120,6 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
       expect(firstNote.chordPosition).toBe(0);
     });
 
-    it('first note should have 4 lyric syllables (one per inline verse)', () => {
-      const firstNote = Object.values(score._scoreData.notesAndRestsById)[0];
-      expect(firstNote.lyricSyllables).toEqual(['How', 'His', 'By', 'He']);
-    });
   });
 
   // ── SATB partsTemplate ──
@@ -604,7 +600,6 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
       expect(cp.melodyNote).not.toBeNull();
       expect(cp.melodyNote.pitch).toBe(63);
       expect(cp.melodyNote.isMelody).toBe(true);
-      expect(cp.melodyNote.lyricSyllables).toEqual(['How', 'His', 'By', 'He']);
     });
 
     it('CP[0] expandedChordPositions should map to 4 verses', () => {

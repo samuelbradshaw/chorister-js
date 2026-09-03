@@ -47,7 +47,7 @@ describe('scoreData — structural invariants', () => {
       const expectedKeys = [
         'durationQ', 'endQ', 'firstChordPosition', 'isFirstMeasure',
         'isLastMeasure', 'measureId', 'measureType', 'rightBarLine',
-        'startQ', 'systemNumber', 'timeSignature',
+        'startQ', 'timeSignature',
       ];
       for (const m of score._scoreData.measures) {
         for (const key of expectedKeys) {
@@ -82,10 +82,9 @@ describe('scoreData — structural invariants', () => {
     it('each entry should have all expected properties', () => {
       const expectedKeys = [
         'chordPosition', 'durationQ', 'elementId', 'endQ',
-        'expandedChordPositions', 'isAudible', 'isCue', 'isGrace',
+        'expandedChordPositions', 'isAudible', 'isCue',
         'isMelody', 'isRest', 'isTiedNote', 'layerNumber',
-        'lyricSyllables', 'meiElement', 'meiMeasureElement',
-        'partIds', 'pitch', 'staffNumber', 'startQ', 'tiedNoteId',
+        'meiElement', 'partIds', 'pitch', 'staffNumber', 'startQ', 'tiedNoteId',
       ];
       const entries = Object.values(score._scoreData.notesAndRestsById);
       for (const nr of entries.slice(0, 10)) {

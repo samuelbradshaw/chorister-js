@@ -46,7 +46,7 @@ function fakeScore(count, { perMeasure = 4, rightBarLine = 'single' } = {}) {
     const measureId = `m${measureIndex}`;
     if (!measuresById[measureId]) {
       measuresById[measureId] = {
-        measureId: measureId, measureType: 'full', systemNumber: Math.floor(measureIndex / 2),
+        measureId: measureId, measureType: 'full',
         rightBarLine: rightBarLine, startQ: measureIndex * perMeasure,
       };
       measures.push(measuresById[measureId]);

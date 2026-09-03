@@ -54,13 +54,11 @@ export async function initChScore() {
  */
 export function setupStandardHooks() {
   beforeEach(() => {
-    // A score registers itself on its container, so any left over from the last
-    // test are torn down through their containers before the DOM is replaced —
-    // otherwise their event listeners and observers outlive them.
-    if (window.ChScore) {
-      for (const element of document.body.querySelectorAll('*')) element.score?.removeScore();
-      window.ChScore.prototype._throttleStatus = {};
-    }
+    // Replacing document.body below is what tears the last test's scores down: their
+    // containers go with it, and the observers a score registers are no-ops in this
+    // environment. removeScore() here would disagree with the shared fixtures, which
+    // load once in beforeAll and go on using their score across every test in the file.
+    if (window.ChScore) window.ChScore.prototype._throttleStatus = {};
     document.body.innerHTML = '<div id="score-container"></div>';
     document.adoptedStyleSheets = [];
   });

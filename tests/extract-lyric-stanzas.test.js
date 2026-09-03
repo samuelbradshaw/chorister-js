@@ -216,13 +216,13 @@ describe('_extractLyricStanzas — How Great the Wisdom', { timeout: 30000 }, ()
       // Find any chord position that has verse elements (lyrics)
       let foundVerses = false;
       for (let cp = 0; cp < score._scoreData.chordPositions.length; cp++) {
-        const verseElements = score._scoreData.meiParsed.querySelectorAll(
+        const lyricElements = score._scoreData.meiParsed.querySelectorAll(
           `[ch-chord-position="${cp}"][ch-melody] verse, [ch-chord-position="${cp}"]:has([ch-melody]) verse`
         );
-        if (verseElements.length > 0) {
+        if (lyricElements.length > 0) {
           foundVerses = true;
           // HGW has 4 lyric lines
-          expect(verseElements.length).toBeGreaterThanOrEqual(1);
+          expect(lyricElements.length).toBeGreaterThanOrEqual(1);
           break;
         }
       }
@@ -230,11 +230,11 @@ describe('_extractLyricStanzas — How Great the Wisdom', { timeout: 30000 }, ()
     });
 
     it('verse elements should contain syl children with syllable text', () => {
-      const verseElements = score._scoreData.meiParsed.querySelectorAll(
+      const lyricElements = score._scoreData.meiParsed.querySelectorAll(
         '[ch-melody] verse'
       );
       let hasSylContent = false;
-      for (const ve of verseElements) {
+      for (const ve of lyricElements) {
         const syls = ve.querySelectorAll('syl');
         for (const syl of syls) {
           if (syl.textContent.trim().length > 0) {

@@ -6,7 +6,7 @@
  * and both must answer, at every chord position on every pass, which <verse> element is
  * sounding. Expansion answers it to decide which verses to keep in the rendered score;
  * extraction answers it to decide which syllables to read into the lyrics. They share
- * `_verseSoundingAt`, and these tests assert the two results still line up.
+ * `_lyricElementSoundingAt`, and these tests assert the two results still line up.
  *
  * This invariant is worth owning here because nothing else can check it: the corpus
  * script never renders, so `expandScore: 'full-score'` is entirely unmeasured by it, and

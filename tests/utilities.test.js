@@ -1115,11 +1115,11 @@ describe('_markSingleLineChordPositions()', () => {
 
   /** Call _markSingleLineChordPositions with a mock _scoreData context. */
   function callMark(meiParsed, chordPositions, lyricCpRanges, maxAllowedGap) {
-    const args = [lyricCpRanges];
-    if (maxAllowedGap != null) args.push(maxAllowedGap);
     // Inherit the prototype: the function leans on _walkSungChordPositions, not just _scoreData
     const context = Object.assign(Object.create(ChScore.prototype),
       { _scoreData: { meiParsed, chordPositions } });
+    const args = [lyricCpRanges, context._melodyLyricElementIndex()];
+    if (maxAllowedGap != null) args.push(maxAllowedGap);
     return ChScore.prototype._markSingleLineChordPositions.apply(context, args);
   }
 
@@ -2255,7 +2255,7 @@ describe('_mergePickupStanzas()', () => {
 // ============================================================
 // _markHelpTextLyrics
 // ============================================================
-describe('_markHelpTextLyrics()', () => {
+describe('_normalizeLyricElements() — help text', () => {
   let score;
   const parser = new DOMParser();
 
@@ -2297,7 +2297,7 @@ describe('_markHelpTextLyrics()', () => {
   it('should mark a wholly parenthesized lyric line as help text', () => {
     // Example: "(grah-see-ahs)" under "Gracias." in "Children All over the World"
     const mei = buildMei([{ 1: ['“Gra', 'cias.”'], 2: ['(grah', 'see-ahs)'] }]);
-    score._markHelpTextLyrics(mei);
+    score._normalizeLyricElements(mei);
 
     expect(lineIsHelpText(mei, 1)).toBe(false);
     expect(lineIsHelpText(mei, 2)).toBe(true);
@@ -2305,7 +2305,7 @@ describe('_markHelpTextLyrics()', () => {
 
   it('should leave a parenthesized line alone when the staff sings nothing else', () => {
     const mei = buildMei([{ 1: ['(grah', 'see-ahs)'] }]);
-    score._markHelpTextLyrics(mei);
+    score._normalizeLyricElements(mei);
 
     expect(lineIsHelpText(mei, 1)).toBe(false);
   });
@@ -2316,7 +2316,7 @@ describe('_markHelpTextLyrics()', () => {
       1: ['“Fe', 'liz'], 2: ['(fay', 'lees)'], 3: ['They', 'say'],
       4: ['(mah', 'noo)'], 5: ['But', 'an'],
     }]);
-    score._markHelpTextLyrics(mei);
+    score._normalizeLyricElements(mei);
 
     expect(verseNumbers(mei)).toEqual([
       ['1', '1'], ['2', null], ['3', '2'], ['4', null], ['5', '3'],
@@ -2325,7 +2325,7 @@ describe('_markHelpTextLyrics()', () => {
 
   it('should leave the verse number as engraved when there is no help text', () => {
     const mei = buildMei([{ 1: ['Heav'] }, { 2: ['Pray,'] }]);
-    score._markHelpTextLyrics(mei);
+    score._normalizeLyricElements(mei);
 
     expect(verseNumbers(mei)).toEqual([['1', '1'], ['2', '2']]);
   });
@@ -2339,7 +2339,7 @@ describe('_markHelpTextLyrics()', () => {
       + '<syl fontstyle="italic">(Girls)</syl><syl fontstyle="italic">I</syl></verse></note>'
       + '<note ch-melody="true"><verse n="1"><syl>see</syl></verse></note>'
       + '</layer></staff></mei>', 'text/xml');
-    score._markHelpTextLyrics(mei);
+    score._normalizeLyricElements(mei);
 
     const syls = [...mei.querySelectorAll('syl')];
     expect(syls.map(syl => syl.hasAttribute('ch-help-text'))).toEqual([true, false, false]);
@@ -2353,7 +2353,7 @@ describe('_markHelpTextLyrics()', () => {
     const mei = parser.parseFromString(
       '<mei><staff n="1"><layer><note ch-melody="true"><verse n="1">'
       + '<syl>(3.)</syl><syl>Heav</syl></verse></note></layer></staff></mei>', 'text/xml');
-    score._markHelpTextLyrics(mei);
+    score._normalizeLyricElements(mei);
 
     expect(mei.querySelector('syl').hasAttribute('ch-help-text')).toBe(false);
   });
@@ -2413,7 +2413,7 @@ describe('_stackedVerseLines()', () => {
 // ============================================================
 // _normalizeLyricVerseNumbers
 // ============================================================
-describe('_normalizeLyricVerseNumbers()', () => {
+describe('_normalizeLyricElements() — verse numbers', () => {
   let score;
   const parser = new DOMParser();
 
@@ -2436,7 +2436,7 @@ describe('_normalizeLyricVerseNumbers()', () => {
   it('should split a verse number engraved into the first syllable', () => {
     // Example: "Venid a Mí" (Spanish Hymns 61), which writes verse 1 as "1.Ve"
     const mei = buildMei(['1.Ve', '2.Bus']);
-    score._normalizeLyricVerseNumbers(mei);
+    score._normalizeLyricElements(mei);
 
     expect([firstLabel(mei, 1), firstLabel(mei, 2)]).toEqual(['1.', '2.']);
     expect([firstSyl(mei, 1), firstSyl(mei, 2)]).toEqual(['Ve', 'Bus']);
@@ -2444,7 +2444,7 @@ describe('_normalizeLyricVerseNumbers()', () => {
 
   it('should leave a number that does not match its lyric line in the words', () => {
     const mei = buildMei(['7.Do']);
-    score._normalizeLyricVerseNumbers(mei);
+    score._normalizeLyricElements(mei);
 
     expect(firstLabel(mei, 1)).toBeNull();
     expect(firstSyl(mei, 1)).toBe('7.Do');
@@ -2459,7 +2459,7 @@ describe('_normalizeLyricVerseNumbers()', () => {
       + '<note ch-melody="true"><verse n="2"><label>2.</label><syl>They</syl></verse></note>'
       + '<note ch-melody="true"><verse n="3"><syl>But</syl></verse></note>'
       + '</layer></staff></mei>', 'text/xml');
-    score._normalizeLyricVerseNumbers(mei);
+    score._normalizeLyricElements(mei);
 
     expect([firstLabel(mei, 1), firstLabel(mei, 2), firstLabel(mei, 3)])
       .toEqual(['1.', '2.', null]);
@@ -2468,7 +2468,7 @@ describe('_normalizeLyricVerseNumbers()', () => {
 
   it('should leave the numbers alone when one appears after the verses', () => {
     const mei = buildMei(['1.Ve', 'Cho', '3.Bus']);
-    score._normalizeLyricVerseNumbers(mei);
+    score._normalizeLyricElements(mei);
 
     expect(firstLabel(mei, 1)).toBeNull();
     expect(firstSyl(mei, 1)).toBe('1.Ve');
@@ -2479,7 +2479,7 @@ describe('_normalizeLyricVerseNumbers()', () => {
       '<mei><note ch-melody="true"><verse n="1"><label>1.</label><syl>2.Do</syl></verse></note></mei>',
       'text/xml'
     );
-    score._normalizeLyricVerseNumbers(mei);
+    score._normalizeLyricElements(mei);
 
     expect(firstSyl(mei, 1)).toBe('2.Do');
     expect(mei.querySelectorAll('verse label').length).toBe(1);
