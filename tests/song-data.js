@@ -43,6 +43,30 @@ export const sampleMusicXmlFHS = readFileSync(
 export const sampleMusicXmlTwoPart = readFileSync(
   resolve(resourcesDir, 'two-part-test-song.musicxml'), 'utf-8'
 );
+// Synthetic. A chorus whose middle stretch is reworded for the last verse, the line claimed
+// by a "(2nd verse)" instruction over the lower staff -- the shape "Dear to the Heart of the
+// Shepherd" (1985 Hymns) has, where the chorus's "he hastens" becomes "we'll hasten".
+export const sampleMusicXmlClaimedLine = readFileSync(
+  resolve(resourcesDir, 'claimed-line-test-song.musicxml'), 'utf-8'
+);
+// Synthetic. A lyric line an instruction printed between the staves marks as an alternate
+// text ("(*Optional)" over the lower staff, against a "*"-prefixed footnote), the shape
+// "My Covenants" (Hymns--For Home and Church) has.
+export const sampleMusicXmlOptionalLine = readFileSync(
+  resolve(resourcesDir, 'optional-line-test-song.musicxml'), 'utf-8'
+);
+// Synthetic. Two intro brackets on different staves, the shape "True to the Faith" (1985
+// Hymns) has: the first on the voice staff, over the whole texture, and the second on the
+// piano's upper staff, the voice above it sitting that stretch out.
+export const sampleMusicXmlIntroStaff = readFileSync(
+  resolve(resourcesDir, 'intro-staff-test-song.musicxml'), 'utf-8'
+);
+// Synthetic, built to the shape of "Come unto Jesus" (1985 Hymns): the melody holds two
+// notes with no words of its own while the voice below it sings the word that finishes
+// the line, and sings it twice ("rest, may rest") where it is sung once.
+export const sampleMusicXmlHeldMelody = readFileSync(
+  resolve(resourcesDir, 'held-melody-test-song.musicxml'), 'utf-8'
+);
 
 // ── Lyrics text file contents ─────────────────────────────────
 

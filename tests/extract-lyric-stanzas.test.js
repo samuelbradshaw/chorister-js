@@ -28,7 +28,9 @@ import {
   sampleMusicXmlHGW, sampleLyricsHGW,
   sampleMusicXmlIIW, sampleLyricsIIW,
   sampleMusicXmlTLL, sampleLyricsTLL,
-  sampleMusicXmlFHS,
+  sampleMusicXmlFHS, sampleMusicXmlHeldMelody, sampleMusicXmlOptionalLine,
+  sampleMusicXmlClaimedLine,
+  sampleMusicXmlIntroStaff,
   hgwPartsTemplate, tllPartsTemplate,
   hgwFermatas, iiwFermatas, tllFermatas,
   iiwParts, iiwSections,
@@ -842,5 +844,214 @@ describe('_gatherSyllables — How Great the Wisdom', { timeout: 30000 }, () => 
   it('should offset expanded chord positions by ecpStart', () => {
     const offset = score._gatherSyllables([{ start: 0, end: score._scoreData.numChordPositions }], 100);
     expect(offset[1].expandedChordPositions[0]).toBe(syllables[1].expandedChordPositions[0] + 100);
+  });
+});
+
+
+// ============================================================
+// Words engraved on the voice below a held melody
+// ============================================================
+describe('A held melody with the words on the voice below it', { timeout: 30000 }, () => {
+  let score;
+
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXmlHeldMelody });
+  });
+
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  it('should finish the melody line with the word engraved beneath it, sung once', () => {
+    expect(score._scoreData.lyricsText).toBe('[Verse 1]\nWhere all who may rest,');
+  });
+
+  it('should leave the repeat in the score for it to draw, on the voice that sings it', () => {
+    // Only the first copy is read as the melody's; the echo stays where it is engraved
+    const drawn = [...score._scoreData.meiParsed.querySelectorAll('verse syl')]
+      .map(syl => syl.textContent.trim()).filter(Boolean);
+    expect(drawn.slice(-3)).toEqual(['rest,', 'may', 'rest.']);
+  });
+
+  it('should read the word off the lower voice and keep the melody itself out of it', () => {
+    const syllables = score._gatherSyllables(
+      [{ start: 0, end: score._scoreData.numChordPositions }], 0);
+    expect(syllables.filter(syllable => syllable.text).map(syllable => syllable.text))
+      .toEqual(['Where', 'all', 'who', 'may', 'rest,']);
+  });
+});
+
+
+// ============================================================
+// A lyric line an instruction marks as an alternate text
+// ============================================================
+describe('A lyric line marked optional by an instruction', { timeout: 30000 }, () => {
+  let score;
+
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXmlOptionalLine });
+  });
+
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  it('should leave the alternate line out of the lyrics', () => {
+    // A verse, not a chorus: with the alternate line taken out the fixture carries one lyric
+    // line throughout, and a score that labels no verses falls back to calling a stanza one
+    expect(score._scoreData.lyricsText).toBe('[Verse 1]\nSing to me now, gently and true. Sing now.');
+  });
+
+  it('should read the alternate words out beside the footnote they belong to', () => {
+    const footnotes = score._scoreData.scoreMetadata.textBlocks
+      .filter(block => block.type === 'footnote').map(block => block.text);
+    // One block, the alternate words on a line of their own under the footnote they belong to
+    expect(footnotes).toEqual(['*Alternate text for a special day.\non this special']);
+  });
+
+  it('should take the line and its instruction out of the score', () => {
+    // Read out beside the footnote, so nothing downstream has to know to skip them. The whole
+    // line goes, the melisma stub over the last note included -- a verse holding only an empty
+    // syllable sings nothing but still draws a lyric row, leaving a gap under the staff
+    const lines = [...score._scoreData.meiParsed.querySelectorAll('verse')]
+      .map(verse => verse.getAttribute('n'));
+    expect(new Set(lines)).toEqual(new Set(['1']));
+    const directions = [...score._scoreData.meiParsed.querySelectorAll('dir')]
+      .map(dir => dir.textContent.trim());
+    expect(directions).not.toContain('(*Optional)');
+  });
+});
+
+
+// ============================================================
+// A chorus reworded for one verse
+// ============================================================
+describe('A chorus whose middle stretch is claimed for one pass', { timeout: 30000 }, () => {
+  let score;
+
+  const load = async (sections) => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    const loaded = new ChScore('#score-container');
+    await loaded.load('musicxml', sections
+      ? { scoreContent: sampleMusicXmlClaimedLine, sections: sections }
+      : { scoreContent: sampleMusicXmlClaimedLine });
+    return loaded;
+  };
+
+  beforeAll(async () => { score = await load(); });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  it('should sing the chorus as printed on every pass but the one claimed', () => {
+    expect(score._scoreData.lyricsText).toBe([
+      '[Verse 1]', 'I will sing a song of joy now', '',
+      '[Chorus]', 'Sing out loud and clear and strong and true all day long.', '',
+      '[Verse 2]', 'We will sing a song of peace too', '',
+      '[Chorus]', 'Sing out loud and clear soft low and true all day long.',
+    ].join('\n'));
+  });
+
+  it('should name the claimed line on the range that reads it', () => {
+    const ranges = (id) => score._scoreData.sections.find(s => s.sectionId === id)
+      .chordPositionRanges.map(r => [r.start, r.end, r.lyricLineIds]);
+    // The chorus as printed is one range; the pass that reworded it names the line
+    // for the stretch it covers and goes back to the printed line either side
+    expect(ranges('chorus-1')).toEqual([[8, 20, ['1.1']]]);
+    expect(ranges('chorus-2')).toEqual([[8, 13, ['1.1']], [13, 15, ['1.2']], [15, 20, ['1.1']]]);
+  });
+
+  // The instruction is printed in the chorus, so it belongs to the second chorus rather
+  // than to verse 2 -- "(4th verse)" in "Dear to the Heart of the Shepherd" is the same shape
+  const withHidden = async (hideSectionIds) => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    const loaded = new ChScore('#score-container');
+    await loaded.load('musicxml', { scoreContent: sampleMusicXmlClaimedLine },
+      { ...ChScore.prototype._defaultOptions, hideSectionIds: hideSectionIds });
+    return [...loaded._scoreData.meiParsed.querySelectorAll('dir')].map(dir => dir.textContent.trim());
+  };
+
+  it('should name the instruction with the section it is printed in', () => {
+    const dir = [...score._scoreData.meiParsed.querySelectorAll('dir[ch-section-id]')]
+      .find(dir => dir.textContent.trim() === '(2nd verse)');
+    expect(dir?.getAttribute('ch-section-id')).toBe('chorus-2');
+  });
+
+  it('should drop the instruction when the passage it is printed in is hidden', async () => {
+    expect(await withHidden(['chorus-2'])).not.toContain('(2nd verse)');
+  });
+
+  it('should keep it when the verse of the same number is hidden but its own passage is not', async () => {
+    expect(await withHidden(['verse-2'])).toContain('(2nd verse)');
+  });
+
+  it('should keep it when an unrelated section is hidden', async () => {
+    expect(await withHidden(['verse-1'])).toContain('(2nd verse)');
+  });
+
+  it('should draw the claimed line on a row of its own when a verse is hidden', async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    const loaded = new ChScore('#score-container');
+    await loaded.load('musicxml', { scoreContent: sampleMusicXmlClaimedLine },
+      { ...ChScore.prototype._defaultOptions, hideSectionIds: ['verse-1'] });
+    const rows = {};
+    for (const verse of loaded._scoreData.meiParsed.querySelectorAll('verse')) {
+      const chordPosition = verse.closest('[ch-chord-position]').getAttribute('ch-chord-position');
+      const syllable = verse.querySelector('syl')?.textContent.trim();
+      if (syllable) (rows[`${chordPosition}.${verse.getAttribute('n')}`] ??= []).push(syllable);
+    }
+    // The claimed line replaces the printed one but both are still drawn, so where they
+    // overlap they must not collapse onto the same row and print on top of each other
+    expect(Object.values(rows).filter(words => words.length > 1)).toEqual([]);
+  });
+
+  it('should draw the claimed line on row 1 when the line it replaces is hidden', async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    const loaded = new ChScore('#score-container');
+    await loaded.load('musicxml', { scoreContent: sampleMusicXmlClaimedLine },
+      { ...ChScore.prototype._defaultOptions, hideSectionIds: ['verse-1', 'chorus-1'] });
+    // Nothing is drawn on the row above any more, so the claimed words belong on row 1 --
+    // left on row 2 they would sit under an empty line
+    const rows = new Set([...loaded._scoreData.meiParsed.querySelectorAll('verse')]
+      .filter(verse => verse.querySelector('syl:not(:empty)'))
+      .map(verse => verse.getAttribute('n')));
+    expect(rows).toEqual(new Set(['1']));
+  });
+
+  it('should give the same lyrics when those sections are handed back in', async () => {
+    const again = await load(score._scoreData.sections);
+    expect(again._scoreData.lyricsText).toBe(score._scoreData.lyricsText);
+  });
+});
+
+// ============================================================
+// Where an introduction is played from
+// ============================================================
+describe('An introduction bracketed on two different staves', { timeout: 30000 }, () => {
+  let score;
+
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXmlIntroStaff });
+  });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  it('should play each bracketed stretch from its own staff down', () => {
+    const intro = score._scoreData.sections.find(section => section.type === 'introduction');
+    // The first bracket is on the voice staff and the second on the piano's upper staff, so
+    // the voice plays the first stretch and sits out the second
+    expect(intro.chordPositionRanges.map(range => [range.start, range.end, range.staffNumbers]))
+      .toEqual([[0, 8, [1, 2, 3]], [8, 16, [2, 3]]]);
+  });
+
+  it('should leave every staff singing in the verse itself', () => {
+    const verse = score._scoreData.sections.find(section => section.type === 'verse');
+    expect(verse.chordPositionRanges.map(range => range.staffNumbers)).toEqual([[1, 2, 3]]);
   });
 });

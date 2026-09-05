@@ -696,6 +696,14 @@ describe('It Is Well — default load (no parts/sections)', { timeout: 30000 }, 
     return [...lines];
   };
 
+  it('should play the introduction from the staff its brackets sit on, and below', () => {
+    const intro = score._scoreData.sections.find(section => section.type === 'introduction');
+    // Both brackets are printed on the upper vocal staff, so the descant above it sits the
+    // introduction out -- the staves the hand-written iiwSections names too. Here the
+    // descant's own entry verse agrees; intro-staff-test-song is where the rules differ
+    expect(intro.chordPositionRanges.map(range => range.staffNumbers)).toEqual([[2, 3], [2, 3]]);
+  });
+
   it('should still have 3 staves without custom parts', () => {
     expect(score._scoreData.staffNumbers).toEqual([1, 2, 3]);
   });

@@ -1476,6 +1476,322 @@ describe('_optimizeMusicXml() — intro brackets', () => {
 
 
 // ============================================================
+// _optimizeMusicXml — flipped voice numbering
+// ============================================================
+
+describe('_optimizeMusicXml() — flipped voice numbering', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  const note = (voice, step, octave, stem, chord = false) =>
+    `<note>${chord ? '<chord/>' : ''}<pitch><step>${step}</step><octave>${octave}</octave></pitch>`
+    + `<duration>4</duration><voice>${voice}</voice><stem>${stem}</stem></note>`;
+
+  /** A measure with the upper voice numbered 1, the way voices are normally written. */
+  const normal = () => note(1, 'G', 5, 'up') + '<backup><duration>4</duration></backup>' + note(2, 'C', 4, 'down');
+  /** The same measure with the numbering the other way round. */
+  const inverted = () => note(1, 'C', 4, 'down') + '<backup><duration>4</duration></backup>' + note(2, 'G', 5, 'up');
+
+  const scoreXml = (...measures) => `<score-partwise><part id="P1">${
+    measures.map((measure, index) => `<measure number="${index + 1}">${measure}</measure>`).join('')
+  }</part></score-partwise>`;
+
+  /** Each measure's notes as 'voice:pitch', in document order. */
+  function voicing(musicXml) {
+    const parsed = new DOMParser().parseFromString(musicXml, 'text/xml');
+    return [...parsed.querySelectorAll('measure')].map(measure =>
+      [...measure.querySelectorAll('note')].map(note =>
+        `${note.querySelector('voice').textContent}:${note.querySelector('step').textContent}`
+        + note.querySelector('octave').textContent));
+  }
+
+  it('should renumber a measure written the other way round from those around it', () => {
+    expect(voicing(score._optimizeMusicXml(scoreXml(normal(), inverted(), normal()))))
+      .toEqual([['1:G5', '2:C4'], ['2:C4', '1:G5'], ['1:G5', '2:C4']]);
+  });
+
+  it('should leave a part whose voices are consistently written that way alone', () => {
+    // A stem-up descant over a stem-down voice below is written this way throughout
+    const musicXml = scoreXml(inverted(), inverted(), inverted());
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+
+  it('should leave a measure whose voice carries a chord alone', () => {
+    // A chorded voice holds two parts rather than one line, so it is not half of a pair
+    const chorded = note(1, 'C', 4, 'down') + note(1, 'E', 4, 'down', true)
+      + '<backup><duration>4</duration></backup>' + note(2, 'G', 5, 'up');
+    const musicXml = scoreXml(normal(), chorded, normal());
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+
+  it('should leave a measure with no measure of its own ordering beside it alone', () => {
+    const musicXml = scoreXml(inverted(), normal());
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+
+  it('should return a score with no stems untouched, without parsing it', () => {
+    const musicXml = '<score-partwise><part id="P1"><measure number="1"/></part></score-partwise>';
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+});
+
+
+// ============================================================
+// _optimizeMusicXml — words under a held melody
+// ============================================================
+
+describe('_optimizeMusicXml() — words under a held melody', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  const lyric = (text, number = 1) =>
+    `<lyric number="${number}"><syllabic>single</syllabic><text>${text}</text></lyric>`;
+  const note = (voice, duration, { lyrics = '', tie = '' } = {}) =>
+    `<note><pitch><step>${voice === 1 ? 'G' : 'C'}</step><octave>${voice === 1 ? 5 : 4}</octave></pitch>`
+    + `<duration>${duration}</duration>${tie ? `<tie type="${tie}"/>` : ''}<voice>${voice}</voice>${lyrics}</note>`;
+  const rest = (duration) => `<note><rest/><duration>${duration}</duration><voice>1</voice></note>`;
+  const backup = (duration) => `<backup><duration>${duration}</duration></backup>`;
+
+  const scoreXml = (...measures) => `<score-partwise><part id="P1">${
+    measures.map((measure, index) => `<measure number="${index + 1}">${measure}</measure>`).join('')
+  }</part></score-partwise>`;
+
+  /** The melody's own words, then the words still on the voice below it. */
+  function words(musicXml) {
+    const parsed = new DOMParser().parseFromString(musicXml, 'text/xml');
+    const sung = (voice) => [...parsed.querySelectorAll('note')]
+      .filter(note => note.querySelector('voice').textContent === String(voice))
+      .flatMap(note => [...note.querySelectorAll('lyric > text')].map(text => text.textContent));
+    return { melody: sung(1), below: sung(2) };
+  }
+
+  // The melody sings four quarters, then holds two halves while the voice below it finishes
+  const melodyLine = note(1, 1, { lyrics: lyric('Where') }) + note(1, 1, { lyrics: lyric('all') })
+    + note(1, 1, { lyrics: lyric('who') }) + note(1, 1, { lyrics: lyric('may') });
+  const heldNotes = note(1, 2) + note(1, 2) + backup(4);
+
+  it('should put the word the melody holds through on the melody\'s own note', () => {
+    const below = note(2, 2, { lyrics: lyric('rest.') }) + note(2, 2);
+    expect(words(score._optimizeMusicXml(scoreXml(melodyLine, heldNotes + below))))
+      .toEqual({ melody: ['Where', 'all', 'who', 'may', 'rest.'], below: [] });
+  });
+
+  it('should take the word once, leaving the repeat on the voice that sings it', () => {
+    // "may" falls between the melody's two held notes, so it stays where it is too
+    const below = note(2, 1, { lyrics: lyric('rest,') }) + note(2, 1, { lyrics: lyric('may') })
+      + note(2, 2, { lyrics: lyric('rest.') });
+    expect(words(score._optimizeMusicXml(scoreXml(melodyLine, heldNotes + below))))
+      .toEqual({ melody: ['Where', 'all', 'who', 'may', 'rest,'], below: ['may', 'rest.'] });
+  });
+
+  it('should not read the far end of a tie as an onset', () => {
+    // The melody's second half note is the first still sounding, so there is nothing to
+    // sing on it -- without this "more." would be taken as well
+    const tied = note(1, 2, { tie: 'start' }) + note(1, 2, { tie: 'stop' }) + backup(4);
+    const below = note(2, 1, { lyrics: lyric('rest,') }) + note(2, 1, { lyrics: lyric('may') })
+      + note(2, 2, { lyrics: lyric('more.') });
+    expect(words(score._optimizeMusicXml(scoreXml(melodyLine, tied + below))))
+      .toEqual({ melody: ['Where', 'all', 'who', 'may', 'rest,'], below: ['may', 'more.'] });
+  });
+
+  it('should leave a word the engraving prints in parentheses', () => {
+    // An aside the engraving has already marked as another voice's ("(I'm gonna live)"),
+    // read per word since the brackets open and close on different syllables
+    const below = note(2, 2, { lyrics: lyric('(rest') }) + note(2, 2, { lyrics: lyric('here).') });
+    expect(words(score._optimizeMusicXml(scoreXml(melodyLine, heldNotes + below))).melody)
+      .toEqual(['Where', 'all', 'who', 'may']);
+  });
+
+  it('should leave a run that starts where the melody is mid-word', () => {
+    // The run below opens part-way through the melody's first held note, so that voice is
+    // singing its own line ("(Were you there?)") -- its second word is left alone as well,
+    // though that one does fall on a note the melody articulates
+    const below = note(2, 1) + note(2, 1, { lyrics: lyric('(Were') })
+      + note(2, 2, { lyrics: lyric('there?)') });
+    expect(words(score._optimizeMusicXml(scoreXml(melodyLine, heldNotes + below))).melody)
+      .toEqual(['Where', 'all', 'who', 'may']);
+  });
+
+  it('should leave a lyric line the melody is not mid-way through', () => {
+    // Engraved as line 2 while the melody is singing line 1 ("Come home!")
+    const below = note(2, 2, { lyrics: lyric('home!', 2) }) + note(2, 2);
+    expect(words(score._optimizeMusicXml(scoreXml(melodyLine, heldNotes + below))).melody)
+      .toEqual(['Where', 'all', 'who', 'may']);
+  });
+
+  it('should leave words under a melody that rests rather than holds', () => {
+    // The tune changing hands, which _getMelodySwitchBoundaries reads for itself
+    const below = note(2, 2, { lyrics: lyric('rest.') }) + note(2, 2);
+    expect(words(score._optimizeMusicXml(scoreXml(melodyLine, rest(4) + backup(4) + below))).melody)
+      .toEqual(['Where', 'all', 'who', 'may']);
+  });
+
+  it('should return a score whose words are all on the first voice untouched', () => {
+    const musicXml = scoreXml(melodyLine);
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+});
+
+
+// ============================================================
+// Lyric lines an instruction assigns to one pass
+// ============================================================
+
+describe('an instruction that names the pass a lyric line is sung on', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+    score._scoreData = { ...(score._scoreData ?? {}), scoreMetadata: { lang: 'en' } };
+  });
+
+  describe('_instructedPassNumber()', () => {
+    it('should read a digit', () => {
+      expect(score._instructedPassNumber('(4th verse)')).toBe(4);
+    });
+
+    it('should read a number the instruction spells out', () => {
+      expect(score._instructedPassNumber('Chorus after fourth verse:')).toBe(4);
+    });
+
+    it('should prefer a digit where the text has both', () => {
+      expect(score._instructedPassNumber('Chorus after verse 3 (third time)')).toBe(3);
+    });
+
+    it('should read nothing from an instruction that names no number', () => {
+      expect(score._instructedPassNumber('(*Optional)')).toBe(null);
+      expect(score._instructedPassNumber('(echo)')).toBe(null);
+    });
+
+    it('should not read a number word the score is not written in', () => {
+      score._scoreData.scoreMetadata.lang = 'fr';
+      expect(score._instructedPassNumber('Chorus after fourth verse:')).toBe(null);
+      score._scoreData.scoreMetadata.lang = 'en';
+    });
+  });
+
+  describe('_lyricElementSoundingAt()', () => {
+    // A claimed line is chosen by the section range that names it, not here -- see the
+    // claimed-line fixture in extract-lyric-stanzas.test.js
+    it('should line @n up with the pass', () => {
+      const verses = [...new DOMParser().parseFromString(
+        '<m><verse n="1"><syl>one</syl></verse><verse n="2"><syl>two</syl></verse></m>',
+        'text/xml').querySelectorAll('verse')];
+      expect(score._lyricElementSoundingAt(verses, 2, false)).toBe(1);
+      expect(score._lyricElementSoundingAt(verses, 1, false)).toBe(0);
+    });
+
+    it('should take the first line where the music is single-line', () => {
+      const verses = [...new DOMParser().parseFromString(
+        '<m><verse n="1"><syl>one</syl></verse><verse n="2"><syl>two</syl></verse></m>',
+        'text/xml').querySelectorAll('verse')];
+      expect(score._lyricElementSoundingAt(verses, 3, true)).toBe(0);
+    });
+  });
+});
+
+
+// ============================================================
+// A staff that joins in from a named verse
+// ============================================================
+
+describe('a descant marked with the verse it joins in on', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  /** An MEI with a descant staff above the melody's, and a direction over it. */
+  const scoreWith = (text) => new DOMParser().parseFromString(
+    `<music><body><mdiv><score><section><measure>
+       <staff n="1"><layer>
+         <note xml:id="d" ch-chord-position="0"><verse n="3"><syl>high</syl></verse></note>
+       </layer></staff>
+       <staff n="2"><layer>
+         <note xml:id="m" ch-melody="" ch-chord-position="0"><verse n="1"><syl>sing</syl></verse></note>
+       </layer></staff>
+       <dir place="above" staff="1" ch-chord-position="0">${text}</dir>
+     </measure></section></score></mdiv></body></music>`, 'text/xml');
+
+  const entersAtFor = (text) => {
+    score._scoreData = { meiParsed: scoreWith(text), scoreMetadata: { lang: 'en', textBlocks: [] } };
+    score._markInstructedLyricLines();
+    return [...score._scoreData.staffEntersAtVerse];
+  };
+
+  it('should read the verse a descant joins in on', () => {
+    expect(entersAtFor('Optional descant (with verse 3) for voice or instrument')).toEqual([[1, 3]]);
+  });
+
+  it('should read one the score spells out', () => {
+    expect(entersAtFor('Optional obbligato (second time)')).toEqual([[1, 2]]);
+  });
+
+  it('should leave a direction on the melody staff itself alone', () => {
+    // Only a staff above the melody carries a descant; the melody's own staff carries the
+    // instructions read elsewhere in _markInstructedLyricLines
+    score._scoreData = {
+      meiParsed: new DOMParser().parseFromString(
+        `<music><body><mdiv><score><section><measure>
+           <staff n="2"><layer>
+             <note xml:id="m" ch-melody="" ch-chord-position="0"><verse n="1"><syl>sing</syl></verse></note>
+           </layer></staff>
+           <dir place="above" staff="2" ch-chord-position="0">Optional descant (with verse 3) for voice</dir>
+         </measure></section></score></mdiv></body></music>`, 'text/xml'),
+      scoreMetadata: { lang: 'en', textBlocks: [] },
+    };
+    score._markInstructedLyricLines();
+    expect([...score._scoreData.staffEntersAtVerse]).toEqual([]);
+  });
+
+  it('should leave a descant that names no verse alone', () => {
+    expect(entersAtFor('Optional descant for voice or instrument')).toEqual([]);
+    expect(entersAtFor('Optional obbligato')).toEqual([]);
+  });
+
+  describe('_stavesPlayingIn()', () => {
+    beforeAll(() => {
+      score._scoreData = {
+        staffNumbers: [1, 2, 3],
+        staffEntersAtVerse: new Map([[1, 3]]),
+      };
+    });
+
+    it('should leave the staff out of the verses before it joins in', () => {
+      expect(score._stavesPlayingIn(1)).toEqual([2, 3]);
+      expect(score._stavesPlayingIn(2)).toEqual([2, 3]);
+    });
+
+    it('should include it from that verse on', () => {
+      expect(score._stavesPlayingIn(3)).toEqual([1, 2, 3]);
+      expect(score._stavesPlayingIn(4)).toEqual([1, 2, 3]);
+    });
+
+    it('should read a marker given as a string, and treat none as the first verse', () => {
+      expect(score._stavesPlayingIn('3')).toEqual([1, 2, 3]);
+      expect(score._stavesPlayingIn(null)).toEqual([2, 3]);
+    });
+
+    it('should name every staff where no instruction said otherwise', () => {
+      score._scoreData.staffEntersAtVerse = new Map();
+      expect(score._stavesPlayingIn(1)).toEqual([1, 2, 3]);
+    });
+  });
+});
+
+
+// ============================================================
 // _optimizeMusicXml — credit styling
 // ============================================================
 describe('_optimizeMusicXml() — credit styling', () => {
@@ -2285,9 +2601,11 @@ describe('_normalizeLyricElements() — help text', () => {
 
   const lineIsHelpText = (mei, n) =>
     [...mei.querySelectorAll(`verse[n="${n}"]`)].every(v => v.hasAttribute('ch-help-text'));
-  /** Each lyric line's engraved number paired with the verse it was worked out to be. */
+  /** Each lyric line's engraved number paired with the verse it was worked out to be, or
+   *  null where the ranking passed it over -- which is what a help text line gets. */
   const verseNumbers = (mei) => [...new Map([...mei.querySelectorAll('verse')]
-    .map(v => [v.getAttribute('n'), v.getAttribute('ch-verse-number')]))];
+    .map(v => [v.getAttribute('n'),
+      score._verseNumbersByLineNumber.get(Number.parseInt(v.getAttribute('n'))) ?? null]))];
 
   beforeAll(() => {
     document.body.innerHTML = '<div id="score-container"></div>';
@@ -2319,7 +2637,7 @@ describe('_normalizeLyricElements() — help text', () => {
     score._normalizeLyricElements(mei);
 
     expect(verseNumbers(mei)).toEqual([
-      ['1', '1'], ['2', null], ['3', '2'], ['4', null], ['5', '3'],
+      ['1', 1], ['2', null], ['3', 2], ['4', null], ['5', 3],
     ]);
   });
 
@@ -2327,7 +2645,7 @@ describe('_normalizeLyricElements() — help text', () => {
     const mei = buildMei([{ 1: ['Heav'] }, { 2: ['Pray,'] }]);
     score._normalizeLyricElements(mei);
 
-    expect(verseNumbers(mei)).toEqual([['1', '1'], ['2', '2']]);
+    expect(verseNumbers(mei)).toEqual([['1', 1], ['2', 2]]);
   });
 
   it('should mark a label elided onto a sung syllable, and keep its italics', () => {

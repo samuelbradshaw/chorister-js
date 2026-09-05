@@ -372,7 +372,7 @@ ChScore.prototype.load = async function (format, { scoreId = null, scoreUrl = nu
       hasExpansion: false, hasRepeatOrJump: false, hasIntroBrackets: false,
       hasFingeringMarks: false, hasLyricSectionIds: false, hasTwoPartMelody: false,
       hasRound: false, hasOstinato: false, hasDescant: false, hasObbligato: false,
-      hasPickupMeasure: false,
+      hasPickupMeasure: false, hasInlineVerseNumbers: false,
     },
     meiStringOriginal: this._vrvToolkit.getMEI(),
     midiNoteSequence: midiNoteSequence ?? core.midiToSequenceProto(midiArray),
@@ -1019,8 +1019,9 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
   const hasTextBlocks = musicXml.includes('<credit');
   const hasEndings = musicXml.includes('<ending');
   const hasTimeOnly = musicXml.includes('time-only');
+  const hasStems = musicXml.includes('<stem>');
   this._textBlockStyles = new Map();
-  if (!hasIntroBrackets && !hasLyrics && !hasTextBlocks && !hasEndings && !hasTimeOnly) return musicXml;
+  if (!hasIntroBrackets && !hasLyrics && !hasTextBlocks && !hasEndings && !hasTimeOnly && !hasStems) return musicXml;
 
   const parsed = (new DOMParser()).parseFromString(musicXml, 'text/xml');
   if (parsed.querySelector('parsererror')) return musicXml;
@@ -1087,6 +1088,16 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
       changed = true;
     }
   }
+
+  // Two voices sharing a staff are numbered top down, and _annotateFromTimemap reads a note's
+  // part from that. A measure engraved the other way round -- voice 1 stems down beneath
+  // voice 2 stems up -- makes it call the lower voice the melody and read its words. Swapped
+  // back where one measure disagrees with those around it (Guide Us, O Thou Great Jehovah).
+  if (hasStems) changed = this._renumberFlippedVoices(parsed) || changed;
+
+  // With the numbering right, the words a held melody leaves to the voice below it can be
+  // read off that voice and put where they are sung. Example: Come unto Jesus (Hymns #117).
+  if (hasLyrics) changed = this._moveHeldMelodyLyrics(parsed) || changed;
 
   // Convert bold and italic font names like "McKay Neue ldsLat Italic" to font style and weight attributes
   if (hasLyrics) {
@@ -1161,6 +1172,159 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
   }
 
   return changed ? (new XMLSerializer()).serializeToString(parsed) : musicXml;
+}
+
+// A MusicXML element's own children of one name -- <lyric> holds a <text>, and <note> a
+// <duration>, so a descendant search would read a note's lyric text as the note's own.
+// The first such child, where only one is wanted -- no array built for the lookup.
+function chChild(element, name) {
+  for (const child of element.children) if (child.localName === name) return child;
+  return null;
+}
+function chChildren(element, name) {
+  return [...element.children].filter(child => child.localName === name);
+}
+const CH_VOICE_OF = (note) => chChild(note, 'voice')?.textContent.trim() ?? '1';
+
+// Restore the top-down numbering of two voices sharing a staff, where one measure is written
+// the other way round from the measures around it (see _optimizeMusicXml).
+ChScore.prototype._renumberFlippedVoices = function (parsed) {
+  // Which way round a measure's first two voices are written, as far as its stems say
+  const voiceOrder = (measure) => {
+    const stems = { 1: new Set(), 2: new Set() };
+    for (const note of measure.querySelectorAll('note')) {
+      const stem = chChild(note, 'stem')?.textContent.trim();
+      if (stem) stems[CH_VOICE_OF(note)]?.add(stem);
+    }
+    const written = (voice, direction) => stems[voice].size === 1 && stems[voice].has(direction);
+    if (written(1, 'up') && written(2, 'down')) return 'normal';
+    if (written(1, 'down') && written(2, 'up')) return 'inverted';
+    return null;
+  };
+
+  let changed = false;
+  for (const part of parsed.querySelectorAll('part')) {
+    const measures = [...part.querySelectorAll('measure')];
+    const orders = measures.map(voiceOrder);
+    // The nearest measure either side that says anything at all about its ordering
+    const neighbor = (index, step) => {
+      for (let i = index + step; i >= 0 && i < orders.length; i += step) if (orders[i]) return orders[i];
+      return null;
+    };
+
+    for (const [index, order] of orders.entries()) {
+      if (order !== 'inverted' || neighbor(index, -1) !== 'normal' || neighbor(index, 1) !== 'normal') continue;
+      const notes = [...measures[index].querySelectorAll('note')]
+        .filter(note => ['1', '2'].includes(CH_VOICE_OF(note)));
+      // A chorded voice carries two parts rather than one line, so it is not half of a
+      // swapped pair: a stem-down chord beneath a stem-up descant is written that way.
+      if (notes.some(note => chChild(note, 'chord'))) continue;
+      for (const note of notes) {
+        const voice = chChild(note, 'voice');
+        voice.textContent = voice.textContent.trim() === '1' ? '2' : '1';
+      }
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// Where the melody holds a note with no words of its own and the voice below it moves, that
+// voice is singing the melody's words ("may rest, may rest" in "Come unto Jesus"). Put them
+// on the melody's own note, so everything downstream reads the melody and finds them there.
+// Each guard below names the score that needs it.
+ChScore.prototype._moveHeldMelodyLyrics = function (parsed) {
+  const sungText = (lyric) => chChildren(lyric, 'text').map(text => text.textContent).join('').trim();
+  const numberOf = (lyric) => lyric.getAttribute('number');
+  const staffOf = (note) => chChild(note, 'staff')?.textContent.trim() ?? '1';
+  let changed = false;
+
+  // Only the parts where a voice below the first sings -- 14 scores in 1,378 have one at all,
+  // and this is what keeps the timeline below off every other score
+  const partsWithLowerVoiceLyrics = new Set([...parsed.querySelectorAll('note > lyric')]
+    .map(lyric => lyric.parentElement)
+    .filter(note => CH_VOICE_OF(note) !== '1')
+    .map(note => note.closest('part')));
+
+  for (const part of partsWithLowerVoiceLyrics) {
+    // Every note on one timeline per staff, in divisions, so a run can cross a barline.
+    // <backup>/<forward> move the cursor; a chord's notes share the onset that opened it.
+    const byStaff = new Map();
+    let measureStart = 0;
+    for (const measure of part.querySelectorAll('measure')) {
+      let cursor = 0, onset = 0, length = 0;
+      for (const child of measure.children) {
+        const duration = Number.parseInt(chChild(child, 'duration')?.textContent) || 0;
+        if (child.localName === 'backup') cursor -= duration;
+        else if (child.localName === 'forward') cursor += duration;
+        else if (child.localName === 'note') {
+          if (!chChild(child, 'chord')) { onset = cursor; cursor += duration; }
+          const staff = staffOf(child);
+          if (!byStaff.has(staff)) byStaff.set(staff, []);
+          byStaff.get(staff).push({ note: child, onset: measureStart + onset });
+        }
+        length = Math.max(length, cursor);
+      }
+      measureStart += length;
+    }
+
+    for (const entries of byStaff.values()) {
+      entries.sort((a, b) => a.onset - b.onset);
+      const melodyNotes = new Map();
+      for (const { note, onset } of entries) {
+        if (CH_VOICE_OF(note) !== '1' || chChild(note, 'rest')) continue;
+        if (chChildren(note, 'tie').some(tie => tie.getAttribute('type') === 'stop')) continue;
+        if (!melodyNotes.has(onset)) melodyNotes.set(onset, note);
+      }
+
+      // Per lyric line: the last word it carried, and whether its run below the melody is
+      // being taken
+      const previous = new Map();
+      const runs = new Map();
+      let melodyLines = new Set();
+
+      for (const { note, onset } of entries) {
+        const lyrics = chChildren(note, 'lyric').filter(sungText);
+        const isMelody = CH_VOICE_OF(note) === '1';
+        if (isMelody && lyrics.length) melodyLines = new Set(lyrics.map(numberOf));
+
+        for (const lyric of lyrics) {
+          const number = numberOf(lyric);
+          if (isMelody) {
+            previous.set(number, lyric);
+            runs.delete(number);
+            continue;
+          }
+          // A word printed in parentheses is an aside the engraving has already marked as
+          // another voice's ("(I'm gonna live)", "(Were you there?)"), whatever it lines up
+          // with. Either bracket marks the word: they open and close on different syllables,
+          // and a closing one can carry punctuation after it ("an y where).").
+          const text = sungText(lyric);
+          if (text.includes('(') || text.includes(')')) continue;
+          const target = melodyNotes.get(onset);
+          const held = Boolean(target)
+            && !chChildren(target, 'lyric').some(other => numberOf(other) === number);
+          // Answered on the run's first word, and only for a line the melody is mid-way
+          // through: a run opening where the melody is mid-word is that voice singing its own
+          // line ("(Were you there?)"), and a line the melody is not singing is that voice's
+          // own ("Come home!", engraved as line 2 against a chorus the melody sings on line 1)
+          if (!runs.has(number)) runs.set(number, held && melodyLines.has(number));
+          if (!runs.get(number) || !held) continue;
+
+          // The voice sings the word again as it finishes, and it is sung once -- the
+          // repeat stays where it is engraved, on the voice that sings it
+          const last = previous.get(number);
+          if (last && this._foldWord(sungText(last)) === this._foldWord(sungText(lyric))) continue;
+          const below = chChildren(target, 'lyric')
+            .find(other => Number.parseInt(numberOf(other)) > Number.parseInt(number));
+          target.insertBefore(lyric, below ?? null);
+          previous.set(number, lyric);
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed;
 }
 
 // Get metadata from the MEI fileDesc, pgHead, and pgFoot elements
@@ -1590,6 +1754,9 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   this._scoreData.trebleClefStaffNumbersSelector = Array.from(this._scoreData.meiParsed.querySelectorAll('clef[shape="G"]'))
     .map(cf => `[n="${Number.parseInt(cf.closest('staffDef, staff').getAttribute('n'))}"]`).join(',');
   this._scoreData.features.hasLyrics = this._scoreData.meiParsed.querySelector('verse') !== null;
+  // Whether the score numbers its own verses. Settled here, before _updateMei can hand back a
+  // pruned document, so the answer does not depend on which sections are being shown.
+  this._scoreData.features.hasInlineVerseNumbers = this._scoreData.meiParsed.querySelector('verse label') !== null;
   const chordPositionIndex = this._indexChordPositions(vrvTimemap);
   this._scoreData.numChordPositions = chordPositionIndex.qstamps.length - 1;
   this._normalizeParts(chordPositionIndex);
@@ -1665,6 +1832,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   /********** Annotate directions and key **********/
 
   this._annotateDirections(elementsById, chordPositionIndex.qstamps);
+  this._markInstructedLyricLines();
 
   this._scoreData.features.hasExpansion = this._scoreData.meiParsed.querySelector('expansion[plist]') != null;
   this._scoreData.features.hasPickupMeasure = this._scoreData.measures[0]?.measureType === 'partial-pickup';
@@ -1714,7 +1882,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   this._scoreData.features.hasIntroBrackets = this._scoreData.meiParsed.querySelector('[ch-intro-bracket]') !== null;
   this._scoreData.features.hasChordSets = this._scoreData.chordSets.length > 0;
   this._scoreData.features.hasFingeringMarks = this._scoreData.meiParsed.querySelector('fing') !== null;
-  this._scoreData.features.hasLyricSectionIds = this._scoreData.meiParsed.querySelector('[ch-section-id]') !== null;
+  this._scoreData.features.hasLyricSectionIds = this._scoreData.meiParsed.querySelector(':is(label, verse)[ch-section-id]') !== null;
 
   // Remove unneeded elements and attributes
   // Kept separate from the cleanup at the top of this function: these elements are read by
@@ -1916,6 +2084,111 @@ ChScore.prototype._resolveKeySignatures = function () {
 }
 
 // Get expanded chord positions (expand verses, repeats, codas, etc. based on score map).
+// An instruction printed in the gap between the staves, saying what a lyric line is for:
+// "(*Optional)" in "My Covenants", "(4th verse)" in "Dear to the Heart of the Shepherd".
+// Matched by shape rather than wording, so it reads the same in any language: a parenthetical
+// or a phrase ending in a colon, carrying a footnote mark or a number.
+const CH_LYRIC_INSTRUCTION = /^\(.*\)$|:$/;
+const CH_FOOTNOTE_MARK = /[*\u2020\u2021]/;
+
+// A line marked with a footnote mark is an alternate text for an occasion ("*Alternate text
+// for baptism day."), not a verse sung in sequence. Its words are read out beside that
+// footnote and the line and instruction then come out of the score.
+// The pass an instruction names: a digit where it writes one, else a spelled-out number,
+// which is the one thing here that has to be read in the score's own language.
+ChScore.prototype._instructedPassNumber = function (text) {
+  const digits = this._markerNumber(text);
+  if (digits != null) return digits;
+  const words = this._verseNumberWords[this._scoreData.scoreMetadata?.lang] ?? {};
+  const spelled = new Set(text.toLowerCase().split(/[^\p{L}]+/u));
+  for (const [number, word] of Object.entries(words)) {
+    if (spelled.has(word)) return Number.parseInt(number);
+  }
+  return null;
+}
+
+ChScore.prototype._markInstructedLyricLines = function () {
+  const meiParsed = this._scoreData.meiParsed;
+  const melodyStaff = this._staffNumberOf(meiParsed.querySelector('[ch-melody]'));
+  // The verse each instruction names, to be turned into the section it belongs to once
+  // sections are derived (_buildExpandedChordPositions).
+  this._scoreData.instructedVerseByDir = new Map();
+  if (Number.isNaN(melodyStaff)) return;
+
+  const chordPositionOf = (verse) =>
+    Number.parseInt(verse.closest('note, chord')?.getAttribute('ch-chord-position'));
+  const staffVerses = [...meiParsed.querySelectorAll(`staff[n="${melodyStaff}"] verse`)];
+  const sungVerses = staffVerses.filter(verse => verse.querySelector('syl:not(:empty)'));
+  const textBlocks = this._scoreData.scoreMetadata?.textBlocks ?? [];
+
+  // An instruction over a staff above the melody's can say which verse that optional descant
+  // or obbligato joins in on ("Optional descant (with verse 3)"). It sings from there on, so
+  // the staff and any line it carries belong to that verse and the ones after it.
+  const directionsAbove = [...meiParsed.querySelectorAll('dir[place="above"][staff]')];
+  this._scoreData.staffEntersAtVerse = new Map();
+  for (const dir of directionsAbove) {
+    const staff = Number.parseInt(dir.getAttribute('staff'));
+    if (staff >= melodyStaff) continue;
+    const entersAt = this._instructedPassNumber(dir.textContent.trim().replace(/\s+/g, ' '));
+    if (!(entersAt > 1)) continue;
+    this._scoreData.staffEntersAtVerse.set(staff, entersAt);
+    this._scoreData.instructedVerseByDir.set(dir, entersAt);
+  }
+
+  for (const dir of directionsAbove) {
+    if (Number.parseInt(dir.getAttribute('staff')) <= melodyStaff) continue;
+    const text = dir.textContent.trim().replace(/\s+/g, ' ');
+    if (!CH_LYRIC_INSTRUCTION.test(text)) continue;
+    // A mark points at a footnote, making the line an alternate text; a number names the pass
+    // it is sung on ("(4th verse)"). Anything else is not an instruction about a lyric line.
+    const mark = CH_FOOTNOTE_MARK.exec(text)?.[0];
+    const footnoteIndex = mark
+      ? textBlocks.findIndex(block => block.text.trimStart().startsWith(mark)) : -1;
+    const pass = mark ? 0 : this._instructedPassNumber(text);
+    if (footnoteIndex === -1 && !(pass > 0)) continue;
+    const from = Number.parseInt(dir.getAttribute('ch-chord-position'));
+    if (Number.isNaN(from)) continue;
+
+    // The extra line where the instruction is printed: the lowest line the melody staff is
+    // still singing there, the verses above it being the ones sung in sequence
+    const at = sungVerses.filter(verse => chordPositionOf(verse) >= from);
+    const lineNumber = Math.max(...at.map(verse => Number.parseInt(verse.getAttribute('n'))));
+    if (!Number.isFinite(lineNumber)) continue;
+
+    const instructed = at.filter(verse => Number.parseInt(verse.getAttribute('n')) === lineNumber);
+    // A line sung on one named pass stays in the lyrics, on that pass alone
+    if (pass) {
+      for (const verse of instructed) verse.setAttribute('ch-pass', pass);
+      this._scoreData.instructedVerseByDir.set(dir, pass);
+      continue;
+    }
+    const words = [];
+    for (const verse of instructed) {
+      for (const syl of verse.querySelectorAll('syl:not(:empty)')) {
+        const continues = !this._startsWord(syl);
+        if (continues && words.length) words[words.length - 1] += syl.textContent.trim();
+        else words.push(syl.textContent.trim());
+      }
+    }
+    // Onto the footnote it belongs to, as another line of the same block -- the way a score
+    // that prints its alternate words rather than engraving them reads ("*Alternate phrases:"
+    // in "If You're Happy")
+    if (words.length) {
+      const footnote = textBlocks[footnoteIndex];
+      footnote.text += `\n${words.join(' ')}`;
+      footnote.html += `\n${words.join(' ')}`;
+    }
+    // The words are read out, so the line and its instruction come out of the score and
+    // nothing downstream has to skip them. The line goes whole: a verse holding only an empty
+    // syllable is a melisma's closing stub, which sings nothing but still draws a lyric row.
+    for (const verse of staffVerses) {
+      if (Number.parseInt(verse.getAttribute('n')) === lineNumber
+        && chordPositionOf(verse) >= from) verse.remove();
+    }
+    dir.remove();
+  }
+}
+
 // Adds attributes to lyric elements: @ch-section-id, @ch-chorus.
 ChScore.prototype._buildExpandedChordPositions = function (chordPositionCounter, lyricElementsAt) {
   this._scoreData.expandedChordPositions = [];
@@ -1927,12 +2200,23 @@ ChScore.prototype._buildExpandedChordPositions = function (chordPositionCounter,
       if (!chordPositionRange.end) chordPositionRange.end = chordPositionCounter;
     }
   }
+  // An instruction naming a verse belongs to the passage it is *printed in*, on the pass it
+  // names: "(4th verse)" is printed in the chorus, so it belongs to the fourth chorus rather
+  // than to verse 4. Keyed by chord position, to be named in the walk below.
+  const instructionsAt = this._groupBy([...this._scoreData.instructedVerseByDir ?? []],
+    ([dir]) => Number.parseInt(dir.getAttribute('ch-chord-position')));
+
   // Records the numbering `ch-expanded-chord-position` indexes into; expansion replays
   // this sequence rather than deriving it again.
   for (const { range, chordPosition, expandedChordPosition: expandedChordPositionCounter, passNumber }
     of this._walkSungChordPositions(this._sectionChordPositionRanges())) {
     const sectionInfo = range.sectionInfo;
     const staffNumbers = range.staffNumbers ?? this._scoreData.staffNumbers;
+
+    // Add attribute: dir@ch-section-id
+    for (const [dir, verse] of instructionsAt.get(chordPosition) ?? []) {
+      if (verse === passNumber) this._addSectionId(dir, sectionInfo.sectionId);
+    }
 
     const lyricLabels = [];
     const lyricSyllables = [];
@@ -2328,21 +2612,18 @@ ChScore.prototype._markHelpTextLyrics = function (lyricElementsByStaffAndLine) {
     const lineNumber = Number.parseInt(lyricElements[0].getAttribute('n'));
     if (!Number.isNaN(lineNumber)) sungLineNumbers.add(lineNumber);
   }
-  const verseNumbersByLineNumber = new Map([...sungLineNumbers]
+  this._verseNumbersByLineNumber = new Map([...sungLineNumbers]
     .sort((a, b) => a - b).map((lineNumber, index) => [lineNumber, index + 1]));
-  for (const lyricElements of lyricElementsByStaffAndLine.values()) {
-    for (const lyricElement of lyricElements) {
-      if (lyricElement.hasAttribute('ch-help-text')) continue;
-      const verseNumber = verseNumbersByLineNumber.get(Number.parseInt(lyricElement.getAttribute('n')));
-      if (verseNumber != null) lyricElement.setAttribute('ch-verse-number', verseNumber);
-    }
-  }
 }
 
-// Which verse a lyric line is, with any help text between the lines counted out. Falls
-// back to the engraved line number, which is what it is on a score with no help text.
+// Which verse a lyric line is, from the ranking _markHelpTextLyrics worked out with the help
+// text counted out. Falls back to the engraved line number, which is what it is on a score
+// with no help text, and what a help line is itself. Always a number, never null: callers
+// build `staff.line` ids from it, and null passes a Number.isNaN guard to give "1.null".
 ChScore.prototype._verseLineNumber = function (lyricElement) {
-  return Number.parseInt(lyricElement.getAttribute('ch-verse-number') ?? lyricElement.getAttribute('n'));
+  const lineNumber = Number.parseInt(lyricElement.getAttribute('n'));
+  if (lyricElement.hasAttribute('ch-help-text')) return lineNumber;
+  return this._verseNumbersByLineNumber?.get(lineNumber) ?? lineNumber;
 }
 
 // Clean up verse numbers that were engraved as part of a lyric syllable
@@ -2438,8 +2719,11 @@ ChScore.prototype._moveMelodyLyricsOntoMelody = function () {
     // it there are a second voice's. Rendering removes whole staves too, so the same
     // convention applies a level up: a staff above the tune's holds its words ('SS+A#A').
     const chordPosition = Number.parseInt(holder.getAttribute('ch-chord-position'));
-    const melodyStaffNumber = this._staffNumberOf(melodyByChordPosition.get(chordPosition));
-    if (!this._isAboveMelody(holder, melodyLayers) && !(this._staffNumberOf(holder) < melodyStaffNumber)) continue;
+    // One staff lookup for the holder, shared with _isAboveMelody, and the melody's staff
+    // only where the first test did not already settle it
+    const staffNumber = this._staffNumberOf(holder);
+    if (!this._isAboveMelody(holder, melodyLayers, staffNumber)
+      && !(staffNumber < this._staffNumberOf(melodyByChordPosition.get(chordPosition)))) continue;
     if (!lyricElementsByChordPosition.has(chordPosition)) lyricElementsByChordPosition.set(chordPosition, []);
     lyricElementsByChordPosition.get(chordPosition).push(lyricElement);
   }
@@ -3046,28 +3330,48 @@ ChScore.prototype._updateMei = function () {
 
   // Set section lyrics visibility (non-expanded score)
   if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0 && this._currentOptions.expandScore !== 'full-score') {
-    const oldToNewLineNumber = {}
-    for (const element of this._scoreData.meiParsed.querySelectorAll('label[ch-section-id], verse[ch-section-id]')) {
+    // Which lines survive is settled first: a claimed line needs to know whether the line it
+    // replaces is still drawn beside it, which the elements after it in document order decide.
+    const keptElements = [];
+    const drawsReplacedLineAt = new Set();
+    for (const element of this._scoreData.meiParsed.querySelectorAll(':is(label, verse)[ch-section-id]')) {
       const sectionIds = element.getAttribute('ch-section-id').split(' ');
-      const chordPosition = Number.parseInt(element.closest('[ch-chord-position]').getAttribute('ch-chord-position'));
-      if (sectionIds.some(sectionId => sectionIdsToKeep.has(sectionId))) {
-        const lineNumber = element.getAttribute('n');
-        if (!Object.hasOwn(oldToNewLineNumber, lineNumber)) {
-          oldToNewLineNumber[lineNumber] = Object.keys(oldToNewLineNumber).length + 1;
-        }
-        // Renumber visible lyric lines (prevents spacing issues, for example if first verse line is n=2 and first chorus line is n=1)
-        if (this._scoreData.chordPositions[chordPosition].isSingleLine) {
-          element.setAttribute('n', 1);
-        } else if (!element.hasAttribute('ch-chorus')) {
-          element.setAttribute('n', oldToNewLineNumber[lineNumber]);
-        }
-      } else {
+      if (!sectionIds.some(sectionId => sectionIdsToKeep.has(sectionId))) {
         element.remove();
+        continue;
+      }
+      const chordPosition = Number.parseInt(element.closest('[ch-chord-position]').getAttribute('ch-chord-position'));
+      keptElements.push({ element, chordPosition });
+      if (!element.hasAttribute('ch-pass')) drawsReplacedLineAt.add(chordPosition);
+    }
+    const oldToNewLineNumber = {}
+    for (const { element, chordPosition } of keptElements) {
+      const lineNumber = element.getAttribute('n');
+      if (!Object.hasOwn(oldToNewLineNumber, lineNumber)) {
+        oldToNewLineNumber[lineNumber] = Object.keys(oldToNewLineNumber).length + 1;
+      }
+      // Renumber visible lyric lines (prevents spacing issues, for example if first verse line is n=2 and first chorus line is n=1)
+      if (this._scoreData.chordPositions[chordPosition].isSingleLine) {
+        // A line an instruction claimed for one pass is sung instead of the line printed over
+        // it, not with it. It takes the row below only where that line is still drawn here --
+        // left alone otherwise it would sit under an empty row, the shape "Dear to the Heart
+        // of the Shepherd" has when only its fourth verse and chorus are shown.
+        element.setAttribute('n', element.hasAttribute('ch-pass')
+          && drawsReplacedLineAt.has(chordPosition) ? 2 : 1);
+      } else if (!element.hasAttribute('ch-chorus')) {
+        element.setAttribute('n', oldToNewLineNumber[lineNumber]);
       }
     }
   }
 
   if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0) {
+    // An instruction naming a verse has nothing left to say once the section it belongs to is
+    // hidden. Removed before the staff rewriting below, which would otherwise move it onto a
+    // staff that is staying rather than take it away.
+    for (const dir of this._scoreData.meiParsed.querySelectorAll('dir[ch-section-id]')) {
+      const sectionIds = dir.getAttribute('ch-section-id').split(' ');
+      if (!sectionIds.some(sectionId => sectionIdsToKeep.has(sectionId))) dir.remove();
+    }
     // Remove unneeded section elements
     for (const sectionElement of this._scoreData.meiParsed.querySelectorAll('section[ch-expanded-chord-position], ending[ch-expanded-chord-position]')) {
       const sectionElementExpandedChordPositions = new Set(sectionElement.getAttribute('ch-expanded-chord-position').trim().split(' ').map(ecp => Number.parseInt(ecp)));
@@ -4344,6 +4648,7 @@ ChScore.prototype._defaultVerovioOptions = {
     'rest@ch-part-id', 'rest@ch-melody',
     'verse@ch-section-id', 'verse@ch-secondary', 'verse@ch-chorus',
     'section@ch-iteration', 'ending@ch-iteration',
+    'dir@ch-section-id',
   ],
 };
 
@@ -5567,6 +5872,7 @@ ChScore.prototype._normalizeSections = function () {
     const sections = [];
     let sectionCounter = 0;
     for (const lyricStanza of lyricStanzas) {
+      const stanzaStaffNumbers = this._stavesPlayingIn(lyricStanza.marker);
       sections.push({
         sectionId: `section-${sectionCounter}`,
         type: lyricStanza.type,
@@ -5574,7 +5880,9 @@ ChScore.prototype._normalizeSections = function () {
         marker: lyricStanza.marker,
         placement: lyricStanza.chordPositionRanges.length === 0 ? 'below' : 'inline',
         pauseAfter: false,
-        chordPositionRanges: lyricStanza.chordPositionRanges,
+        chordPositionRanges: lyricStanza.chordPositionRanges.map(range => ({
+          ...range, staffNumbers: stanzaStaffNumbers,
+        })),
         annotatedLyrics: lyricStanza.annotatedLyrics,
       });
       nameLyricElements(sections.at(-1), lyricStanza);
@@ -5651,13 +5959,18 @@ ChScore.prototype._normalizeSections = function () {
   // built from them line up with the sections they came from.
   const lyricChordPositionRanges = [];
   if (otherSections.length > 0) {
-    for (const sectionInfo of otherSections) {
+    for (const [sectionIndex, sectionInfo] of otherSections.entries()) {
       for (let cpr = 0; cpr < sectionInfo.chordPositionRanges.length; cpr++) {
         const chordPositionRange = sectionInfo.chordPositionRanges[cpr];
         lyricChordPositionRanges.push({
           start: chordPositionRange.start,
           end: chordPositionRange.end,
           sectionType: sectionInfo.type,
+          // Which section, not just what type of one: a section whose ranges read different
+          // lyric lines is still one stanza (a chorus with one line reworded for the last
+          // verse), so the run must not break where the line changes inside it.
+          sectionIndex: sectionIndex,
+          lyricLineIds: chordPositionRange.lyricLineIds,
           startsSection: cpr === 0,
         });
       }
@@ -5694,6 +6007,8 @@ ChScore.prototype._normalizeSections = function () {
       const firstLyricChordPosition = lyricStanzas[0].chordPositionRanges[0].start;
       if (!introSection && firstLyricChordPosition != null && firstLyricChordPosition !== 0) {
         const introChordPositionRanges = [[0, firstLyricChordPosition]];
+        // Nobody is singing yet, so every staff plays what is written for it -- a staff that
+        // waits for a later verse is engraved as rests here and contributes nothing anyway.
         introSection = this._getIntroSectionFromChordPositions(introChordPositionRanges, this._scoreData.staffNumbers, false);
       }
     } else {
@@ -6079,19 +6394,27 @@ ChScore.prototype._getIntroBrackets = function (meiParsed) {
 }
 
 ChScore.prototype._getIntroSectionFromBrackets = function (meiParsed, staffNumbers) {
-  const introChordPositionRanges = this._getIntroBrackets(meiParsed).map(
-    introBracket => [introBracket.start.chordPosition, introBracket.end.chordPosition]);
+  // A bracket is printed on the staff the introduction is played from, so it plays on that
+  // staff and the ones below it -- one on the piano's top staff means the voices above sit it
+  // out. Each bracket answers for its own range: the two in "True to the Faith" sit on
+  // different staves, the first over the whole texture and the second over the piano alone.
+  const introChordPositionRanges = this._getIntroBrackets(meiParsed).map(introBracket => {
+    const staff = Number.parseInt(introBracket.start.element.getAttribute('staff'));
+    const played = staffNumbers.filter(staffNumber => staffNumber >= staff);
+    return [introBracket.start.chordPosition, introBracket.end.chordPosition,
+      played.length > 0 ? played : staffNumbers];
+  });
   return this._getIntroSectionFromChordPositions(introChordPositionRanges, staffNumbers, true);
 }
 
 ChScore.prototype._getIntroSectionFromChordPositions = function (introChordPositionRanges, staffNumbers, pauseAfter) {
   let introSection;
   const chordPositionRanges = [];
-  for (const [start, end] of introChordPositionRanges) {
+  for (const [start, end, rangeStaffNumbers] of introChordPositionRanges) {
     chordPositionRanges.push({
       start: start,
       end: end,
-      staffNumbers: staffNumbers,
+      staffNumbers: rangeStaffNumbers ?? staffNumbers,
       lyricLineIds: [],
     });
   }
@@ -6113,13 +6436,6 @@ ChScore.prototype._getIntroSectionFromChordPositions = function (introChordPosit
 ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, hasInitialChorus, melodyLyricElements = this._melodyLyricElementIndex()) {
   const meiParsed = this._scoreData.meiParsed;
   const sections = [];
-
-  const staffNumbersWithLyrics = new Set();
-  for (const staffNumber of this._scoreData.staffNumbers) {
-    if (meiParsed.querySelector(`staff[n="${staffNumber}"] verse`)) {
-      staffNumbersWithLyrics.add(staffNumber);
-    }
-  }
 
   // Get chorus ranges and line numbers from melody lyrics
   const chorusCpRanges = [];
@@ -6148,7 +6464,8 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
     const lineNumbersByCp = {};
     const lyricElementsByCp = {};
     // Through the shared index, so chorus detection counts the same verses extraction does
-    for (const [chordPosition, lyricElements] of melodyLyricElements.byChordPosition) {
+    for (const chordPosition of melodyLyricElements.byChordPosition.keys()) {
+      const lyricElements = this._stackedLyricElementsAt(chordPosition, melodyLyricElements);
       lineNumbersByCp[chordPosition] = lyricElements.map(lyricElement => this._verseLineNumber(lyricElement));
       lyricElementsByCp[chordPosition] = lyricElements;
     }
@@ -6206,55 +6523,144 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
     }
   }
 
+  // Where an instruction claimed a lyric line for one pass ("(4th verse)"), so the section
+  // that pass sings can name the line itself rather than leaving it to be found again
+  const claims = new Map();
+  for (const lyricElement of meiParsed.querySelectorAll('verse[ch-pass]')) {
+    const pass = Number.parseInt(lyricElement.getAttribute('ch-pass'));
+    const chordPosition = Number.parseInt(
+      lyricElement.closest('note, chord')?.getAttribute('ch-chord-position'));
+    if (Number.isNaN(pass) || Number.isNaN(chordPosition)) continue;
+    const claim = claims.get(pass)
+      ?? { lineNumber: this._verseLineNumber(lyricElement), start: chordPosition, end: chordPosition + 1 };
+    claim.start = Math.min(claim.start, chordPosition);
+    claim.end = Math.max(claim.end, chordPosition + 1);
+    claims.set(pass, claim);
+  }
+
+  // One lyric line can lay out several printed verses, each opened by its own marker ("1. ...
+  // 2. ..." in "Whenever I Think about Pioneers"), and each is a verse section. Only a label
+  // that opens a verse nowhere else cuts the line: a line's own opening label names the line
+  // ("All Things Bright and Beautiful"), and a repeated one is a pickup labelled again where
+  // the verse really starts ("Were You There?").
+  const labelled = [];
+  const timesMarked = new Map();
+  for (const lyricElement of meiParsed.querySelectorAll('verse:has(label)')) {
+    const lineNumber = this._verseLineNumber(lyricElement);
+    const marker = this._verseLabelNumber(lyricElement);
+    const chordPosition = Number.parseInt(
+      lyricElement.closest('note, chord')?.getAttribute('ch-chord-position'));
+    if (marker == null || Number.isNaN(lineNumber) || Number.isNaN(chordPosition)) continue;
+    labelled.push({ lineNumber: lineNumber, chordPosition: chordPosition, marker: marker });
+    timesMarked.set(marker, (timesMarked.get(marker) ?? 0) + 1);
+  }
+  // Sorted here, so a line's first marker is the one that opens it
+  const markersByLine = this._groupBy(labelled, marker => marker.lineNumber);
+  for (const markers of markersByLine.values()) markers.sort((a, b) => a.chordPosition - b.chordPosition);
+
+  // The lyric lines carried by a staff that only joins in at a later verse. Membership is all
+  // that is needed: which verse it joins in on is answered by _stavesPlayingIn, which keeps
+  // the staff itself out of every range before then.
+  const lateEntryLineNumbers = new Set();
+  for (const staffNumber of this._scoreData.staffEntersAtVerse?.keys() ?? []) {
+    for (const lyricElement of meiParsed.querySelectorAll(`staff[n="${staffNumber}"] verse`)) {
+      const lineNumber = this._verseLineNumber(lyricElement);
+      if (!Number.isNaN(lineNumber)) lateEntryLineNumbers.add(lineNumber);
+    }
+  }
+
+  // The staff/line pairings the score actually writes, since the ids below pair every singing
+  // staff with every line number and a score rarely writes all of those. Help text is not one
+  // of them: it is never sung. Derived rather than read off @ch-lyric-line-id, which says the
+  // same thing, so this works on a document the annotation walk has not been over.
+  const engravedLyricLineIds = new Set();
+  for (const lyricElement of meiParsed.querySelectorAll('staff verse:not([ch-help-text])')) {
+    const staffNumber = lyricElement.closest('staff')?.getAttribute('n');
+    const lineNumber = this._verseLineNumber(lyricElement);
+    if (staffNumber && !Number.isNaN(lineNumber)) {
+      engravedLyricLineIds.add(`${staffNumber}.${lineNumber}`);
+    }
+  }
+
   let verseCounter = 0;
   for (const verseNumber of verseNumbers) {
     // Get chord position ranges
+    const stavesPlaying = this._stavesPlayingIn(verseNumber);
     const verseLineNumbers = new Set([verseNumber]);
-    if (verseNumber === 1) {
-      // Lines that appear under the numbered verses are assumed to correspond to verse 1 (example: secondary lyrics in "Joy to the World", 1985 Hymns)
-      for (const num of additionalSecondaryLyricLineNumbers) {
-        verseLineNumbers.add(num);
-      }
+    // Lines that appear under the numbered verses are assumed to correspond to verse 1
+    // (example: secondary lyrics in "Joy to the World", 1985 Hymns) -- unless an instruction
+    // says which verse the staff carrying them joins in on, which _stavesPlayingIn answers.
+    for (const num of additionalSecondaryLyricLineNumbers) {
+      if (verseNumber === 1 || lateEntryLineNumbers.has(num)) verseLineNumbers.add(num);
     }
-    const chordPositionRanges = [];
+    const rangeEntries = [];
+    const claim = claims.get(verseNumber);
+    const lineMarkers = markersByLine.get(verseNumber) ?? [];
+    const lineCuts = lineMarkers.slice(1).filter(marker => timesMarked.get(marker.marker) === 1);
+    // Before the first cut, the verse is the one the line's own opening label names -- which
+    // is not always the line number ("Whenever I Think about Pioneers" opens line 2 with "3.")
+    const opensWith = lineMarkers[0]?.marker ?? verseNumber;
+    const markerAt = (chordPosition) => lineCuts
+      .filter(cut => cut.chordPosition <= chordPosition).at(-1)?.marker ?? opensWith;
+    // The ids naming a set of lyric lines: every pairing of a staff playing in this verse
+    // with one of those lines, kept only where the score engraves that pairing.
+    const lyricLineIdsFor = (lineNumbers) => {
+      const ids = [];
+      for (const staffNumber of stavesPlaying) {
+        for (const lineNumber of lineNumbers) {
+          if (engravedLyricLineIds.has(`${staffNumber}.${lineNumber}`)) {
+            ids.push(`${staffNumber}.${lineNumber}`);
+          }
+        }
+      }
+      return ids;
+    };
+    const addRange = (start, end, ids) => {
+      // A chorus is shared by every verse, so a verse marker never cuts one
+      const cuts = chorusChordPositions.has(start) ? []
+        : lineCuts.map(cut => cut.chordPosition).filter(cp => cp > start && cp < end);
+      let from = start;
+      for (const to of [...cuts, end]) {
+        rangeEntries.push({
+          range: { start: from, end: to, staffNumbers: stavesPlaying, lyricLineIds: ids },
+          marker: markerAt(from),
+        });
+        from = to;
+      }
+    };
     let nextChordPosition = 0;
     let nextChorusCpRangeIndex = 0;
     while (nextChordPosition < this._scoreData.numChordPositions) {
       const cpStart = nextChordPosition;
       let cpEnd = this._scoreData.numChordPositions;
-      let lyricLinesIds = [];
-      for (const staffNumber of staffNumbersWithLyrics) {
-        for (const verseLineNumber of verseLineNumbers) {
-          lyricLinesIds.push(`${staffNumber}.${verseLineNumber}`);
-        }
-      }
+      let lyricLinesIds = lyricLineIdsFor(verseLineNumbers);
       if (nextChorusCpRangeIndex < chorusCpRanges.length) {
         const nextChorusCpRange = chorusCpRanges[nextChorusCpRangeIndex];
         if (nextChorusCpRange[0] === nextChordPosition) {
           cpEnd = nextChorusCpRange.at(-1) + 1;
-          lyricLinesIds = [];
-          for (const staffNumber of staffNumbersWithLyrics) {
-            for (const chorusLineNumber of chorusLineNumbers) {
-              lyricLinesIds.push(`${staffNumber}.${chorusLineNumber}`);
-            }
-          }
+          lyricLinesIds = lyricLineIdsFor(chorusLineNumbers);
           nextChorusCpRangeIndex++;
         } else {
           cpEnd = nextChorusCpRange[0];
         }
       }
-      chordPositionRanges.push({
-        start: cpStart,
-        end: cpEnd,
-        staffNumbers: this._scoreData.staffNumbers,
-        lyricLineIds: lyricLinesIds,
-      });
+      // A line claimed for this pass is named by the stretch it covers, so the section says
+      // what is sung there rather than depending on the claim being read again
+      // Where the claim covers the whole range, that leaves one range naming the claimed line
+      if (claim && claim.start >= cpStart && claim.end <= cpEnd) {
+        const claimedIds = lyricLineIdsFor([claim.lineNumber]);
+        if (claim.start > cpStart) addRange(cpStart, claim.start, lyricLinesIds);
+        addRange(claim.start, claim.end, claimedIds);
+        if (claim.end < cpEnd) addRange(claim.end, cpEnd, lyricLinesIds);
+      } else {
+        addRange(cpStart, cpEnd, lyricLinesIds);
+      }
       nextChordPosition = cpEnd;
     }
 
     // Add extra chorus for songs with initial chorus
-    if (hasInitialChorus && verseNumber === verseNumbers.at(-1) && chordPositionRanges.length > 1) {
-      chordPositionRanges.push(chordPositionRanges[chordPositionRanges.length - 2]);
+    if (hasInitialChorus && verseNumber === verseNumbers.at(-1) && rangeEntries.length > 1) {
+      rangeEntries.push(rangeEntries.at(-2));
     }
 
     // Get pause after
@@ -6269,17 +6675,32 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
       pauseAfter = false;
     }
 
-    for (let cpr = 0; cpr < chordPositionRanges.length; cpr++) {
-      const chordPositionRange = chordPositionRanges[cpr];
-      if (chorusChordPositions.has(chordPositionRange.start)) {
+    // Ranges that run on from each other and are the same kind of music are one section: a
+    // chorus whose middle stretch reads a different lyric line is still one chorus. Only
+    // contiguous ones, so the repeated range an initial chorus adds stays a section of its own.
+    const groups = [];
+    for (const { range: chordPositionRange, marker } of rangeEntries) {
+      const isChorus = chorusChordPositions.has(chordPositionRange.start);
+      const group = groups.at(-1);
+      if (group && group.isChorus === isChorus && group.marker === marker
+        && group.ranges.at(-1).end === chordPositionRange.start) {
+        group.ranges.push(chordPositionRange);
+      } else {
+        groups.push({ isChorus: isChorus, marker: marker, ranges: [chordPositionRange] });
+      }
+    }
+
+    for (const [index, group] of groups.entries()) {
+      const isLast = index === groups.length - 1;
+      if (group.isChorus) {
         sections.push({
           sectionId: `chorus-${verseCounter}`,
           type: 'chorus',
           name: 'Chorus',
           marker: null,
           placement: 'inline',
-          pauseAfter: cpr === chordPositionRanges.length - 1 ? pauseAfter : false,
-          chordPositionRanges: [chordPositionRange],
+          pauseAfter: isLast ? pauseAfter : false,
+          chordPositionRanges: group.ranges,
           annotatedLyrics: null,
         });
       } else {
@@ -6287,11 +6708,11 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
         sections.push({
           sectionId: `verse-${verseCounter}`,
           type: 'verse',
-          name: `Verse ${verseNumber}`,
-          marker: verseNumber,
+          name: `Verse ${group.marker}`,
+          marker: group.marker,
           placement: 'inline',
-          pauseAfter: cpr === chordPositionRanges.length - 1 ? pauseAfter : false,
-          chordPositionRanges: [chordPositionRange],
+          pauseAfter: isLast ? pauseAfter : false,
+          chordPositionRanges: group.ranges,
           annotatedLyrics: null,
         });
       }
@@ -6307,8 +6728,8 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
   // Through the shared melody lyric index, which already grouped the elements by chord
   // position. Reading only verses on the melody note would miss a lower voice's words
   // entirely, and the padding below would absorb those positions as though nothing were sung.
-  for (const [chordPosition, lyrics] of melodyLyricElements.byChordPosition) {
-    for (const lyric of lyrics) {
+  for (const chordPosition of melodyLyricElements.byChordPosition.keys()) {
+    for (const lyric of this._stackedLyricElementsAt(chordPosition, melodyLyricElements)) {
       if (!lyric.querySelector('syl:not(:empty)')) continue;
       const [staffNumber, lineNumber] = lyric.getAttribute('ch-lyric-line-id').split('.').map(i => Number.parseInt(i));
       if (!Object.hasOwn(lyricLinesByStaffAndCp, staffNumber)) lyricLinesByStaffAndCp[staffNumber] = {};
@@ -6442,9 +6863,9 @@ ChScore.prototype._carriesMelody = function (element) {
 }
 
 // Whether a note or chord sits above the voice carrying the tune, on that voice's own staff.
-ChScore.prototype._isAboveMelody = function (element, melodyLayers) {
+ChScore.prototype._isAboveMelody = function (element, melodyLayers, staffNumber = this._staffNumberOf(element)) {
   const chordPosition = Number.parseInt(element.getAttribute('ch-chord-position'));
-  const melodyLayer = melodyLayers.get(this._staffNumberOf(element))?.get(chordPosition);
+  const melodyLayer = melodyLayers.get(staffNumber)?.get(chordPosition);
   const layer = this._layerNumberOf(element);
   return layer !== null && melodyLayer !== undefined && layer < melodyLayer;
 }
@@ -6523,7 +6944,20 @@ ChScore.prototype._stackedVerseLines = function (melodyLyricElements = this._mel
 // divisi like Soprano 1/2) needs a hasTwoPartMelody guard wherever it is used, and this
 // signal does not.
 ChScore.prototype._hasStackedMelodyLyrics = function (chordPosition, melodyLyricElements) {
-  return (melodyLyricElements.byChordPosition.get(chordPosition) ?? []).length > 1;
+  return this._stackedLyricElementsAt(chordPosition, melodyLyricElements).length > 1;
+}
+
+// The lyric lines the music carries at one chord position. A line an instruction claimed for
+// a single pass ("(4th verse)") is not one of them: only it or the line it is printed over is
+// ever sung there, so the music is single-line per pass. Kept only where a line remains --
+// where the claimed line sings alone, it is still what the music carries.
+ChScore.prototype._stackedLyricElementsAt = function (chordPosition, melodyLyricElements) {
+  const lyricElements = melodyLyricElements.byChordPosition.get(chordPosition) ?? [];
+  // Called per chord position per range, and almost no score claims a line for one pass, so
+  // the common case answers without building a second array
+  if (!lyricElements.some(lyricElement => lyricElement.hasAttribute('ch-pass'))) return lyricElements;
+  const stacking = lyricElements.filter(lyricElement => !lyricElement.hasAttribute('ch-pass'));
+  return stacking.length > 0 ? stacking : lyricElements;
 }
 
 // Which lyric element engraved at one chord position is sounding on this pass, as an index into the list (-1 for none). Used for score expansion and lyric extraction.
@@ -6658,7 +7092,15 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
     if (excludedLyricElements.size > 0) lyricElements = lyricElements.filter(ve => !excludedLyricElements.has(ve));
     const lyricIndex = this._lyricElementSoundingAt(lyricElements, passNumber,
       chordPositionIsSingleLine || range.hasSingleLine);
-    const lyricElement = lyricElements[lyricIndex]; // undefined when -1
+    let lyricElement = lyricElements[lyricIndex]; // undefined when -1
+    // A range names the lyric lines it reads, so where the pass count picked a line the range
+    // doesn't name, the section's answer stands. Corrects the choice rather than narrowing
+    // what is chosen from: the pickup rule above indexes the whole stack by pass number.
+    if (lyricElement && range.lyricLineIds?.length
+      && !range.lyricLineIds.includes(lyricElement.getAttribute('ch-lyric-line-id'))) {
+      lyricElement = lyricElements.find(ve => range.lyricLineIds.includes(ve.getAttribute('ch-lyric-line-id')))
+        ?? lyricElement;
+    }
 
     // A round marker is engraved where the voice enters, which isn't always the chord
     // position its word starts on — it can land on a held note with no lyric, or on
@@ -6698,6 +7140,7 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
         startsSection: isFirstSyllableOfSection,
         startsRepeatedSection: isFirstSyllableOfRepeatedSection,
         sectionType: range.sectionType ?? null,
+        sectionIndex: range.sectionIndex ?? null,
       });
       isFirstSyllableOfSection = false;
       isFirstSyllableOfRepeatedSection = false;
@@ -7053,15 +7496,20 @@ ChScore.prototype._syllableStanzaRuns = function (syllables) {
     // scores walked without sections to align to
     const type = syllable.sectionType ?? syllable.verseLabel ?? null;
 
+    // Inside one section the lyric line may change and change back, and it is still one
+    // stanza; only across sections does a new line start a new run
+    const sameSection = current && syllable.sectionIndex != null
+      && syllable.sectionIndex === current.sectionIndex;
     const startsNewRun = !current
       || syllable.startsSection
-      || !this._continuesLyricLine(current.lyricLineId, lyricLineId)
+      || (!sameSection && !this._continuesLyricLine(current.lyricLineId, lyricLineId))
       || current.type !== type
       || Boolean(syllable.label)
       || syllable.chordPositions[0] < current.lastChordPosition;
 
     if (startsNewRun) {
-      current = { lyricLineId: lyricLineId, type: type, lastChordPosition: -1, syllables: [] };
+      current = { lyricLineId: lyricLineId, type: type, lastChordPosition: -1, syllables: [],
+        sectionIndex: syllable.sectionIndex ?? null };
       runs.push(current);
     }
     current.syllables.push(syllable);
@@ -7320,7 +7768,17 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   }
 
   const stanzas = this._mergePickupStanzas(built.map(entry => entry.stanza));
-  for (const stanza of stanzas) stanza.name = this._stanzaName(stanza);
+  // Where a score numbers no verses of its own, the derived verses are numbered in the order
+  // they are sung. The lyric line a stanza was read from cannot say it: a passage sung twice
+  // is read from the same line both times, and is verses 1 and 2.
+  const hasInlineVerseNumbers = this._scoreData.features?.hasInlineVerseNumbers;
+  let verseCounter = 0;
+  for (const stanza of stanzas) {
+    stanza.name = this._stanzaName(stanza);
+    if (hasInlineVerseNumbers || stanza.type !== 'verse' || stanza.marker) continue;
+    stanza.marker = String(++verseCounter);
+    stanza.name = `Verse ${stanza.marker}`;
+  }
   return stanzas;
 }
 
@@ -7338,6 +7796,17 @@ ChScore.prototype._phraseStartWeights = {
   // What a break has to be worth before it's taken at all, and what a line straying
   // from the song's typical length costs per syllable
   breakCost: 1.9, lengthCost: 0.3,
+};
+
+// Verse numbers an instruction spells out rather than writing as a digit ("Chorus after
+// fourth verse:" in "O Thou Rock of Our Salvation"). Only as far as a verse count reaches.
+ChScore.prototype._verseNumberWords = {
+  en: { 1: 'first', 2: 'second', 3: 'third', 4: 'fourth', 5: 'fifth', 6: 'sixth', 7: 'seventh', 8: 'eighth' },
+  // Left commented until a score spells a verse number out in one of these. A language with
+  // no entry reads no spelled-out number; a digit is read whatever the language.
+  // fr: { 1: 'premier', 2: 'deuxième', 3: 'troisième', 4: 'quatrième', ... },
+  // es: { 1: 'primero', 2: 'segundo', 3: 'tercero', 4: 'cuarto', ... },
+  // pt: { 1: 'primeiro', 2: 'segundo', 3: 'terceiro', 4: 'quarto', ... },
 };
 
 // Words a line doesn't end on
@@ -7751,7 +8220,6 @@ ChScore.prototype._sectionChordPositionRanges = function () {
 // shape _extractLyricStanzas and generateDefaultSection produce — _expandSections
 // reads both to link sections to their lyric elements.
 ChScore.prototype._newLyricStanza = function (lyricLineId, type, marker, chordPosition, expandedChordPosition) {
-  const staffNumber = Number.parseInt(lyricLineId?.split('.')[0]);
   return {
     type: type,
     name: null, // set by _stanzaName once the stanza is complete
@@ -7760,7 +8228,11 @@ ChScore.prototype._newLyricStanza = function (lyricLineId, type, marker, chordPo
     chordPositionRanges: [{
       start: chordPosition,
       end: chordPosition + 1,
-      staffNumbers: Number.isNaN(staffNumber) ? this._scoreData.staffNumbers : [staffNumber],
+      // Every staff that plays, not just the one these words were read off: @staffNumbers
+      // is what _loadMidi filters the note sequence by, so naming one staff here silences
+      // the accompaniment. Narrowed to the verse's own staves where the stanza becomes a
+      // section (see _normalizeSections).
+      staffNumbers: this._scoreData.staffNumbers,
       lyricLineIds: lyricLineId ? [lyricLineId] : [],
     }],
     expandedChordPositions: expandedChordPosition == null ? [] : [expandedChordPosition, expandedChordPosition + 1],
@@ -8180,11 +8652,28 @@ ChScore.prototype._pickupVerseNumber = function (lyricElement) {
   return labelNumber === Number.parseInt(lyricElement.getAttribute('n')) ? null : labelNumber;
 }
 
+// The staves that play in a given verse -- accompaniment included, so "playing", not
+// "singing". A section must not claim a descant that joins in later: @staffNumbers is what
+// _loadMidi filters the note sequence by, so a staff named here sounds and one left out does not.
+ChScore.prototype._stavesPlayingIn = function (verseNumber) {
+  const entersAt = this._scoreData.staffEntersAtVerse ?? new Map();
+  const verse = Number.parseInt(verseNumber);
+  return this._scoreData.staffNumbers
+    .filter(staffNumber => (entersAt.get(staffNumber) ?? 1) <= (Number.isNaN(verse) ? 1 : verse));
+}
+
 // What a stanza is called: "Verse 2", "Chorus", or "Unknown" where the score says
 // nothing. Settles what the name is read from as it goes — a numbered lyric line is a
 // verse even with no verse@label, and a marker keeps only its digits. Stanza or section.
 ChScore.prototype._stanzaName = function (stanza) {
   if (!stanza.type && stanza.marker) stanza.type = 'verse';
+  // Nothing classified it and the score numbers no verses, so there is no scheme for it to
+  // be an exception to: sung words with nothing else said about them are a verse. A score
+  // that does label its verses is left alone -- an unclassified stanza there is a real
+  // question about which passage it is, not a missing default.
+  if (!stanza.type && !this._scoreData.features?.hasInlineVerseNumbers) {
+    stanza.type = 'verse';
+  }
   if (stanza.marker) stanza.marker = this._cleanMarker(stanza.marker);
 
   if (stanza.type === 'verse') {

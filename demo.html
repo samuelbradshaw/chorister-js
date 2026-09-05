@@ -521,7 +521,7 @@
           sectionStyles += `
             @media (hover: hover) {
               body[data-section-id="${sectionInfo.sectionId}"] [data-ch-section-id~="${sectionInfo.sectionId}"] { font-weight: bold; }
-              body[data-section-id="${sectionInfo.sectionId}"] :is(p, .label, .verse)[data-ch-section-id]:not([data-ch-section-id~="${sectionInfo.sectionId}"]) { opacity: 0.4; }
+              body[data-section-id="${sectionInfo.sectionId}"] :is(p, .label, .verse, .dir)[data-ch-section-id]:not([data-ch-section-id~="${sectionInfo.sectionId}"]) { opacity: 0.4; }
             }
           `;
           sectionTogglesDiv.insertAdjacentHTML('beforeend', `

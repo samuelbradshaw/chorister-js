@@ -722,6 +722,8 @@ describe('How Great — plain load (no partsTemplate)', { timeout: 30000 }, () =
   it('should auto-generate an introduction section from intro brackets', () => {
     const intro = score._scoreData.sections.find(s => s.type === 'introduction');
     expect(intro).toBeDefined();
+    // The bracket is on the top staff, so every staff plays the introduction
+    expect(intro.chordPositionRanges.map(range => range.staffNumbers)).toEqual([[1, 2]]);
   });
 
   it('should report the lyrics read out of the score as lyricsText', () => {
