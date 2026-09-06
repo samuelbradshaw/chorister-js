@@ -53,6 +53,7 @@
           cursor: pointer;
         }
       }
+      g.dir { font-style: italic; }
       [data-ch-pinch] g.ch-shapes > *:not(.ch-staff-label, .ch-chord-position-label, .ch-lyric-line-label) {
         display: none !important;
       }
@@ -64,9 +65,8 @@
       }
       #score-container { scrollbar-width: none; } /* Firefox */
       #score-container::-webkit-scrollbar { display: none; } /* Most browsers */
-      [data-ch-footer] {
+      [data-ch-footer]:first-child, [data-ch-svg] + [data-ch-footer], [data-ch-lyrics-below] + [data-ch-footer] {
         border-top: 1px solid #ddd;
-        padding: 1em 0;
       }
       
       /* Custom score form styles */
@@ -177,6 +177,7 @@
       </div>
       
       <!-- Custom score form -->
+      <hr>
       <form id="custom-score-form">
         <p>See <a href="https://github.com/samuelbradshaw/chorister-js?tab=readme-ov-file#input-data">Input data</a> for examples of how input data should be formatted.</p>
         <div>
@@ -346,13 +347,21 @@
         const format = demoScores[scoreId].format;
         const inputData = demoScores[scoreId];
         const options = {
-          footerContent: demoScores[scoreId].credits,
+          footerContent: demoScores[scoreId].credits ?? '',
           drawBackgroundShapes: ['ch-chord-position-rect', 'ch-staff-rect', 'ch-note-circle', 'ch-lyric-rect'],
           drawForegroundShapes: ['ch-chord-position-rect'],
         }
         chScore = new ChScore('#score-container');
         scoreData = await chScore.load(format, inputData, options);
-        titleArea.textContent = scoreData?.scoreMetadata?.title ?? demoScores[scoreId].title;
+        
+        titleArea.textContent = demoScores[scoreId].title ?? scoreData?.scoreMetadata?.title ?? 'Untitled';
+        if (!demoScores[scoreId].credits) {
+          const credits = (scoreData?.scoreMetadata?.textBlocks ?? [])
+            .filter(textBlock => ['footnote', 'attribution'].includes(textBlock.type))
+            .map(textBlock => `<p>${textBlock.html.replaceAll('\n', '<br>')}</p>`)
+            .join('');
+          chScore.setOptions({ footerContent: credits || 'No credits.' });
+        }
         
         // Load controls
         loadControls(chScore, scoreData)        
@@ -845,8 +854,8 @@
             fermatas: [],
           },
           'custom-score': {
-            title: 'Custom Score',
-            credits: 'Credits here.',
+            title: null,
+            credits: null,
             format: null,
             scoreId: 'custom-score',
             scoreContent: null,

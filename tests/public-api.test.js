@@ -1626,13 +1626,24 @@ describe('_extendPlistForVerses()', () => {
     expect(extendRaw(mei, plist, [1, 2, 3], 3)).toBe(plist);
   });
 
-  it('should count passes by the highest line number, not how many lines are stacked', () => {
-    // "Gethsemane" to: lines 2 and 3 are stacked and line 1 is alone, so the music still
-    // has to come round three times -- the first pass sings nothing here.
+  it('should count passes by the highest line number where the lines start at 1', () => {
+    // Line number is pass number here, so a stack of [1, 3] needs three passes and the
+    // second sings nothing.
+    const mei = buildMei([
+      { id: 'body', lines: [1, 3], cps: [0, 1] },
+    ]);
+    expect(extend(mei, ['#body', '#body'], [1, 3], 2)).toBe('#body #body #body');
+  });
+
+  it('should count passes by how many lines are stacked where they start above 1', () => {
+    // "Gethsemane" to/it (HHC): lines 2 and 3 stacked, line 1 elsewhere. _normalizeSections
+    // names the line each playthrough of the section reads, so two passes sing both lines
+    // and a third would repeat one. Asking for the highest line here played the chorus of
+    // the Italian score a third time.
     const mei = buildMei([
       { id: 'body', lines: [2, 3], cps: [0, 1] },
     ]);
-    expect(extend(mei, ['#body', '#body'], [2, 3], 2)).toBe('#body #body #body');
+    expect(extend(mei, ['#body', '#body'], [2, 3], 2)).toBe('#body #body');
   });
 });
 

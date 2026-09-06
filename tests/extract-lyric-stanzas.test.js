@@ -864,7 +864,8 @@ describe('A held melody with the words on the voice below it', { timeout: 30000 
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   it('should finish the melody line with the word engraved beneath it, sung once', () => {
-    expect(score._scoreData.lyricsText).toBe('[Verse 1]\nWhere all who may rest,');
+    // One stanza, so no number tells it apart from another (see _normalizeSections)
+    expect(score._scoreData.lyricsText).toBe('[Verse]\nWhere all who may rest,');
   });
 
   it('should leave the repeat in the score for it to draw, on the voice that sings it', () => {
@@ -901,7 +902,7 @@ describe('A lyric line marked optional by an instruction', { timeout: 30000 }, (
   it('should leave the alternate line out of the lyrics', () => {
     // A verse, not a chorus: with the alternate line taken out the fixture carries one lyric
     // line throughout, and a score that labels no verses falls back to calling a stanza one
-    expect(score._scoreData.lyricsText).toBe('[Verse 1]\nSing to me now, gently and true. Sing now.');
+    expect(score._scoreData.lyricsText).toBe('[Verse]\nSing to me now, gently and true. Sing now.');
   });
 
   it('should read the alternate words out beside the footnote they belong to', () => {

@@ -1020,8 +1020,10 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
   const hasEndings = musicXml.includes('<ending');
   const hasTimeOnly = musicXml.includes('time-only');
   const hasStems = musicXml.includes('<stem>');
+  const hasJumps = musicXml.includes('dalsegno=') || musicXml.includes('tocoda=');
   this._textBlockStyles = new Map();
-  if (!hasIntroBrackets && !hasLyrics && !hasTextBlocks && !hasEndings && !hasTimeOnly && !hasStems) return musicXml;
+  if (!hasIntroBrackets && !hasLyrics && !hasTextBlocks && !hasEndings && !hasTimeOnly && !hasStems
+    && !hasJumps) return musicXml;
 
   const parsed = (new DOMParser()).parseFromString(musicXml, 'text/xml');
   if (parsed.querySelector('parsererror')) return musicXml;
@@ -1086,6 +1088,24 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
     for (const sound of parsed.querySelectorAll('sound[tocoda][time-only]')) {
       sound.removeAttribute('time-only');
       changed = true;
+    }
+  }
+
+  // A jump names its marker by id, and Verovio can't resolve one pointing at an id the file
+  // no longer holds (German "Gethsemane", HHC, marks the segno at 17 and jumps to 11).
+  // Repointed only where exactly one marker of that kind exists, so there is no question
+  // which was meant; with none at all there is nothing to repoint.
+  if (hasJumps) {
+    for (const [jump, marker] of [['dalsegno', 'segno'], ['tocoda', 'coda']]) {
+      const ids = new Set([...parsed.querySelectorAll(`sound[${marker}]`)]
+        .map(sound => sound.getAttribute(marker)));
+      if (ids.size !== 1) continue;
+      const [only] = ids;
+      for (const sound of parsed.querySelectorAll(`sound[${jump}]`)) {
+        if (ids.has(sound.getAttribute(jump))) continue;
+        sound.setAttribute(jump, only);
+        changed = true;
+      }
     }
   }
 
@@ -5983,14 +6003,43 @@ ChScore.prototype._normalizeSections = function () {
     for (const id of expansionSectionElementIds) {
       timesPlayed.set(id, (timesPlayed.get(id) ?? 0) + 1);
     }
+    // The lines a section carries, as ids in line-number order, where the pass count can't
+    // reach them (Spanish "Gethsemane", HHC, engraves its chorus on lines 2 and 3). Memoized
+    // and keyed by id: a plist names the same section once per playthrough, and the answer
+    // depends only on the section.
+    const lineIdsBySectionId = new Map();
+    const lineIdsOf = (sectionId, sectionElement) => {
+      if (!lineIdsBySectionId.has(sectionId)) {
+        const lineNumbers = [...(melodyLyricElements.linesBySection.get(sectionElement) ?? [])]
+          .sort((a, b) => a - b);
+        const byLineNumber = new Map();
+        for (const lyricElement of melodyLyricElements.bySection.get(sectionElement) ?? []) {
+          byLineNumber.set(this._verseLineNumber(lyricElement),
+            lyricElement.getAttribute('ch-lyric-line-id'));
+        }
+        lineIdsBySectionId.set(sectionId, this._lineNumbersArePassNumbers(lineNumbers)
+          ? [] : lineNumbers.map(lineNumber => byLineNumber.get(lineNumber)));
+      }
+      return lineIdsBySectionId.get(sectionId);
+    };
+    const playthroughs = new Map();
     for (const expansionSectionElementId of expansionSectionElementIds) {
       const sectionElement = this._scoreData.meiParsed.querySelector(`[*|id="${expansionSectionElementId}"]`);
       const sectionElementChordPositions = sectionElement.getAttribute('ch-chord-position').trim().split(' ').map(cp => Number.parseInt(cp));
-      lyricChordPositionRanges.push({
+      const playthrough = (playthroughs.get(expansionSectionElementId) ?? 0) + 1;
+      playthroughs.set(expansionSectionElementId, playthrough);
+      const range = {
         start: sectionElementChordPositions[0],
         end: sectionElementChordPositions.at(-1) + 1,
         startsRepeatedSection: timesPlayed.get(expansionSectionElementId) > 1,
-      });
+      };
+      // One line is sung by everyone, and a section played more often than it has lines has
+      // nothing left to name -- both leave the pass count to answer, as before.
+      const lineIds = lineIdsOf(expansionSectionElementId, sectionElement);
+      if (lineIds.length > 1 && playthrough <= lineIds.length) {
+        range.lyricLineIds = [lineIds[playthrough - 1]];
+      }
+      lyricChordPositionRanges.push(range);
     }
   } else {
     lyricChordPositionRanges.push({ start: 0, end: this._scoreData.numChordPositions });
@@ -6140,6 +6189,16 @@ ChScore.prototype._normalizeSections = function () {
     }
   }
 
+  // A song with one stanza has nothing for a chorus to alternate with and nothing for a verse
+  // number to tell it apart from; all 116 such English corpus rows are headed "Verse".
+  // Counted over printed stanzas as well as sung, so a score singing one verse and printing
+  // three keeps its numbering, and never applied to sections a caller stated the types of.
+  if (!hasPrebuiltSections && otherSections.length === 1 && otherSections[0].annotatedLyrics) {
+    otherSections[0].type = 'verse';
+    otherSections[0].name = 'Verse';
+    otherSections[0].marker = null;
+  }
+
   this._scoreData.sections = [];
   if (introSection) this._scoreData.sections.push(introSection);
   for (const otherSection of otherSections) this._scoreData.sections.push(otherSection);
@@ -6190,7 +6249,12 @@ ChScore.prototype._updateExpansionElement = function (meiParsed, numVerses, hasI
       const firstSectionMeasures = Array.from(firstSectionElement.querySelectorAll('measure'));
       const secondSectionElement = meiParsed.querySelector(`[*|id="${expansionIds[1].substring(1)}"]`);
       const secondSectionMeasures = Array.from(secondSectionElement.querySelectorAll('measure'));
-      if (firstSectionMeasures.at(-1).getAttribute('right') === 'end' &&
+      // An initial chorus is sung between the verses, so it takes more than one to interleave
+      // with; with a single verse the rewrite below only reproduces Verovio's own plist. The
+      // replay is a jump there ("D.C. al fine" in "I Believe in Being Honest", 1989 CSB), and
+      // leaving it complex is what keeps the plist rather than a one-section simple score.
+      if (numVerses > 1 &&
+          firstSectionMeasures.at(-1).getAttribute('right') === 'end' &&
           secondSectionMeasures.at(-1).getAttribute('right') === 'dbl') {
         firstSectionElement.setAttribute('type', 'chorus');
         secondSectionElement.setAttribute('type', 'verse');
@@ -6311,7 +6375,15 @@ ChScore.prototype._extendPlistForVerses = function (meiParsed, expansionIds, sta
   // Only the body of the verse is asked: an ending is a few notes closing one pass, and a
   // shared "1, 2" ending carries two lines without being played twice
   const carriesVerses = ref => !isEnding(ref) && stackedLinesOf(ref).length > 1;
-  const isUnderPlayed = ref => carriesVerses(ref) && stackedLinesOf(ref).at(-1) > timesPlayed[ref];
+  // How often a section must come round to sing all its lines: the highest line where the
+  // numbers are pass numbers, and how many there are where they aren't, since those are named
+  // per playthrough instead (see _normalizeSections). Asking for the highest either way plays
+  // the Italian "Gethsemane" chorus a third time for a line already sung.
+  const passesNeeded = (ref) => {
+    const lines = stackedLinesOf(ref);
+    return this._lineNumbersArePassNumbers(lines) ? lines.at(-1) : lines.length;
+  };
+  const isUnderPlayed = ref => carriesVerses(ref) && passesNeeded(ref) > timesPlayed[ref];
   if (!expansionIds.some(isUnderPlayed)) return expansionIds;
 
   // Refuse where visit-counted passes can't describe the answer: a plist covering only part
@@ -6960,6 +7032,13 @@ ChScore.prototype._stackedLyricElementsAt = function (chordPosition, melodyLyric
   return stacking.length > 0 ? stacking : lyricElements;
 }
 
+// Whether a section's lyric line numbers can double as its pass numbers, which is the model
+// _lyricElementSoundingAt works in: it matches line N against visit N, and visits start at 1.
+// Lines starting above 1 need the line each playthrough reads named for them instead.
+ChScore.prototype._lineNumbersArePassNumbers = function (lineNumbers) {
+  return lineNumbers[0] === 1;
+}
+
 // Which lyric element engraved at one chord position is sounding on this pass, as an index into the list (-1 for none). Used for score expansion and lyric extraction.
 // The index is into `verseElements` as passed, and the two callers filter it differently:
 // extraction passes the melody's lyric elements at the chord position, minus skipped
@@ -7096,8 +7175,10 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
     // A range names the lyric lines it reads, so where the pass count picked a line the range
     // doesn't name, the section's answer stands. Corrects the choice rather than narrowing
     // what is chosen from: the pickup rule above indexes the whole stack by pass number.
-    if (lyricElement && range.lyricLineIds?.length
-      && !range.lyricLineIds.includes(lyricElement.getAttribute('ch-lyric-line-id'))) {
+    // Where the pass count named no line at all -- it looked for a line number the music
+    // never carries -- the range's answer stands in for it rather than only correcting it.
+    if (range.lyricLineIds?.length
+      && !(lyricElement && range.lyricLineIds.includes(lyricElement.getAttribute('ch-lyric-line-id')))) {
       lyricElement = lyricElements.find(ve => range.lyricLineIds.includes(ve.getAttribute('ch-lyric-line-id')))
         ?? lyricElement;
     }
@@ -7518,58 +7599,57 @@ ChScore.prototype._syllableStanzaRuns = function (syllables) {
   return runs;
 }
 
-// Start a stanza wherever a section the score plays more than once begins. On a
-// complex-sections song nothing else marks that boundary: a chorus following a verse on
-// the same lyric line, unlabelled and running forward, reads as more of the same verse.
-//
-// Deliberately not folded into _syllableStanzaRuns' own break rules, which would be the
-// obvious place: phrase starts are derived from the runs, so breaking there first hides
-// the phrases that straddle the new boundary, and the pickups anchored on them go too
-// ("Teacher, Do You Love Me?", 1989 CSB, loses the phrase starts at the chorus's "I" and
-// verse 3's "Oh"). Splitting after detection lets both passes see the shape they need.
-// A pickup is the notes before a downbeat -- a word or two, never a line. Both passes
-// below bound themselves by it: without one, a run that merely starts well after the last
-// phrase start would pull a whole phrase across. Measured in syllables actually sung, not
-// chord positions spanned, so held notes and rests between them don't count against it.
+// A pickup is the notes before a downbeat -- a word or two, never a line. The tests below
+// bound themselves by it, in syllables actually sung rather than chord positions spanned, so
+// held notes and rests between them don't count against it.
 ChScore.prototype._maxPickupSyllables = 3;
 
+// Start a stanza wherever a section the score plays more than once begins. On a
+// complex-sections song nothing else marks that boundary: a chorus following a verse on the
+// same lyric line, unlabelled and running forward, reads as more of the same verse. Kept out
+// of _syllableStanzaRuns' own break rules because phrase starts are derived from the runs, so
+// breaking there first hides the phrases that straddle the new boundary.
 ChScore.prototype._splitRunsAtRepeatedSections = function (runs, phraseStarts) {
-  // How many syllables have been sung since the last phrase start, or Infinity if this
-  // piece holds no phrase start at all. Zero means the piece ends exactly on one.
-  const sinceLastPhraseStart = (syllables, phraseStarts) => {
-    for (let index = syllables.length - 1; index >= 0; index--) {
-      if (phraseStarts.has(syllables[index].chordPositions[0])) return syllables.length - 1 - index;
-    }
-    return Infinity;
-  };
+  const startsPhrase = (syllable) => phraseStarts.has(syllable.chordPositions[0]);
 
   const split = [];
   for (const run of runs) {
-    let current = null;
-    for (const syllable of run.syllables) {
+    // Where the boundaries could fall, before any is taken: whether one is real depends on how
+    // much lyric the next one leaves it, which isn't known going forward.
+    const candidates = [];
+    let pieceStart = 0;
+    for (let index = 1; index < run.syllables.length; index++) {
       // A section boundary is where the engraving repeats, not necessarily where a stanza
-      // ends, so it is only taken when it also falls at a phrase boundary. Two ways it
-      // doesn't: the section opens after the verse's own upbeat ("To Be a Pioneer", 1989
-      // CSB -- "You" is engraved before the repeat), which the length test catches; or it
-      // opens mid-line, a word short of the verse's end ("Isaiah Said", HHC -- "...
-      // through His | love."), which the phrase test catches. Either way the boundary is
-      // ignored and the words stay in one stanza.
-      //
-      // The phrase test wants the boundary exactly on a phrase start -- either the
-      // section's own first syllable, or the syllable after a pickup that opens it, which
-      // is how the chorus in "Teacher, Do You Love Me?" splits on its "I". Allowing a
-      // pickup's worth of slack instead was too loose: it also split "A Child's Prayer"
-      // (1989 CSB) at "the kingdom of | heav'n.", three syllables into a line.
-      const startsHere = current && syllable.startsRepeatedSection
-        && current.syllables.length > this._maxPickupSyllables
-        && (phraseStarts.has(syllable.chordPositions[0])
-          || sinceLastPhraseStart(current.syllables, phraseStarts) === 0);
-      if (!current || startsHere) {
-        current = { ...run, syllables: [] };
-        split.push(current);
+      // ends, so it is taken only when it also falls at a phrase boundary. The length test
+      // rejects one opening after the verse's own upbeat ("To Be a Pioneer", 1989 CSB); the
+      // phrase test rejects one opening mid-line ("Isaiah Said", HHC), and wants the boundary
+      // exactly on a phrase start or on the syllable after a pickup that opens it -- a
+      // pickup's worth of slack instead splits "A Child's Prayer" mid-line.
+      if (run.syllables[index].startsRepeatedSection
+        && index - pieceStart > this._maxPickupSyllables
+        && (startsPhrase(run.syllables[index]) || startsPhrase(run.syllables[index - 1]))) {
+        candidates.push(index);
+        pieceStart = index;
       }
-      current.syllables.push(syllable);
-      current.lastChordPosition = syllable.chordPositions.at(-1);
+    }
+
+    // A boundary opening a single line is the engraving coming round inside a stanza, not the
+    // stanza ending -- "Close as a Quiet Prayer" (HHC) closes each verse with a repeat of
+    // "Close as a quiet prayer." Read backwards, so each is measured against the next one
+    // still standing, and kept as the cuts the pieces are sliced at.
+    const cuts = [run.syllables.length];
+    for (let at = candidates.length - 1; at >= 0; at--) {
+      const opensALine = run.syllables
+        .slice(candidates[at] + 1, cuts[0]).some(startsPhrase);
+      if (opensALine) cuts.unshift(candidates[at]);
+    }
+    cuts.unshift(0);
+
+    for (let cut = 0; cut + 1 < cuts.length; cut++) {
+      const syllables = run.syllables.slice(cuts[cut], cuts[cut + 1]);
+      if (syllables.length === 0) continue;
+      split.push({ ...run, syllables: syllables,
+        lastChordPosition: syllables.at(-1).chordPositions.at(-1) });
     }
   }
   return split;
@@ -7582,6 +7662,20 @@ ChScore.prototype._movePickupSyllables = function (runs, phraseStarts, syllables
     for (const chordPosition of syllable.chordPositions) sungChordPositions.add(chordPosition);
   }
 
+  // A run opens a phrase implicitly, and run boundaries never appear in phraseStarts, so a
+  // verse entered through a repeat can be short of one ("Come with Me to Primary"). Only runs
+  // on the same lyric line count -- another line opening is that verse's own start -- and
+  // these are searched only, never used to call a run whole.
+  const openingsByLyricLine = new Map();
+  for (const run of runs) {
+    const start = run.syllables[0]?.chordPositions[0];
+    if (start == null) continue;
+    if (!openingsByLyricLine.has(run.lyricLineId)) openingsByLyricLine.set(run.lyricLineId, new Set());
+    openingsByLyricLine.get(run.lyricLineId).add(start);
+  }
+  // Scanned once, on the first move: almost no score moves a pickup at all
+  let roundMarkersByChordPosition = null;
+
   for (let r = 1; r < runs.length; r++) {
     const previous = runs[r - 1];
     const run = runs[r];
@@ -7590,22 +7684,33 @@ ChScore.prototype._movePickupSyllables = function (runs, phraseStarts, syllables
     if (firstChordPosition == null || phraseStarts.has(firstChordPosition)) continue;
 
     let phraseStart = null;
-    for (const candidate of phraseStarts) {
+    const nearer = (candidate) => {
       if (candidate < firstChordPosition && (phraseStart === null || candidate > phraseStart)) {
         phraseStart = candidate;
       }
-    }
+    };
+    for (const candidate of phraseStarts) nearer(candidate);
+    for (const candidate of openingsByLyricLine.get(run.lyricLineId) ?? []) nearer(candidate);
     if (phraseStart === null) continue;
 
-    // What this run is missing of that phrase is what was sung ahead of it
-    let missing = 0;
+    // What this run is missing of that phrase is what was sung ahead of it, in order: each
+    // syllable moved back stands in for one of these positions
+    const missing = [];
     for (let chordPosition = phraseStart; chordPosition < firstChordPosition; chordPosition++) {
-      if (sungChordPositions.has(chordPosition)) missing += 1;
+      if (sungChordPositions.has(chordPosition)) missing.push(chordPosition);
     }
-    if (missing === 0 || missing > this._maxPickupSyllables) continue;
-    if (previous.syllables.length <= missing) continue;
+    if (missing.length === 0 || missing.length > this._maxPickupSyllables) continue;
+    if (previous.syllables.length <= missing.length) continue;
 
-    run.syllables.unshift(...previous.syllables.splice(-missing));
+    const moved = previous.syllables.splice(-missing.length);
+    // Standing in for a position means carrying its round marker -- the ➀ engraved over the
+    // pickup, which is otherwise sung only on the first pass
+    roundMarkersByChordPosition ??= this._getRoundMarkersByChordPosition();
+    for (const [index, syllable] of moved.entries()) {
+      syllable.roundMarker = syllable.roundMarker
+        ?? roundMarkersByChordPosition.get(missing[index]) ?? null;
+    }
+    run.syllables.unshift(...moved);
     previous.lastChordPosition = previous.syllables.at(-1).chordPositions.at(-1);
   }
   return runs;
@@ -7741,13 +7846,13 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
     // A label reached mid-stanza names the stanza; it doesn't start a new one
     if (label && !current.marker) current.marker = label;
 
-    // Record where the stanza is actually sung. chordPositionRuns already has a jump
-    // (e.g. over a repeat's other ending) split out; a run starting past the current
-    // range opens a new one. Only forward gaps split; backward jumps keep the old
-    // behaviour, since some scores rely on the degenerate (start === end) ranges.
-    for (const [runStart, runEnd] of syllable.chordPositionRuns) {
+    // Record where the stanza is actually sung. A run outside the current range opens another
+    // -- forward over a gap, backward over a jump into a repeat -- but only a syllable's
+    // first run may: the rest are positions it is held across, and one held over a jump back
+    // collects the positions replayed under it, which belong to whatever sings them.
+    for (const [index, [runStart, runEnd]] of syllable.chordPositionRuns.entries()) {
       const lastRange = current.chordPositionRanges.at(-1);
-      if (runStart > lastRange.end) {
+      if (runStart > lastRange.end || (index === 0 && runStart < lastRange.start)) {
         current.chordPositionRanges.push({
           start: runStart,
           end: runEnd,
@@ -7755,7 +7860,7 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
           // Copied, not shared: _consolidateChordPositionRanges pushes into this
           lyricLineIds: [...lastRange.lyricLineIds],
         });
-      } else {
+      } else if (runEnd > lastRange.end) {
         lastRange.end = runEnd;
       }
     }
