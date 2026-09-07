@@ -170,6 +170,7 @@ Input data is provided to Chorister.js when loading the score (see “Methods”
 - **parts** – Parts object (more details below). Optional.
 - **partsTemplate** – Parts template string (more details below). Optional.
 - **sections** – Sections object (more details below). Optional.
+- **sectionsTemplate** – Sections template string (more details below). Optional.
 - **chordSets** – Chord sets object (more details below). Optional.
 - **fermatas** – Fermatas object (more details below). Optional.
 - **lang** – Language code (e.g. `'en'`) selecting the hard-coded dictionary of known hyphenated words used when extracting lyrics from the score's own syllables. Optional, defaults to `'en'`. A score's own printed title/lyrics (if present) are also used and take priority over the hard-coded dictionary, regardless of `lang`.
@@ -184,7 +185,7 @@ With only a score (`scoreUrl` or `scoreContent`), Chorister.js should render cle
 
 - **Parts.** The parts template or parts object provides information about the choral voicing and/or instruments in the score, as well as information about each staff. This enables Chorister.js to identify the melody, and to tag notes in the score and MIDI as belonging to a specific part. If parts metadata isn’t provided, Chorister.js will mark the top part in the first staff as the melody, and remaining parts as accompaniment.
 
-- **Sections.** The sections object identifies the logical sections of the score, such as the introduction, verses, choruses, etc. If not provided, Chorister.js will attempt to generate sections automatically based on lyrics, MEI expansions, verse labels in the score, intro brackets, and other hints. Automatic section generation may be sufficient for some scores.
+- **Sections.** The sections template or sections object identifies the logical sections of the score, such as the introduction, verses, choruses, etc. If not provided, Chorister.js will attempt to generate sections automatically based on lyrics, MEI expansions, verse labels in the score, intro brackets, and other hints. Automatic section generation may be sufficient for some scores.
 
 - **Chord sets.** Guitar chords, ukulele chords, analytical marks, or similar text and/or images to be shown above the music system.
 
@@ -356,6 +357,61 @@ Properties:
 
 <details>
 <summary>Sections</summary>
+
+Sections can be provided as a “sections template” string, or a sections object.
+
+#### Sections template
+
+A sections template lists the sections in the order they’re sung, separated by `;`. Each
+section is a section character followed by the chord position ranges it covers, in
+parentheses:
+
+Section characters:
+- I = introduction
+- V = verse
+- C = chorus
+- B = bridge
+- N = interlude
+- U = unknown (the default, if no section character is given)
+
+Inside each pair of parentheses:
+- **Chord position range** – `start-end` (exclusive end). Default: the whole song (`0` to the end).
+- **Staff numbers** – comma-separated, in square brackets. Default: all staves.
+- **Lyric location** – after `:`, either a comma-separated list of lyricLineIds, `below` (lyrics printed below the music), or `none` (no lyrics). Default: `none` for the instrumental types (introduction and interlude), otherwise all lyricLineIds.
+
+A lyric location standing on its own, with no chord position range in front of it, marks a section the score never plays – `V(:below)` is a verse printed under the music, and it gets no chord position ranges at all. With a chord position range in front of it the section still has its music: `C(0-37:none)` is played inline with nothing sung over it.
+
+Normalizations:
+- Introduction –> I
+- Verse –> V
+- Chorus –> C
+- Bridge –> B
+- Interlude –> N
+- Unknown –> U
+
+Notes:
+- A section with no parentheses includes the whole song – for example, `V` is a single verse that includes all of the chord positions and staves in the sheet music.
+- A section can name more than one range in parentheses – for example, an introduction that includes the first and last part of the song would be `I(0-25)(57-65)`.
+
+Everything a section carries that the template doesn’t spell out is inferred:
+
+- **Numbering** – verses are numbered from 1; a chorus is numbered from 0 when the song opens with one and from 1 otherwise; every other type is numbered from 1.
+- **marker** – only verses have one, and it’s that number. A number the score prints for itself (a verse engraved “5.” below the music) is kept instead.
+- **sectionId** and **name** follow from the type and the number: `verse-2` / “Verse 2”, `chorus-1` / “Chorus”. The first introduction keeps the plain id `introduction`.
+- **placement** – `inline` where the section has music, `below` where its words are printed under the music, `none` where it isn’t placed in the score at all.
+- **pauseAfter** – true after an introduction the score brackets, and after a section the music wraps back from for another playthrough when the song ends too short to breathe in.
+
+Examples:
+- `I(0-12); V(12-42); C(42-63)` – An introduction, a verse, and a chorus, each over its own range.
+- `V(0-32:1.1); C(32-65:1.1); V(0-32:1.2); C(32-65:1.1)` – Two verses on different lyric lines, alternating with a chorus that always sings line 1.
+- `I(0-25[2,3])(57-65[2,3]); V(0-32[2,3]:2.1); C(32-65[2,3]:2.1); V(:below); C(:below)` – An introduction played from staves 2 and 3, a sung verse and chorus, then a verse and chorus whose words are only printed below the music.
+
+If sections aren’t provided as an object, they’re built from the template; if neither is
+provided, Chorister.js generates them automatically. Either way `sectionsTemplate` in the
+returned score data reports the sections as a template, the way `partsTemplate` reports the
+parts – so a generated set of sections can be read, corrected by hand, and handed back.
+
+#### Sections object
 
 ```json
 [

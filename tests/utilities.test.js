@@ -1391,8 +1391,8 @@ In word and deed and mind.</credit-words></credit>
     for (const section of below) {
       expect(section.type).toBe('verse');
       // Printed verses keep their line breaks, and the number is split off the text
-      expect(section.annotatedLyrics).toContain('\n');
-      expect(section.annotatedLyrics[0]).not.toMatch(/\d/);
+      expect(section.lyricsAnnotated).toContain('\n');
+      expect(section.lyricsAnnotated[0]).not.toMatch(/\d/);
       // Nothing sings them, so they hold no chord positions
       expect(section.chordPositionRanges).toEqual([]);
     }
@@ -1400,7 +1400,7 @@ In word and deed and mind.</credit-words></credit>
 
   it('should place printed verses after the ones sung from the staff', () => {
     const placements = score._scoreData.sections
-      .filter(section => section.annotatedLyrics)
+      .filter(section => section.lyricsText)
       .map(section => section.placement);
     expect(placements).toEqual(['inline', 'below', 'below']);
   });
@@ -2471,7 +2471,7 @@ describe('_mergePickupStanzas()', () => {
   function stanza(lyricLineId, marker, words, chordPosition, span = {}) {
     const built = score._newLyricStanza(
       lyricLineId, 'verse', marker, chordPosition, span.ecp ?? chordPosition);
-    built.annotatedLyrics = words;
+    built.lyricsAnnotated = words;
     if (span.end != null) built.chordPositionRanges[0].end = span.end;
     if (span.ecpEnd != null) built.expandedChordPositions[1] = span.ecpEnd;
     return built;
@@ -2489,7 +2489,7 @@ describe('_mergePickupStanzas()', () => {
     expect(merged.length).toBe(1);
     expect(merged[0].marker).toBe('2.');
     // The pickup's words belong to the verse it names, not a stanza of their own
-    expect(merged[0].annotatedLyrics).toBe('Were you there when they crucified my Lord?');
+    expect(merged[0].lyricsAnnotated).toBe('Were you there when they crucified my Lord?');
     // ...and it is sung first, so its chord positions come first
     expect(merged[0].chordPositionRanges.map(range => range.start)).toEqual([40, 0]);
   });
@@ -2528,7 +2528,7 @@ describe('_mergePickupStanzas()', () => {
 
     expect(merged.length).toBe(1);
     expect(merged[0].marker).toBe('2.');
-    expect(merged[0].annotatedLyrics).toBe('Because He died for me, I’ll live again.');
+    expect(merged[0].lyricsAnnotated).toBe('Because He died for me, I’ll live again.');
     expect(merged[0].chordPositionRanges.map(range => range.start)).toEqual([142, 14]);
   });
 
@@ -2542,7 +2542,7 @@ describe('_mergePickupStanzas()', () => {
     const merged = score._mergePickupStanzas([pickup, verse2]);
 
     expect(merged.length).toBe(1);
-    expect(merged[0].annotatedLyrics).toBe('I’m trying to love my neighbor;');
+    expect(merged[0].lyricsAnnotated).toBe('I’m trying to love my neighbor;');
   });
 
   it('should leave an unlabelled fragment that spans more than one measure', () => {

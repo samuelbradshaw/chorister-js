@@ -718,11 +718,11 @@ describe('It Is Well — default load (no parts/sections)', { timeout: 30000 }, 
     expect(verses.map(section => String(section.marker))).toEqual(['1', '2', '3', '4']);
     expect(verses.map(section => lyricLinesOf(section.sectionId)))
       .toEqual([['2.1'], ['2.2'], ['2.3'], ['2.4']]);
-    expect(verses[0].annotatedLyrics).toMatch(/^When peace, like a river/);
+    expect(verses[0].lyricsText).toMatch(/^When peace, like a river/);
   });
 
   it('should sing the same chorus after every verse', () => {
-    const sung = score._scoreData.sections.filter(section => section.annotatedLyrics);
+    const sung = score._scoreData.sections.filter(section => section.lyricsText);
     expect(sung.map(section => section.type))
       .toEqual(['verse', 'chorus', 'verse', 'chorus', 'verse', 'chorus', 'verse', 'chorus']);
     // Only the verses are numbered — a chorus is the same words every time
@@ -730,7 +730,7 @@ describe('It Is Well — default load (no parts/sections)', { timeout: 30000 }, 
       .toEqual(['1', null, '2', null, '3', null, '4', null]);
 
     const choruses = sung.filter(section => section.type === 'chorus');
-    expect(new Set(choruses.map(section => section.annotatedLyrics)).size).toBe(1);
+    expect(new Set(choruses.map(section => section.lyricsText)).size).toBe(1);
   });
 
   it('should have intro brackets even without custom sections', () => {

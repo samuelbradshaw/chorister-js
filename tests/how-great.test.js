@@ -696,11 +696,11 @@ describe('How Great — plain load (no partsTemplate)', { timeout: 30000 }, () =
       .toEqual([['1.1'], ['1.2'], ['1.3'], ['1.4']]);
 
     // Four verses stacked under one pass of the music: own words, same notes
-    expect(new Set(verses.map(section => section.annotatedLyrics)).size).toBe(4);
+    expect(new Set(verses.map(section => section.lyricsAnnotated)).size).toBe(4);
     const ranges = verses.map(section =>
       JSON.stringify(section.chordPositionRanges.map(range => [range.start, range.end])));
     expect(new Set(ranges).size).toBe(1);
-    expect(verses[0].annotatedLyrics).toMatch(/^How great the wisdom and the love/);
+    expect(verses[0].lyricsText).toMatch(/^How great the wisdom and the love/);
   });
 
   it('should detect intro brackets from the MusicXML', () => {
@@ -783,11 +783,11 @@ describe('How Great — lyrics extraction from text file', { timeout: 30000 }, (
     }
   });
 
-  it('below sections should have annotatedLyrics', () => {
+  it('below sections should have lyricsAnnotated', () => {
     const belowSections = score._scoreData.sections.filter(s => s.placement === 'below');
     for (const section of belowSections) {
-      expect(section.annotatedLyrics).toBeDefined();
-      expect(section.annotatedLyrics).not.toBeNull();
+      expect(section.lyricsAnnotated).toBeDefined();
+      expect(section.lyricsAnnotated).not.toBeNull();
     }
   });
 });

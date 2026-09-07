@@ -971,7 +971,7 @@ describe('_normalizeSections() — Section generation', () => {
   });
 
   // ── below section IDs use sequential below-N format ──
-  it('below sections should have sequential below-N sectionIds (HGW with lyrics)', async () => {
+  it('below sections should be numbered by the verse they are (HGW with lyrics)', async () => {
     const score = new ChScore('#score-container');
     ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
@@ -982,12 +982,13 @@ describe('_normalizeSections() — Section generation', () => {
 
     const belowSections = score._scoreData.sections.filter(s => s.placement === 'below');
     expect(belowSections.length).toBe(2);
-    expect(belowSections[0].sectionId).toBe('below-0');
-    expect(belowSections[1].sectionId).toBe('below-1');
+    // HGW prints verses 5 and 6 under the music, and they keep those numbers
+    expect(belowSections[0].sectionId).toBe('verse-5');
+    expect(belowSections[1].sectionId).toBe('verse-6');
   });
 
-  // ── annotatedLyrics attached to inline verse sections ──
-  it('inline verse sections should have annotatedLyrics from lyric stanzas (HGW with lyrics)', async () => {
+  // ── lyricsAnnotated attached to inline verse sections ──
+  it('inline verse sections should have lyricsAnnotated from lyric stanzas (HGW with lyrics)', async () => {
     const score = new ChScore('#score-container');
     ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
@@ -1001,12 +1002,12 @@ describe('_normalizeSections() — Section generation', () => {
     );
     expect(inlineVerses.length).toBe(4);
     for (const verse of inlineVerses) {
-      expect(verse.annotatedLyrics).not.toBeNull();
+      expect(verse.lyricsAnnotated).not.toBeNull();
     }
   });
 
-  // ── below sections have annotatedLyrics ──
-  it('below sections should carry annotatedLyrics from extra lyric stanzas', async () => {
+  // ── below sections have lyricsAnnotated ──
+  it('below sections should carry lyricsAnnotated from extra lyric stanzas', async () => {
     const score = new ChScore('#score-container');
     ChScore.prototype._drawScore = function() {};
     await score.load('musicxml', {
@@ -1017,8 +1018,8 @@ describe('_normalizeSections() — Section generation', () => {
 
     const belowSections = score._scoreData.sections.filter(s => s.placement === 'below');
     for (const section of belowSections) {
-      expect(section.annotatedLyrics).toBeDefined();
-      expect(section.annotatedLyrics).not.toBeNull();
+      expect(section.lyricsAnnotated).toBeDefined();
+      expect(section.lyricsAnnotated).not.toBeNull();
     }
   });
 
@@ -1065,8 +1066,8 @@ describe('_normalizeSections() — Section generation', () => {
     });
     ChScore.prototype._drawScore = origDrawScore;
 
-    expect(score._scoreData.sectionsById['below-0']).toBeDefined();
-    expect(score._scoreData.sectionsById['below-1']).toBeDefined();
+    expect(score._scoreData.sectionsById['verse-5']).toBeDefined();
+    expect(score._scoreData.sectionsById['verse-6']).toBeDefined();
   });
 
   // ── pre-built introduction section is preserved as first section ──
@@ -1660,55 +1661,51 @@ describe('_getIntroSectionFromChordPositions()', () => {
   });
 
   it('should return undefined when given an empty ranges array', () => {
-    const result = score._getIntroSectionFromChordPositions([], [1, 2], true);
+    const result = score._getIntroSectionFromChordPositions([], [1, 2]);
     expect(result).toBeUndefined();
   });
 
   it('should return an intro section for a single range', () => {
-    const result = score._getIntroSectionFromChordPositions([[0, 4]], [1, 2], true);
+    const result = score._getIntroSectionFromChordPositions([[0, 4]], [1, 2]);
     expect(result).toBeDefined();
-    expect(result.sectionId).toBe('introduction');
     expect(result.type).toBe('introduction');
-    expect(result.name).toBe('Introduction');
+  });
+
+  it('should leave the id, name and pause to _normalizeSections', () => {
+    // They depend on the finished section list, not on the introduction alone
+    const result = score._getIntroSectionFromChordPositions([[0, 4]], [1, 2]);
+    expect(result.sectionId).toBeNull();
+    expect(result.name).toBeNull();
+    expect(result.pauseAfter).toBe(false);
   });
 
   it('should set chordPositionRanges with start, end, staffNumbers, and lyricLineIds', () => {
-    const result = score._getIntroSectionFromChordPositions([[0, 4]], [1, 2], true);
+    const result = score._getIntroSectionFromChordPositions([[0, 4]], [1, 2]);
     expect(result.chordPositionRanges).toEqual([
       { start: 0, end: 4, staffNumbers: [1, 2], lyricLineIds: [] },
     ]);
   });
 
   it('should handle multiple ranges', () => {
-    const result = score._getIntroSectionFromChordPositions([[0, 4], [10, 15]], [1], false);
+    const result = score._getIntroSectionFromChordPositions([[0, 4], [10, 15]], [1]);
     expect(result.chordPositionRanges.length).toBe(2);
     expect(result.chordPositionRanges[0]).toEqual({ start: 0, end: 4, staffNumbers: [1], lyricLineIds: [] });
     expect(result.chordPositionRanges[1]).toEqual({ start: 10, end: 15, staffNumbers: [1], lyricLineIds: [] });
   });
 
-  it('should set pauseAfter=true when passed true', () => {
-    const result = score._getIntroSectionFromChordPositions([[0, 4]], [1], true);
-    expect(result.pauseAfter).toBe(true);
-  });
-
-  it('should set pauseAfter=false when passed false', () => {
-    const result = score._getIntroSectionFromChordPositions([[0, 4]], [1], false);
-    expect(result.pauseAfter).toBe(false);
-  });
-
   it('should set marker=null and placement="inline"', () => {
-    const result = score._getIntroSectionFromChordPositions([[0, 4]], [1], true);
+    const result = score._getIntroSectionFromChordPositions([[0, 4]], [1]);
     expect(result.marker).toBeNull();
     expect(result.placement).toBe('inline');
   });
 
-  it('should set annotatedLyrics=null', () => {
-    const result = score._getIntroSectionFromChordPositions([[5, 10]], [1, 2], true);
-    expect(result.annotatedLyrics).toBeNull();
+  it('should set lyricsAnnotated=null', () => {
+    const result = score._getIntroSectionFromChordPositions([[5, 10]], [1, 2]);
+    expect(result.lyricsAnnotated).toBeNull();
   });
 
   it('should use the provided staffNumbers for all ranges', () => {
-    const result = score._getIntroSectionFromChordPositions([[0, 2], [5, 8]], [1, 2, 3], true);
+    const result = score._getIntroSectionFromChordPositions([[0, 2], [5, 8]], [1, 2, 3]);
     for (const range of result.chordPositionRanges) {
       expect(range.staffNumbers).toEqual([1, 2, 3]);
     }
@@ -1770,12 +1767,6 @@ describe('_getIntroSectionFromBrackets()', () => {
     expect(result.chordPositionRanges[1]).toMatchObject({ start: 10, end: 15 });
   });
 
-  it('should always set pauseAfter=true', () => {
-    const brackets = [bracket(0, 'start'), bracket(4, 'end')];
-    const result = score._getIntroSectionFromBrackets(doc(brackets), [1]);
-    expect(result.pauseAfter).toBe(true);
-  });
-
   it('should assign staffNumbers to all ranges', () => {
     const brackets = [bracket(0, 'start'), bracket(4, 'end')];
     const result = score._getIntroSectionFromBrackets(doc(brackets), [1, 2, 3]);
@@ -1811,9 +1802,7 @@ describe('_getIntroSectionFromBrackets()', () => {
   it('should return an introduction section object', () => {
     const brackets = [bracket(0, 'start'), bracket(8, 'end')];
     const result = score._getIntroSectionFromBrackets(doc(brackets), [1, 2]);
-    expect(result.sectionId).toBe('introduction');
     expect(result.type).toBe('introduction');
-    expect(result.name).toBe('Introduction');
   });
 });
 
@@ -2354,7 +2343,7 @@ describe('load() — section with placement "none"', () => {
         placement: 'below',
         pauseAfter: false,
         chordPositionRanges: [],
-        annotatedLyrics: 'Amazing grace how sweet the sound',
+        lyricsAnnotated: 'Amazing grace how sweet the sound',
       },
       {
         sectionId: 'hidden-verse',
@@ -2364,7 +2353,7 @@ describe('load() — section with placement "none"', () => {
         placement: 'none',
         pauseAfter: false,
         chordPositionRanges: [],
-        annotatedLyrics: 'Should not appear',
+        lyricsAnnotated: 'Should not appear',
       },
     ];
 
@@ -2531,17 +2520,19 @@ describe('_generateSectionsFromSimpleScore', () => {
       expect(sections.every(s => s.type === 'verse')).toBe(true);
     });
 
-    it('should have sequential sectionId format', () => {
-      expect(sections[0].sectionId).toBe('verse-1');
-      expect(sections[1].sectionId).toBe('verse-2');
+    it('should leave ids and names to _normalizeSections', () => {
+      // The verse's own number is the generator's to read off the score; what it is called
+      // and keyed by follows from the finished list
+      expect(sections.map(section => section.sectionId)).toEqual([null, null]);
+      expect(sections.map(section => section.name)).toEqual([null, null]);
     });
 
     it('verse sections should have correct properties', () => {
       expect(sections[0]).toMatchObject({
-        type: 'verse', name: 'Verse 1', marker: 1, placement: 'inline', annotatedLyrics: null,
+        type: 'verse', marker: 1, placement: 'inline', lyricsAnnotated: null,
       });
       expect(sections[1]).toMatchObject({
-        type: 'verse', name: 'Verse 2', marker: 2, placement: 'inline', annotatedLyrics: null,
+        type: 'verse', marker: 2, placement: 'inline', lyricsAnnotated: null,
       });
     });
 
@@ -2565,7 +2556,7 @@ describe('_generateSectionsFromSimpleScore', () => {
     const mei = buildMEI({ 1: notes });
     const sections = generate(mei, [1], 4, [1]);
     expect(sections).toHaveLength(1);
-    expect(sections[0].sectionId).toBe('verse-1');
+    expect(sections[0].type).toBe('verse');
   });
 
   // ── Chorus detection ──
@@ -2597,7 +2588,6 @@ describe('_generateSectionsFromSimpleScore', () => {
 
     it('chorus sections should have correct properties', () => {
       for (const s of sections.filter(s => s.type === 'chorus')) {
-        expect(s.name).toBe('Chorus');
         expect(s.marker).toBeNull();
         expect(s.placement).toBe('inline');
       }
@@ -2639,19 +2629,27 @@ describe('_generateSectionsFromSimpleScore', () => {
   });
 
   // ── pauseAfter ──
-  describe('pauseAfter logic', () => {
+  // The pause itself is _getPauseAfters' answer now, over the finished section list, but
+  // the facts it reads are the same ones this generator used to read for itself
+  describe('pauseAfter logic (via _getPauseAfters)', () => {
+    const pausesFor = (mei, numChordPositions, sections) =>
+      ChScore.prototype._getPauseAfters.call(
+        { __proto__: ChScore.prototype,
+          _scoreData: { meiParsed: mei, numChordPositions: numChordPositions } },
+        sections);
+
     it('non-last verse should have pauseAfter=true', () => {
       const notes = melodyNotes(6, () => [{ n: 1 }, { n: 2 }]);
       const mei = buildMEI({ 1: notes });
       const sections = generate(mei, [1], 6, [1, 2]);
-      expect(sections[0].pauseAfter).toBe(true);  // verse 1 (not last)
+      expect(pausesFor(mei, 6, sections)[0]).toBe(true);  // verse 1 (the music wraps back)
     });
 
     it('last verse should have pauseAfter=false', () => {
       const notes = melodyNotes(6, () => [{ n: 1 }, { n: 2 }]);
       const mei = buildMEI({ 1: notes });
       const sections = generate(mei, [1], 6, [1, 2]);
-      expect(sections[1].pauseAfter).toBe(false);  // verse 2 (last)
+      expect(pausesFor(mei, 6, sections)[1]).toBe(false);  // verse 2 (nothing follows)
     });
 
     it('rest at last chord position → pauseAfter=false even for non-last verse', () => {
@@ -2661,7 +2659,7 @@ describe('_generateSectionsFromSimpleScore', () => {
       ];
       const mei = buildMEI({ 1: notes });
       const sections = generate(mei, [1], 6, [1, 2]);
-      expect(sections[0].pauseAfter).toBe(false);
+      expect(pausesFor(mei, 6, sections)[0]).toBe(false);
     });
 
     it('no lyrics at last chord position → pauseAfter=false', () => {
@@ -2671,7 +2669,7 @@ describe('_generateSectionsFromSimpleScore', () => {
       ];
       const mei = buildMEI({ 1: notes });
       const sections = generate(mei, [1], 6, [1, 2]);
-      expect(sections[0].pauseAfter).toBe(false);
+      expect(pausesFor(mei, 6, sections)[0]).toBe(false);
     });
 
     it('long note (dur < 4, i.e. half note) at last position → pauseAfter=false', () => {
@@ -2681,11 +2679,10 @@ describe('_generateSectionsFromSimpleScore', () => {
       ];
       const mei = buildMEI({ 1: notes });
       const sections = generate(mei, [1], 6, [1, 2]);
-      expect(sections[0].pauseAfter).toBe(false);
+      expect(pausesFor(mei, 6, sections)[0]).toBe(false);
     });
 
-    it('intermediate range in multi-range verse always has pauseAfter=false', () => {
-      // Verse-chorus structure: verse range is not last → pauseAfter=false
+    it('a section the music does not wrap back from has pauseAfter=false', () => {
       const notes = [
         ...Array.from({ length: 6 }, (_, i) => ({
           pos: i, melody: true, dur: 8, lyrics: [{ n: 1 }, { n: 2 }],
@@ -2696,8 +2693,8 @@ describe('_generateSectionsFromSimpleScore', () => {
       ];
       const mei = buildMEI({ 1: notes });
       const sections = generate(mei, [1], 12, [1, 2]);
-      // verse-1 is the first range (not last in its verse iteration) → pauseAfter=false
-      expect(sections[0].pauseAfter).toBe(false);
+      // The chorus follows the verse where it ended, so nothing wrapped back
+      expect(pausesFor(mei, 12, sections)[0]).toBe(false);
     });
   });
 
@@ -3154,4 +3151,191 @@ describe('_extractPianoIntroduction', () => {
     expect(slurs[0].getAttribute('startid')).toBe('#k1-intro');
     expect(slurs[0].getAttribute('endid')).toBe('#k2-intro');
   });
+});
+
+// ============================================================
+// sectionsTemplate
+// ============================================================
+
+describe('load() — sectionsTemplate', () => {
+  const loadWithTemplate = async (sectionsTemplate) => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    const score = new ChScore('#score-container');
+    const scoreData = await score.load('musicxml', {
+      scoreContent: sampleMusicXml,
+      sectionsTemplate: sectionsTemplate,
+    });
+    ChScore.prototype._drawScore = origDrawScore;
+    return scoreData;
+  };
+
+  it('should store the template it was given', async () => {
+    const scoreData = await loadWithTemplate('I(0-12); V(12-37)');
+    expect(scoreData.sectionsTemplate).toBe('I(0-12); V(12-37)');
+  });
+
+  it('should build sections in template order, with ids, names, and markers', async () => {
+    const scoreData = await loadWithTemplate('I(0-12); V(12-37); C(12-37); V(12-37)');
+    expect(scoreData.sections.map(section => section.sectionId))
+      .toEqual(['introduction', 'verse-1', 'chorus-1', 'verse-2']);
+    expect(scoreData.sections.map(section => section.type))
+      .toEqual(['introduction', 'verse', 'chorus', 'verse']);
+    expect(scoreData.sections.map(section => section.name))
+      .toEqual(['Introduction', 'Verse 1', 'Chorus', 'Verse 2']);
+    // Verses are numbered in the order the template sings them; other types repeat unmarked
+    expect(scoreData.sections.map(section => section.marker))
+      .toEqual([null, '1', null, '2']);
+  });
+
+  it('should read chord position ranges, staff numbers, and lyric lines', async () => {
+    const scoreData = await loadWithTemplate('V(0-20[1]:1.1)(20-37[1,2]:1.2)');
+    const verse = scoreData.sectionsById['verse-1'];
+    expect(verse.chordPositionRanges).toEqual([
+      { start: 0, end: 20, staffNumbers: [1], lyricLineIds: ['1.1'] },
+      { start: 20, end: 37, staffNumbers: [1, 2], lyricLineIds: ['1.2'] },
+    ]);
+  });
+
+  it('should default an unspecified section to the whole song on every staff', async () => {
+    const scoreData = await loadWithTemplate('V');
+    const verse = scoreData.sectionsById['verse-1'];
+    expect(verse.chordPositionRanges.length).toBe(1);
+    expect(verse.chordPositionRanges[0].start).toBe(0);
+    expect(verse.chordPositionRanges[0].end).toBe(scoreData.numChordPositions);
+    expect(verse.chordPositionRanges[0].staffNumbers).toEqual(scoreData.staffNumbers);
+    // null is every lyric line, the way a generated section spells it
+    expect(verse.chordPositionRanges[0].lyricLineIds).toBe(null);
+  });
+
+  it('should default the instrumental types to no lyric lines', async () => {
+    const scoreData = await loadWithTemplate('I(0-12); N(12-20); V(20-37)');
+    expect(scoreData.sectionsById['introduction'].chordPositionRanges[0].lyricLineIds).toEqual([]);
+    expect(scoreData.sectionsById['interlude-1'].chordPositionRanges[0].lyricLineIds).toEqual([]);
+    expect(scoreData.sectionsById['verse-1'].chordPositionRanges[0].lyricLineIds).toBe(null);
+  });
+
+  it('should read "below" and "none" as no lyric lines, over the music they name', async () => {
+    const scoreData = await loadWithTemplate('V(0-37:below); C(0-37:none)');
+    const verse = scoreData.sectionsById['verse-1'];
+    expect(verse.placement).toBe('below');
+    expect(verse.chordPositionRanges[0].lyricLineIds).toEqual([]);
+    // 'none' says nothing is sung here, not that the section isn't placed: it still has music
+    const chorus = scoreData.sectionsById['chorus-1'];
+    expect(chorus.placement).toBe('inline');
+    expect(chorus.chordPositionRanges[0].lyricLineIds).toEqual([]);
+  });
+
+  it('should read a location with no music as a section that is not played', async () => {
+    const scoreData = await loadWithTemplate('V(0-37:1.1); V(:below); C(:none)');
+    // A verse printed below the music has no chord positions of its own
+    const printed = scoreData.sectionsById['verse-2'];
+    expect(printed.placement).toBe('below');
+    expect(printed.chordPositionRanges).toEqual([]);
+    const unplaced = scoreData.sectionsById['chorus-1'];
+    expect(unplaced.placement).toBe('none');
+    expect(unplaced.chordPositionRanges).toEqual([]);
+  });
+
+  it('should accept spelled-out section names and ignore whitespace', async () => {
+    const scoreData = await loadWithTemplate('Introduction (0-12) ; Verse (12-37) ; Chorus');
+    expect(scoreData.sections.map(section => section.type))
+      .toEqual(['introduction', 'verse', 'chorus']);
+  });
+
+  it('should default a section with no character to unknown', async () => {
+    const scoreData = await loadWithTemplate('(0-37)');
+    expect(scoreData.sections[0].sectionId).toBe('unknown-1');
+    expect(scoreData.sections[0].type).toBe('unknown');
+    expect(scoreData.sections[0].name).toBe('Unknown');
+  });
+
+  it('should drop staff numbers the score does not have', async () => {
+    const scoreData = await loadWithTemplate('V(0-37[1,9])');
+    expect(scoreData.sectionsById['verse-1'].chordPositionRanges[0].staffNumbers).toEqual([1]);
+  });
+
+  it('should pause after the introduction only', async () => {
+    const scoreData = await loadWithTemplate('I(0-12); V(12-37)');
+    expect(scoreData.sectionsById['introduction'].pauseAfter).toBe(true);
+    expect(scoreData.sectionsById['verse-1'].pauseAfter).toBe(false);
+  });
+
+  it('should number ids for every type but put a number in the name only for verses', async () => {
+    const scoreData = await loadWithTemplate(
+      'I(0-4); V(4-8); C(8-12); V(12-16); C(16-20); B(20-24); N(24-28); I(28-32); U(32-37)');
+    expect(scoreData.sections.map(section => [section.sectionId, section.name, section.marker]))
+      .toEqual([
+        // The first introduction keeps the plain id the hideSectionIds option documents
+        ['introduction', 'Introduction', null],
+        ['verse-1', 'Verse 1', '1'],
+        ['chorus-1', 'Chorus', null],
+        ['verse-2', 'Verse 2', '2'],
+        ['chorus-2', 'Chorus', null],
+        ['bridge-1', 'Bridge', null],
+        ['interlude-1', 'Interlude', null],
+        ['introduction-2', 'Introduction', null],
+        ['unknown-1', 'Unknown', null],
+      ]);
+  });
+
+  it('should number a chorus from 0 when the song opens with one', async () => {
+    const scoreData = await loadWithTemplate('C(0-8); V(8-16); C(16-24); V(24-37)');
+    expect(scoreData.sections.map(section => section.sectionId))
+      .toEqual(['chorus-0', 'verse-1', 'chorus-1', 'verse-2']);
+    // Still just "Chorus" either way
+    expect(scoreData.sections.map(section => section.name))
+      .toEqual(['Chorus', 'Verse 1', 'Chorus', 'Verse 2']);
+  });
+
+  it('should leave no chord position outside a section', async () => {
+    // Music after the last section (a piano tail) and a gap between two sections
+    const scoreData = await loadWithTemplate('I(0-4); V(4-10:1.1); C(14-20:1.1)');
+    expect(scoreData.sectionsById['introduction'].chordPositionRanges[0])
+      .toMatchObject({ start: 0, end: 4 });
+    // The gap at 10-13 closes into the section before it
+    expect(scoreData.sectionsById['verse-1'].chordPositionRanges[0])
+      .toMatchObject({ start: 4, end: 14 });
+    // And the tail runs the last section out to the end of the song
+    expect(scoreData.sectionsById['chorus-1'].chordPositionRanges[0])
+      .toMatchObject({ start: 14, end: scoreData.numChordPositions });
+
+    const covered = new Set();
+    for (const section of scoreData.sections) {
+      for (const range of section.chordPositionRanges) {
+        for (let cp = range.start; cp < range.end; cp++) covered.add(cp);
+      }
+    }
+    expect(covered.size).toBe(scoreData.numChordPositions);
+  });
+
+  it('should give a gap to every section that ends where it begins', async () => {
+    // Two parts singing at once, both stopping short of the end: the tail is equally theirs
+    const scoreData = await loadWithTemplate('I(0-4); V(4-30:1.1); V(6-30:2.1)');
+    expect(scoreData.sectionsById['verse-1'].chordPositionRanges[0].end)
+      .toBe(scoreData.numChordPositions);
+    expect(scoreData.sectionsById['verse-2'].chordPositionRanges[0].end)
+      .toBe(scoreData.numChordPositions);
+    // The one that already ended where the next began is left alone
+    expect(scoreData.sectionsById['introduction'].chordPositionRanges[0].end).toBe(4);
+  });
+
+  it('should let a provided sections object win over a template', async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function() {};
+    const score = new ChScore('#score-container');
+    const scoreData = await score.load('musicxml', {
+      scoreContent: sampleMusicXml,
+      sections: [{
+        sectionId: 'given', type: 'verse', name: 'Given', marker: null,
+        placement: 'inline', pauseAfter: false,
+        chordPositionRanges: [{ start: 0, end: 37, staffNumbers: [1, 2], lyricLineIds: ['1.1'] }],
+      }],
+      sectionsTemplate: 'I(0-12); C(12-37)',
+    });
+    ChScore.prototype._drawScore = origDrawScore;
+    expect(scoreData.sections[0].sectionId).toBe('given');
+    expect(scoreData.sections.some(section => section.type === 'chorus')).toBe(false);
+  });
+
 });

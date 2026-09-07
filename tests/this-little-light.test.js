@@ -583,13 +583,15 @@ describe('This Little Light — plain load (no partsTemplate)', { timeout: 30000
   });
 
   it('should play an introduction before the first words', () => {
-    // The intro is a section of its own in the expansion, so it carries no lyrics
+    // The intro is a section of its own in the expansion, so it carries no words
     // and never turns up as a stanza — and the words start after it
     const intro = score._scoreData.sections.find(section => section.type === 'introduction');
     expect(intro).toBeDefined();
-    expect(intro.annotatedLyrics).toBeFalsy();
+    expect(intro.lyricsText).toBeFalsy();
+    // It does carry markers, so something anchored to the lyrics has a place in it
+    expect(intro.lyricsAnnotated).toContain('data-ch-chord-position=');
 
-    const sung = score._scoreData.sections.filter(section => section.annotatedLyrics);
+    const sung = score._scoreData.sections.filter(section => section.lyricsText);
     const firstWords = Math.min(...sung[0].chordPositionRanges.map(range => range.start));
     const introEnd = Math.max(...intro.chordPositionRanges.map(range => range.end));
     expect(firstWords).toBe(introEnd);
@@ -598,7 +600,7 @@ describe('This Little Light — plain load (no partsTemplate)', { timeout: 30000
 
   it('should read its stanzas from more than one lyric line', () => {
     expect(score._scoreData.features.hasExpansion).toBe(true);
-    const sung = score._scoreData.sections.filter(section => section.annotatedLyrics);
+    const sung = score._scoreData.sections.filter(section => section.lyricsText);
     const lines = new Set(sung.flatMap(section => lyricLinesOf(section.sectionId)));
     expect(lines.size).toBeGreaterThan(1);
   });
@@ -661,11 +663,11 @@ describe('This Little Light — lyrics extraction from text file', { timeout: 30
     expect(choruses.length).toBe(0);
   });
 
-  it('verse sections should have annotatedLyrics', () => {
+  it('verse sections should have lyricsAnnotated', () => {
     const verses = score._scoreData.sections.filter(s => s.type === 'verse');
     for (const verse of verses) {
-      expect(verse.annotatedLyrics).toBeDefined();
-      expect(verse.annotatedLyrics).not.toBeNull();
+      expect(verse.lyricsAnnotated).toBeDefined();
+      expect(verse.lyricsAnnotated).not.toBeNull();
     }
   });
 });

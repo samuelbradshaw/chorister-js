@@ -3,7 +3,7 @@
  *
  * ChScore._getPhraseStartChordPositions() answers which chord positions start a
  * lyric phrase, and ChScore._getLyricsFromSyllables() calls it to place the line
- * breaks in a stanza's annotatedLyrics. Scoring (ChScore._scorePhraseStarts())
+ * breaks in a stanza's lyricsAnnotated. Scoring (ChScore._scorePhraseStarts())
  * reads each candidate's punctuation, capitalization, note length, rests and
  * measure context; segmentation is a dynamic program over those scores against a
  * prior on how long a line runs.

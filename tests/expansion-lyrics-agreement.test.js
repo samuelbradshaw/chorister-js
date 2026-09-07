@@ -44,7 +44,7 @@ setupStandardHooks();
 // Compare on letters alone: the two paths build their text differently (one joins
 // syllables into words, the other reads <syl> elements straight off the score), so
 // word boundaries and punctuation differ by construction. Sung order does not.
-// annotatedLyrics carries markup when lyrics were aligned to a supplied lyrics file —
+// lyricsAnnotated carries markup when lyrics were aligned to a supplied lyrics file —
 // tags come out first, or their attribute names fold in as letters.
 function foldToLetters(text) {
   return (text ?? '').replace(/<[^>]*>/g, '').toLowerCase().replace(/[^\p{Letter}]/gu, '');
@@ -56,9 +56,11 @@ function foldToLetters(text) {
 function sungLyricsBySection(score) {
   const bySection = new Map();
   for (const section of score._scoreData.sections) {
-    if (!section.annotatedLyrics) continue;
+    // Sections with words. A wordless one carries markers alone, which the expanded
+    // score has nothing to render.
+    if (!section.lyricsText) continue;
     if ((section.chordPositionRanges ?? []).length === 0) continue;
-    bySection.set(section.sectionId, foldToLetters(section.annotatedLyrics));
+    bySection.set(section.sectionId, foldToLetters(section.lyricsAnnotated));
   }
   return bySection;
 }
@@ -218,8 +220,8 @@ describe('Expansion keeps each part to its own words — two-part score', { time
 
   it('should not leak the other part words into a section', () => {
     const [verse1, verse2] = Array.from(expected.values());
-    expect(actual.get('section-0')).not.toContain(verse2.slice(0, 30));
-    expect(actual.get('section-1')).not.toContain(verse1.slice(0, 30));
+    expect(actual.get('verse-1')).not.toContain(verse2.slice(0, 30));
+    expect(actual.get('verse-2')).not.toContain(verse1.slice(0, 30));
   });
 
   // The part that isn't singing this iteration is rested out, not just stripped of its

@@ -151,11 +151,11 @@ describe('alignSyllablesToLyrics — basic alignment', () => {
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
     expect(result.length).toBe(1);
-    // Each syllable should produce a span in annotatedLyrics
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="0"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="1"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="2"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="3"');
+    // Each syllable should produce a span in lyricsAnnotated
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="0"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="1"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="2"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="3"');
   });
 
   it('should populate chordPositionRanges for single stanza', () => {
@@ -194,8 +194,8 @@ describe('alignSyllablesToLyrics — basic alignment', () => {
       syl('Hold', [0, 1, 2], [10, 11, 12]),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="0 1 2"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-expanded-chord-position="10 11 12"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="0 1 2"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-expanded-chord-position="10 11 12"');
   });
 });
 
@@ -213,7 +213,7 @@ describe('alignSyllablesToLyrics — normalization', () => {
       syl('world', 2, 2),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="2"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="2"');
   });
 
   it('should match syllables despite accented characters in lyrics', () => {
@@ -226,8 +226,8 @@ describe('alignSyllablesToLyrics — normalization', () => {
       syl('life', 3, 3),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="2"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="3"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="2"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="3"');
   });
 
   it('should handle digits in lyrics (e.g. Psalm 23)', () => {
@@ -238,8 +238,8 @@ describe('alignSyllablesToLyrics — normalization', () => {
       syl('text', 1, 1),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="0"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="1"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="0"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="1"');
   });
 
   it('should collapse multiple spaces in lyrics', () => {
@@ -251,7 +251,7 @@ describe('alignSyllablesToLyrics — normalization', () => {
       syl('world', 2, 2),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="2"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="2"');
   });
 
   it('should be case-insensitive', () => {
@@ -264,7 +264,7 @@ describe('alignSyllablesToLyrics — normalization', () => {
       syl('grace', 3, 3),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="3"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="3"');
   });
 });
 
@@ -333,7 +333,7 @@ describe('alignSyllablesToLyrics — fuzzy matching', () => {
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
     // All five syllables should appear in the annotated output
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="4"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="4"');
   });
 });
 
@@ -354,11 +354,11 @@ describe('alignSyllablesToLyrics — HTML tag handling', () => {
       syl('text', 5, 5),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="2"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="5"');
-    // The original <em> tags should still be present in annotatedLyrics
-    expect(result[0].annotatedLyrics).toContain('<em>');
-    expect(result[0].annotatedLyrics).toContain('</em>');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="2"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="5"');
+    // The original <em> tags should still be present in lyricsAnnotated
+    expect(result[0].lyricsAnnotated).toContain('<em>');
+    expect(result[0].lyricsAnnotated).toContain('</em>');
   });
 
   it('should skip <strong> tags and still match syllables', () => {
@@ -371,8 +371,8 @@ describe('alignSyllablesToLyrics — HTML tag handling', () => {
       syl('day', 3, 3),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="1"');
-    expect(result[0].annotatedLyrics).toContain('<strong>');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="1"');
+    expect(result[0].lyricsAnnotated).toContain('<strong>');
   });
 
   it('should handle nested HTML tags', () => {
@@ -384,8 +384,8 @@ describe('alignSyllablesToLyrics — HTML tag handling', () => {
       syl('day', 2, 2),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="1"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="2"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="1"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="2"');
   });
 
   it('should handle <span> tags with attributes', () => {
@@ -398,8 +398,8 @@ describe('alignSyllablesToLyrics — HTML tag handling', () => {
       syl('word', 3, 3),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="1"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="3"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="1"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="3"');
   });
 });
 
@@ -421,10 +421,10 @@ describe('alignSyllablesToLyrics — ruby/furigana', () => {
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
     expect(result.length).toBe(1);
     // Should have matched all 4 syllables
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="0"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="1"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="2"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="3"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="0"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="1"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="2"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="3"');
   });
 
   it('should insert spans before their corresponding ruby blocks', () => {
@@ -440,7 +440,7 @@ describe('alignSyllablesToLyrics — ruby/furigana', () => {
       syl('る', 5, 5),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    const al = result[0].annotatedLyrics;
+    const al = result[0].lyricsAnnotated;
 
     // CP0 (しゅ) span should be before <ruby>主...
     const cp0Idx = al.indexOf('data-ch-chord-position="0"');
@@ -463,7 +463,7 @@ describe('alignSyllablesToLyrics — ruby/furigana', () => {
     expect(cp3Idx).toBeLessThan(raIdx);
   });
 
-  it('should preserve ruby HTML in annotatedLyrics', () => {
+  it('should preserve ruby HTML in lyricsAnnotated', () => {
     const lyrics = '[Verse 1]\n<ruby>光<rp>(</rp><rt>ひかり</rt><rp>)</rp></ruby>';
     const syllables = [
       syl('', [], [], []),
@@ -472,9 +472,9 @@ describe('alignSyllablesToLyrics — ruby/furigana', () => {
       syl('り', 2, 2),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('<ruby>');
-    expect(result[0].annotatedLyrics).toContain('<rt>ひかり</rt>');
-    expect(result[0].annotatedLyrics).toContain('</ruby>');
+    expect(result[0].lyricsAnnotated).toContain('<ruby>');
+    expect(result[0].lyricsAnnotated).toContain('<rt>ひかり</rt>');
+    expect(result[0].lyricsAnnotated).toContain('</ruby>');
   });
 
   it('should handle multiple ruby blocks in a line', () => {
@@ -489,9 +489,9 @@ describe('alignSyllablesToLyrics — ruby/furigana', () => {
       syl('る', 5, 5),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="0"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="2"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="5"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="0"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="2"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="5"');
   });
 
   it('should handle ruby blocks with multi-character readings', () => {
@@ -509,8 +509,8 @@ describe('alignSyllablesToLyrics — ruby/furigana', () => {
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
     // All reading chars + plain chars should match
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="0"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="6"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="0"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="6"');
   });
 
   it('should handle mixed ruby and plain text with stanza breaks', () => {
@@ -542,8 +542,8 @@ describe('alignSyllablesToLyrics — ruby/furigana', () => {
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
     // Empty <rt> should be skipped, plain text should still match
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="0"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-chord-position="2"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="0"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-chord-position="2"');
   });
 });
 
@@ -618,7 +618,7 @@ describe('alignSyllablesToLyrics — span marker attributes', () => {
       syl('world', 2, 2, ['1.1']),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-lyric-line-id="1.1"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-lyric-line-id="1.1"');
   });
 
   it('should include expanded-chord-position attribute in span markers', () => {
@@ -629,8 +629,8 @@ describe('alignSyllablesToLyrics — span marker attributes', () => {
       syl('lo', 1, 43),
     ];
     const result = ChScore.prototype._alignSyllablesToLyrics(lyrics, syllables, STAFF_NUMBERS);
-    expect(result[0].annotatedLyrics).toContain('data-ch-expanded-chord-position="42"');
-    expect(result[0].annotatedLyrics).toContain('data-ch-expanded-chord-position="43"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-expanded-chord-position="42"');
+    expect(result[0].lyricsAnnotated).toContain('data-ch-expanded-chord-position="43"');
   });
 });
 
@@ -652,21 +652,21 @@ describe('alignSyllablesToLyrics — integration with How Great the Wisdom', () 
     ChScore.prototype._drawScore = origDrawScore;
   });
 
-  it('should produce sections with annotatedLyrics', () => {
+  it('should produce sections with lyricsAnnotated', () => {
     expect(score._scoreData.sections).toBeDefined();
-    const lyricSections = score._scoreData.sections.filter(s => s.annotatedLyrics);
+    const lyricSections = score._scoreData.sections.filter(s => s.lyricsText);
     expect(lyricSections.length).toBeGreaterThan(0);
   });
 
-  it('should produce annotatedLyrics containing span markers for aligned sections', () => {
+  it('should produce lyricsAnnotated containing span markers for aligned sections', () => {
     // HGW has 6 text verses but only 4 MEI verse lines, so some sections
-    // will have annotatedLyrics text but no span markers. Check the aligned ones.
+    // will have lyricsAnnotated text but no span markers. Check the aligned ones.
     const alignedSections = score._scoreData.sections.filter(
-      s => s.annotatedLyrics && s.chordPositionRanges && s.chordPositionRanges.length > 0
+      s => s.lyricsAnnotated && s.chordPositionRanges && s.chordPositionRanges.length > 0
     );
     expect(alignedSections.length).toBeGreaterThan(0);
     for (const section of alignedSections) {
-      expect(section.annotatedLyrics).toContain('data-ch-chord-position=');
+      expect(section.lyricsAnnotated).toContain('data-ch-chord-position=');
     }
   });
 
@@ -703,13 +703,13 @@ describe('alignSyllablesToLyrics — integration with How Great the Wisdom', () 
     expect(result[0].expandedChordPositions).toEqual([10, 15]);
   });
 
-  it('should preserve original lyrics text within annotatedLyrics', () => {
-    const lyricSections = score._scoreData.sections.filter(s => s.annotatedLyrics);
+  it('should preserve original lyrics text within lyricsAnnotated', () => {
+    const lyricSections = score._scoreData.sections.filter(s => s.lyricsText);
     // The first verse should contain text from the lyrics file
     const firstVerse = lyricSections.find(s => s.type === 'verse');
     if (firstVerse) {
       // Strip spans and check for original words
-      const stripped = firstVerse.annotatedLyrics.replace(/<span[^>]*><\/span>/g, '');
+      const stripped = firstVerse.lyricsAnnotated.replace(/<span[^>]*><\/span>/g, '');
       expect(stripped.toLowerCase()).toContain('how');
       expect(stripped.toLowerCase()).toContain('great');
     }

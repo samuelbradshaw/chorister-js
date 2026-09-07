@@ -16,7 +16,7 @@
  * - Full pipeline: HGW (6 verses, 4 inline + 2 below, no chorus)
  * - Full pipeline: IIW (4 verses + 4 choruses, pre-built sections)
  * - Full pipeline: TLL (2 verses, melody + chords layout)
- * - annotatedLyrics content (span markers, original text preservation)
+ * - lyricsAnnotated content (span markers, original text preservation)
  * - chordPositionRanges and expandedChordPositions in output stanzas
  * - Stanza type and marker assignment from lyrics text headers
  */
@@ -101,58 +101,58 @@ describe('_extractLyricStanzas — How Great the Wisdom', { timeout: 30000 }, ()
     });
   });
 
-  // ── annotatedLyrics content ──
-  describe('annotatedLyrics content', () => {
-    it('all verse sections should have non-null annotatedLyrics', () => {
+  // ── lyricsAnnotated content ──
+  describe('lyricsAnnotated content', () => {
+    it('all verse sections should have non-null lyricsAnnotated', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
       for (const verse of verses) {
-        expect(verse.annotatedLyrics).toBeDefined();
-        expect(verse.annotatedLyrics).not.toBeNull();
-        expect(verse.annotatedLyrics.length).toBeGreaterThan(0);
+        expect(verse.lyricsAnnotated).toBeDefined();
+        expect(verse.lyricsAnnotated).not.toBeNull();
+        expect(verse.lyricsAnnotated.length).toBeGreaterThan(0);
       }
     });
 
-    it('inline verse annotatedLyrics should contain span markers', () => {
+    it('inline verse lyricsAnnotated should contain span markers', () => {
       const inlineVerses = score._scoreData.sections.filter(
         s => s.type === 'verse' && s.placement === 'inline'
       );
       for (const verse of inlineVerses) {
-        expect(verse.annotatedLyrics).toContain('data-ch-chord-position=');
-        expect(verse.annotatedLyrics).toContain('data-ch-expanded-chord-position=');
-        expect(verse.annotatedLyrics).toContain('data-ch-lyric-line-id=');
+        expect(verse.lyricsAnnotated).toContain('data-ch-chord-position=');
+        expect(verse.lyricsAnnotated).toContain('data-ch-expanded-chord-position=');
+        expect(verse.lyricsAnnotated).toContain('data-ch-lyric-line-id=');
       }
     });
 
-    it('below verse annotatedLyrics should be plain text without span markers', () => {
+    it('below verse lyricsAnnotated should be plain text without span markers', () => {
       // Below verses have no MEI lyric line to extract syllables from,
       // so no spans are inserted — they are plain text only.
       const belowVerses = score._scoreData.sections.filter(
         s => s.type === 'verse' && s.placement === 'below'
       );
       for (const verse of belowVerses) {
-        expect(verse.annotatedLyrics).toBeDefined();
-        expect(verse.annotatedLyrics).not.toContain('data-ch-chord-position=');
+        expect(verse.lyricsAnnotated).toBeDefined();
+        expect(verse.lyricsAnnotated).not.toContain('data-ch-chord-position=');
       }
     });
 
-    it('verse 1 annotatedLyrics should preserve original text from lyrics file', () => {
+    it('verse 1 lyricsAnnotated should preserve original text from lyrics file', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
       const verse1 = verses[0];
-      const stripped = verse1.annotatedLyrics.replace(/<span[^>]*><\/span>/g, '');
+      const stripped = verse1.lyricsAnnotated.replace(/<span[^>]*><\/span>/g, '');
       expect(stripped).toContain('How great the wisdom and the love');
     });
 
-    it('verse 6 (below) annotatedLyrics should preserve original text', () => {
+    it('verse 6 (below) lyricsAnnotated should preserve original text', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
       const verse6 = verses[5];
-      const stripped = verse6.annotatedLyrics.replace(/<span[^>]*><\/span>/g, '');
+      const stripped = verse6.lyricsAnnotated.replace(/<span[^>]*><\/span>/g, '');
       expect(stripped).toContain('In memory of the broken flesh');
     });
 
-    it('annotatedLyrics should not contain stanza headers like [Verse 1]', () => {
+    it('lyricsAnnotated should not contain stanza headers like [Verse 1]', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
       for (const verse of verses) {
-        expect(verse.annotatedLyrics).not.toMatch(/\[Verse \d+\]/);
+        expect(verse.lyricsAnnotated).not.toMatch(/\[Verse \d+\]/);
       }
     });
   });
@@ -315,52 +315,57 @@ describe('_extractLyricStanzas — It Is Well', { timeout: 30000 }, () => {
     });
   });
 
-  // ── annotatedLyrics content ──
-  describe('annotatedLyrics content', () => {
-    it('verse sections should have annotatedLyrics with span markers', () => {
+  // ── lyricsAnnotated content ──
+  describe('lyricsAnnotated content', () => {
+    it('verse sections should have lyricsAnnotated with span markers', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
       for (const verse of verses) {
-        expect(verse.annotatedLyrics).toBeDefined();
-        expect(verse.annotatedLyrics).not.toBeNull();
-        expect(verse.annotatedLyrics).toContain('data-ch-chord-position=');
+        expect(verse.lyricsAnnotated).toBeDefined();
+        expect(verse.lyricsAnnotated).not.toBeNull();
+        expect(verse.lyricsAnnotated).toContain('data-ch-chord-position=');
       }
     });
 
-    it('chorus sections should have annotatedLyrics with span markers', () => {
+    it('chorus sections should have lyricsAnnotated with span markers', () => {
       const choruses = score._scoreData.sections.filter(s => s.type === 'chorus');
       for (const chorus of choruses) {
-        expect(chorus.annotatedLyrics).toBeDefined();
-        expect(chorus.annotatedLyrics).not.toBeNull();
-        expect(chorus.annotatedLyrics).toContain('data-ch-chord-position=');
+        expect(chorus.lyricsAnnotated).toBeDefined();
+        expect(chorus.lyricsAnnotated).not.toBeNull();
+        expect(chorus.lyricsAnnotated).toContain('data-ch-chord-position=');
       }
     });
 
-    it('introduction section should NOT have annotatedLyrics', () => {
+    it('introduction section should have markers but no words', () => {
       const intro = score._scoreData.sections.find(s => s.type === 'introduction');
-      expect(intro.annotatedLyrics == null).toBe(true);
+      // No words to read: an introduction is played, not sung
+      expect(intro.lyricsText == null).toBe(true);
+      // But something for a lyrics view to anchor to -- guitar chords over an introduction
+      expect(intro.lyricsAnnotated).toContain('data-ch-chord-position=');
+      // Markers only, with no text between them
+      expect(intro.lyricsAnnotated.replace(/<span[^>]*><\/span>/g, '')).toBe('');
     });
 
-    it('verse 1 annotatedLyrics should contain the original verse 1 text', () => {
+    it('verse 1 lyricsAnnotated should contain the original verse 1 text', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
-      const stripped = verses[0].annotatedLyrics.replace(/<span[^>]*><\/span>/g, '');
+      const stripped = verses[0].lyricsAnnotated.replace(/<span[^>]*><\/span>/g, '');
       expect(stripped).toContain('When peace, like a river');
     });
 
-    it('verse 4 annotatedLyrics should contain the original verse 4 text', () => {
+    it('verse 4 lyricsAnnotated should contain the original verse 4 text', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
-      const stripped = verses[3].annotatedLyrics.replace(/<span[^>]*><\/span>/g, '');
+      const stripped = verses[3].lyricsAnnotated.replace(/<span[^>]*><\/span>/g, '');
       expect(stripped).toContain('Lord, haste the day');
     });
 
-    it('chorus annotatedLyrics should contain the chorus text', () => {
+    it('chorus lyricsAnnotated should contain the chorus text', () => {
       const choruses = score._scoreData.sections.filter(s => s.type === 'chorus');
-      const stripped = choruses[0].annotatedLyrics.replace(/<span[^>]*><\/span>/g, '');
+      const stripped = choruses[0].lyricsAnnotated.replace(/<span[^>]*><\/span>/g, '');
       expect(stripped).toContain('It is well with my soul');
     });
 
-    it('different verse sections should have distinct annotatedLyrics', () => {
+    it('different verse sections should have distinct lyricsAnnotated', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
-      const texts = verses.map(v => v.annotatedLyrics);
+      const texts = verses.map(v => v.lyricsAnnotated);
       // All verse texts should be unique (different verse content)
       const uniqueTexts = new Set(texts);
       expect(uniqueTexts.size).toBe(verses.length);
@@ -369,7 +374,7 @@ describe('_extractLyricStanzas — It Is Well', { timeout: 30000 }, () => {
     it('all chorus sections should contain the same lyrical content (ignoring span attributes)', () => {
       const choruses = score._scoreData.sections.filter(s => s.type === 'chorus');
       // Strip span markers entirely to compare the textual content
-      const strippedTexts = choruses.map(c => c.annotatedLyrics.replace(/<span[^>]*><\/span>/g, ''));
+      const strippedTexts = choruses.map(c => c.lyricsAnnotated.replace(/<span[^>]*><\/span>/g, ''));
       const uniqueStripped = new Set(strippedTexts);
       // All chorus texts should be identical once spans are removed
       expect(uniqueStripped.size).toBe(1);
@@ -404,31 +409,31 @@ describe('_extractLyricStanzas — It Is Well', { timeout: 30000 }, () => {
     });
   });
 
-  // ── Span markers in annotatedLyrics ──
+  // ── Span markers in lyricsAnnotated ──
   describe('Span marker attributes', () => {
     it('span markers should have data-ch-chord-position attributes', () => {
       const verse1 = score._scoreData.sections.find(s => s.type === 'verse' && s.marker === '1');
       const spanPattern = /data-ch-chord-position="(\d+[\d ]*?)"/g;
-      const matches = [...verse1.annotatedLyrics.matchAll(spanPattern)];
+      const matches = [...verse1.lyricsAnnotated.matchAll(spanPattern)];
       expect(matches.length).toBeGreaterThan(0);
     });
 
     it('span markers should have data-ch-expanded-chord-position attributes', () => {
       const verse1 = score._scoreData.sections.find(s => s.type === 'verse' && s.marker === '1');
       const spanPattern = /data-ch-expanded-chord-position="(\d+[\d ]*?)"/g;
-      const matches = [...verse1.annotatedLyrics.matchAll(spanPattern)];
+      const matches = [...verse1.lyricsAnnotated.matchAll(spanPattern)];
       expect(matches.length).toBeGreaterThan(0);
     });
 
     it('span markers should have data-ch-lyric-line-id attributes', () => {
       const verse1 = score._scoreData.sections.find(s => s.type === 'verse' && s.marker === '1');
-      expect(verse1.annotatedLyrics).toContain('data-ch-lyric-line-id=');
+      expect(verse1.lyricsAnnotated).toContain('data-ch-lyric-line-id=');
     });
 
     it('verse 1 lyric-line-ids should reference lyric line 2.1', () => {
       const verse1 = score._scoreData.sections.find(s => s.type === 'verse' && s.marker === '1');
       // IIW verse 1 uses lyric line 2.1 (soprano staff, line 1)
-      expect(verse1.annotatedLyrics).toContain('data-ch-lyric-line-id="2.1"');
+      expect(verse1.lyricsAnnotated).toContain('data-ch-lyric-line-id="2.1"');
     });
   });
 
@@ -509,41 +514,41 @@ describe('_extractLyricStanzas — This Little Light', { timeout: 30000 }, () =>
     });
   });
 
-  // ── annotatedLyrics content ──
-  describe('annotatedLyrics content', () => {
-    it('verse sections should have non-null annotatedLyrics', () => {
+  // ── lyricsAnnotated content ──
+  describe('lyricsAnnotated content', () => {
+    it('verse sections should have non-null lyricsAnnotated', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
       for (const verse of verses) {
-        expect(verse.annotatedLyrics).toBeDefined();
-        expect(verse.annotatedLyrics).not.toBeNull();
+        expect(verse.lyricsAnnotated).toBeDefined();
+        expect(verse.lyricsAnnotated).not.toBeNull();
       }
     });
 
     it('verse 1 should contain its characteristic text', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
-      const stripped = verses[0].annotatedLyrics.replace(/<span[^>]*><\/span>/g, '');
+      const stripped = verses[0].lyricsAnnotated.replace(/<span[^>]*><\/span>/g, '');
       expect(stripped).toContain('This little light of mine');
     });
 
     it('verse 2 should contain its characteristic text', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
       const verse2 = verses[1];
-      const stripped = verse2.annotatedLyrics.replace(/<span[^>]*><\/span>/g, '');
+      const stripped = verse2.lyricsAnnotated.replace(/<span[^>]*><\/span>/g, '');
       // Lyrics file uses smart quote (U+2019)
       expect(stripped).toContain('Ev\u2019rywhere I go');
     });
 
-    it('verse sections should have span markers in annotatedLyrics', () => {
+    it('verse sections should have span markers in lyricsAnnotated', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
       for (const verse of verses) {
-        expect(verse.annotatedLyrics).toContain('data-ch-chord-position=');
-        expect(verse.annotatedLyrics).toContain('data-ch-expanded-chord-position=');
+        expect(verse.lyricsAnnotated).toContain('data-ch-chord-position=');
+        expect(verse.lyricsAnnotated).toContain('data-ch-expanded-chord-position=');
       }
     });
 
-    it('different verses should have distinct annotatedLyrics', () => {
+    it('different verses should have distinct lyricsAnnotated', () => {
       const verses = score._scoreData.sections.filter(s => s.type === 'verse');
-      expect(verses[0].annotatedLyrics).not.toBe(verses[1].annotatedLyrics);
+      expect(verses[0].lyricsAnnotated).not.toBe(verses[1].lyricsAnnotated);
     });
   });
 
@@ -608,9 +613,9 @@ describe('_extractLyricStanzas — no lyrics text', { timeout: 30000 }, () => {
 
   it('verse sections should carry lyrics joined from the engraved syllables', () => {
     const verses = score._scoreData.sections.filter(section => section.type === 'verse');
-    for (const verse of verses) expect(verse.annotatedLyrics).toBeTruthy();
-    expect(verses[0].annotatedLyrics).toContain('How great the wisdom and the love');
-    expect(verses[1].annotatedLyrics).toContain('His precious blood He freely spilt');
+    for (const verse of verses) expect(verse.lyricsAnnotated).toBeTruthy();
+    expect(verses[0].lyricsText).toContain('How great the wisdom and the love');
+    expect(verses[1].lyricsText).toContain('His precious blood He freely spilt');
   });
 });
 
@@ -635,11 +640,11 @@ describe('_extractLyricStanzas — For Health and Strength', { timeout: 30000 },
   // The "2." printed there names lyric line 2, which is the line the pickup already sits
   // on, so only the music says it leads into the verse rather than being one.
   it('should merge the pickup into verse 2 rather than leaving it a stanza of its own', () => {
-    const stanzas = score._scoreData.sections.filter(section => section.annotatedLyrics);
+    const stanzas = score._scoreData.sections.filter(section => section.lyricsText);
     expect(stanzas.map(stanza => stanza.name)).toEqual(['Verse 1', 'Verse 2']);
     for (const stanza of stanzas) {
-      expect(stanza.annotatedLyrics).toContain('For health and strength and daily food');
-      expect(stanza.annotatedLyrics).toContain('we praise thy name, O Lord.');
+      expect(stanza.lyricsText).toContain('For health and strength and daily food');
+      expect(stanza.lyricsText).toContain('we praise thy name, O Lord.');
     }
   });
 
@@ -685,7 +690,7 @@ describe('_extractLyricStanzas — empty lyrics text', { timeout: 30000 }, () =>
   it('should build verse sections from the engraved lyric lines', () => {
     const verses = score._scoreData.sections.filter(section => section.type === 'verse');
     expect(verses.map(verse => verse.name)).toEqual(['Verse 1', 'Verse 2', 'Verse 3', 'Verse 4']);
-    expect(verses[0].annotatedLyrics).toContain('How great the wisdom and the love');
+    expect(verses[0].lyricsText).toContain('How great the wisdom and the love');
   });
 });
 
@@ -731,8 +736,8 @@ describe('_extractLyricStanzas — span marker counts', { timeout: 30000 }, () =
   function countSpans(scoreData) {
     let total = 0;
     for (const section of scoreData.sections) {
-      if (section.annotatedLyrics) {
-        const matches = section.annotatedLyrics.match(/<span[^>]*data-ch-chord-position[^>]*><\/span>/g);
+      if (section.lyricsAnnotated) {
+        const matches = section.lyricsAnnotated.match(/<span[^>]*data-ch-chord-position[^>]*><\/span>/g);
         total += matches ? matches.length : 0;
       }
     }
@@ -741,7 +746,7 @@ describe('_extractLyricStanzas — span marker counts', { timeout: 30000 }, () =
 
   it('each song should have at least one span marker per section with lyrics', () => {
     for (const sd of [scoreHGW._scoreData, scoreIIW._scoreData, scoreTLL._scoreData]) {
-      const lyricSections = sd.sections.filter(s => s.annotatedLyrics?.includes('data-ch-chord-position'));
+      const lyricSections = sd.sections.filter(s => s.lyricsAnnotated?.includes('data-ch-chord-position'));
       expect(lyricSections.length).toBeGreaterThan(0);
     }
   });
@@ -761,8 +766,8 @@ describe('_extractLyricStanzas — span marker counts', { timeout: 30000 }, () =
   it('span chord positions should be valid numbers', () => {
     for (const sd of [scoreHGW._scoreData, scoreIIW._scoreData, scoreTLL._scoreData]) {
       for (const section of sd.sections) {
-        if (section.annotatedLyrics) {
-          const cpMatches = [...section.annotatedLyrics.matchAll(/data-ch-chord-position="([^"]+)"/g)];
+        if (section.lyricsAnnotated) {
+          const cpMatches = [...section.lyricsAnnotated.matchAll(/data-ch-chord-position="([^"]+)"/g)];
           for (const match of cpMatches) {
             const values = match[1].split(' ').map(Number);
             for (const v of values) {
@@ -778,8 +783,8 @@ describe('_extractLyricStanzas — span marker counts', { timeout: 30000 }, () =
   it('expanded chord positions should be valid numbers', () => {
     for (const sd of [scoreHGW._scoreData, scoreIIW._scoreData, scoreTLL._scoreData]) {
       for (const section of sd.sections) {
-        if (section.annotatedLyrics) {
-          const ecpMatches = [...section.annotatedLyrics.matchAll(/data-ch-expanded-chord-position="([^"]+)"/g)];
+        if (section.lyricsAnnotated) {
+          const ecpMatches = [...section.lyricsAnnotated.matchAll(/data-ch-expanded-chord-position="([^"]+)"/g)];
           for (const match of ecpMatches) {
             const values = match[1].split(' ').map(Number);
             for (const v of values) {
@@ -865,7 +870,7 @@ describe('A held melody with the words on the voice below it', { timeout: 30000 
 
   it('should finish the melody line with the word engraved beneath it, sung once', () => {
     // One stanza, so no number tells it apart from another (see _normalizeSections)
-    expect(score._scoreData.lyricsText).toBe('[Verse]\nWhere all who may rest,');
+    expect(score._scoreData.lyricsText).toBe('[Verse 1]\nWhere all who may rest,');
   });
 
   it('should leave the repeat in the score for it to draw, on the voice that sings it', () => {
@@ -902,7 +907,7 @@ describe('A lyric line marked optional by an instruction', { timeout: 30000 }, (
   it('should leave the alternate line out of the lyrics', () => {
     // A verse, not a chorus: with the alternate line taken out the fixture carries one lyric
     // line throughout, and a score that labels no verses falls back to calling a stanza one
-    expect(score._scoreData.lyricsText).toBe('[Verse]\nSing to me now, gently and true. Sing now.');
+    expect(score._scoreData.lyricsText).toBe('[Verse 1]\nSing to me now, gently and true. Sing now.');
   });
 
   it('should read the alternate words out beside the footnote they belong to', () => {
