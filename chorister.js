@@ -4928,6 +4928,10 @@ ChScore.prototype._normalizeParts = function (chordPositionIndex) {
     );
   }
 
+  // Report the parts as a template whichever way they were arrived at, the way
+  // sectionsTemplate always names the sections -- parts the caller supplied included
+  this._scoreData.partsTemplate ||= this._convertPartsToTemplate(this._scoreData.parts);
+
   this._scoreData.partsById = {};
   for (const part of this._scoreData.parts) {
     this._scoreData.partsById[part.partId] = part;
@@ -4945,6 +4949,35 @@ ChScore.prototype._normalizeParts = function (chordPositionIndex) {
 }
 
 // Derive a likely parts template heuristically, from what each staff looks like
+// A parts template names the voices on each staff, staves joined with '+' and an optional
+// '#' melody marker: "0:SATB; 32:SATB#A". What it doesn't write down is inferred the same
+// way at both ends by the helpers below, which is what lets a derived template rebuild the
+// parts it came from.
+
+const CH_PART_CHAR_TO_ID = {
+  'M': 'melody',
+  'S': 'soprano',
+  'A': 'alto',
+  'T': 'tenor',
+  'B': 'bass',
+  'P': 'part',
+  'D': 'descant',
+  'O': 'obbligato',
+  'I': 'instrumental',
+  'C': 'accompaniment',
+};
+const CH_PART_ID_TO_CHAR = Object.fromEntries(
+  Object.entries(CH_PART_CHAR_TO_ID).map(([char, partId]) => [partId, char]));
+// The voices a tune is most likely to be written on, in the order they're preferred
+const CH_LIKELY_MELODY_CHARS = 'MSP';
+
+// Which voice carries the tune when the template doesn't mark one. Shared so that deriving a
+// template and building parts from it read an unmarked template the same way -- the
+// round-trip depends on it.
+ChScore.prototype._impliedMelodyChar = function (chars) {
+  return [...chars].find(char => CH_LIKELY_MELODY_CHARS.includes(char)) || chars[0];
+}
+
 ChScore.prototype._derivePartsTemplate = function (chordPositionIndex) {
   // Nothing is sung, so every staff is an instrument — answered without reading the
   // engraving, which also lets this be asked of a score that has none
@@ -5008,7 +5041,7 @@ ChScore.prototype._getMelodySwitchBoundaries = function (measureData, wholeStave
   // which answers for the staff that leads and so names the lower one on a song the men
   // open ("What Was Witnessed in the Heavens"), leaving the switch invisible from there.
   const melodyStaff = wholeStaves.find(staff => staff.hasLyrics
-    && [...(staff.partsChars ?? '')].some(char => 'MSP'.includes(char)))
+    && [...(staff.partsChars ?? '')].some(char => CH_LIKELY_MELODY_CHARS.includes(char)))
     ?? wholeStaves.find(staff => staff.isMelodyStaff);
   if (!melodyStaff || !chordPositionIndex) return [];
 
@@ -5527,11 +5560,54 @@ ChScore.prototype._getPartsSegmentBoundaries = function (measureData, wholeStave
   });
 }
 
+// The parts as a template, the mirror of _buildPartsFromTemplate: one segment per chord
+// position a part starts at, staves joined with '+', and a melody marker only where the
+// template would otherwise read as naming a different part.
+ChScore.prototype._convertPartsToTemplate = function (parts) {
+  const staffNumbers = this._scoreData.staffNumbers;
+  // 'soprano-2' and 'soprano' are the same char: which one a char means is positional,
+  // and _buildPartsFromTemplate numbers them back the same way
+  const charOf = (partId) => CH_PART_ID_TO_CHAR[partId.replace(/-\d+$/, '')] ?? 'I';
+
+  const chordPositions = [...new Set(parts.flatMap(part =>
+    Object.keys(part.chordPositionRefs ?? {}).map(key => Number.parseInt(key))))]
+    .sort((a, b) => a - b);
+
+  const segments = [];
+  for (const chordPosition of chordPositions) {
+    const charsByStaff = staffNumbers.map(() => '');
+    let melodyChar = null;
+    for (const part of parts) {
+      const ref = part.chordPositionRefs?.[chordPosition];
+      if (!ref) continue;
+      const char = charOf(part.partId);
+      for (const staffNumber of ref.staffNumbers ?? []) {
+        const index = staffNumbers.indexOf(staffNumber);
+        if (index !== -1) charsByStaff[index] += char;
+      }
+      if (ref.isMelody && melodyChar === null) melodyChar = char;
+    }
+    // A segment nobody sings is 'I' however many staves play it, the way joinPartsTemplate
+    // writes it in _derivePartsTemplate
+    const hasVocal = parts.some(part => part.isVocal && part.chordPositionRefs?.[chordPosition]);
+    let template = hasVocal ? (charsByStaff.filter(chars => chars).join('+') || 'I') : 'I';
+    // Only where the marker says something the template doesn't already imply
+    if (melodyChar && template !== 'I'
+      && melodyChar !== this._impliedMelodyChar(template.replace(/\+/g, ''))) {
+      template += `#${melodyChar}`;
+    }
+    segments.push({ chordPosition: chordPosition, template: template });
+  }
+
+  if (segments.length === 0) return 'I';
+  if (segments.length === 1 && segments[0].chordPosition === 0) return segments[0].template;
+  return segments.map(segment => `${segment.chordPosition}:${segment.template}`).join('; ');
+}
+
 ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumbers, numChordPositions, hasLyrics) {
   // Pad with accompaniment or instrumental staves (will be skipped later if not needed)
   const padChar = hasLyrics ? 'C' : 'I';
   const padding = staffNumbers.map(() => padChar).join('+');
-  const likelyMelodyChars = 'MSP';
   const polyphonicChars = 'IC';
   const vocalChars = 'MSATBPD';
 
@@ -5570,19 +5646,7 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
   }
 
   function getPartId(char, previousChars, splitPartChars) {
-    const charToPartId = {
-      'M': 'melody',
-      'S': 'soprano',
-      'A': 'alto',
-      'T': 'tenor',
-      'B': 'bass',
-      'P': 'part',
-      'D': 'descant',
-      'O': 'obbligato',
-      'I': 'instrumental',
-      'C': 'accompaniment',
-    };
-    let partId = charToPartId[char[0]];
+    let partId = CH_PART_CHAR_TO_ID[char[0]];
 
     // Handle Soprano 1, Soprano 2, etc.
     let n = null;
@@ -5629,7 +5693,7 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
       [chars, melodyChar] = charsAndMelody.split('#');
     } else {
       chars = charsAndMelody;
-      melodyChar = chars.split('').find(char => likelyMelodyChars.includes(char)) || chars[0];
+      melodyChar = this._impliedMelodyChar(chars);
     }
     const melodyPartId = getPartId(melodyChar, '', splitPartChars);
     // 'Two-Part' ('P+P') splits into part-1, part-2, … but the melody char above always
@@ -6225,6 +6289,7 @@ ChScore.prototype._normalizeSections = function () {
 
   let introSection;
   let otherSections = [];
+  let hasSimpleSections = false;
   // Use existing sections
   if (hasPrebuiltSections || hasTemplateSections) {
     introSection = this._scoreData.sections[0].type === 'introduction' ? this._scoreData.sections[0] : null;
@@ -6232,7 +6297,10 @@ ChScore.prototype._normalizeSections = function () {
   // Generate sections based on simple score structure
   } else {
     introSection = this._getIntroSectionFromBrackets(this._scoreData.meiParsed, this._scoreData.staffNumbers);
-    if (!hasComplexSections) otherSections = this._generateSectionsFromSimpleScore(verseNumbers, hasInitialChorus, melodyLyricElements);
+    if (!hasComplexSections) {
+      otherSections = this._generateSectionsFromSimpleScore(verseNumbers, hasInitialChorus, melodyLyricElements);
+      hasSimpleSections = true;
+    }
   }
 
   // ---- 3. Lyric ranges, stanzas, and sections made from them ----
@@ -6240,7 +6308,7 @@ ChScore.prototype._normalizeSections = function () {
   // Get sequential lyric chord position ranges. Ranges that came from a section
   // carry its type, and the first one is marked as starting it, so the stanzas
   // built from them line up with the sections they came from.
-  const lyricChordPositionRanges = this._getLyricChordPositionRanges(
+  let lyricChordPositionRanges = this._getLyricChordPositionRanges(
     otherSections, melodyLyricElements);
 
   // Get annotated lyric stanzas. Where the singing starts once the introduction has been
@@ -6249,8 +6317,38 @@ ChScore.prototype._normalizeSections = function () {
   for (const chordPositionRange of introSection?.chordPositionRanges ?? []) {
     firstLyricExpandedChordPosition += chordPositionRange.end - chordPositionRange.start;
   }
-  this._markSingleLineChordPositions(lyricChordPositionRanges, melodyLyricElements);
-  const lyricStanzas = this._extractLyricStanzas(lyricChordPositionRanges, firstLyricExpandedChordPosition, melodyLyricElements);
+  const extract = (ranges) => {
+    this._markSingleLineChordPositions(ranges, melodyLyricElements);
+    return this._extractLyricStanzas(
+      ranges, firstLyricExpandedChordPosition, melodyLyricElements);
+  };
+  let lyricStanzas = extract(lyricChordPositionRanges);
+
+  // A refrain reads as a chorus until the words are cut into lines, so the sections are
+  // generated again with its lyric line demoted and the verses carry it instead. Not for a
+  // chorus the song opens with, which is a chorus and whose closing repeat would be lost
+  // with it, and not against lyrics the caller handed in, which are already the answer.
+  if (hasSimpleSections && !hasInitialChorus && !this._scoreData.lyricsText) {
+    const doubleBars = this._doubleBarChordPositions();
+    const refrainLineNumbers = lyricStanzas
+      .filter(stanza => stanza.type === 'chorus' && this._isRefrain(stanza, doubleBars))
+      .flatMap(stanza => stanza.lyricLineIds)
+      .map(lyricLineId => Number.parseInt(lyricLineId.split('.')[1]));
+    if (refrainLineNumbers.length > 0) {
+      otherSections = this._generateSectionsFromSimpleScore(
+        verseNumbers, hasInitialChorus, melodyLyricElements, refrainLineNumbers);
+      lyricChordPositionRanges = this._getLyricChordPositionRanges(
+        otherSections, melodyLyricElements);
+      lyricStanzas = extract(lyricChordPositionRanges);
+    }
+  }
+
+  // Lyrics handed in say how the song divides, so their stanzas become the sections. The
+  // generated ones are still made, because the walk needs a range per verse to reach every
+  // stacked lyric line; they are dropped once the stanzas they produced exist.
+  if (this._scoreData.lyricsText && !hasPrebuiltSections && !hasTemplateSections) {
+    otherSections = [];
+  }
 
   // Generate sections based on lyric stanzas, falling back to a default section
   if (otherSections.length === 0) {
@@ -6337,11 +6435,7 @@ ChScore.prototype._normalizeSections = function () {
   // Counted over the plain reading: the same chorus sung again carries different chord
   // positions in its markup, so the annotated one would spell each playthrough differently
   // and never find a repeat.
-  const lyricsTextCounts = new Map();
-  for (const section of otherSections) {
-    if (!section.lyricsText) continue;
-    lyricsTextCounts.set(section.lyricsText, (lyricsTextCounts.get(section.lyricsText) ?? 0) + 1);
-  }
+  const lyricsTextCounts = this._timesSungByText(otherSections);
   const referenceChorus = otherSections.find(section => lyricsTextCounts.get(section.lyricsText) > 1);
   // For comparing a below verse's own text -- which keeps the page's own line breaks --
   // against the sung chorus's normalized single line ("nearer-my-god-to-thee", where the
@@ -6924,13 +7018,54 @@ ChScore.prototype._getIntroSectionFromChordPositions = function (introChordPosit
   return introSection;
 }
 
-ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, hasInitialChorus, melodyLyricElements = this._melodyLyricElementIndex()) {
+// The chord positions an engraver writes a double bar at, where one passage ends and
+// another begins. Its presence keeps a passage a chorus; its absence says nothing, since
+// most scores here separate a chorus with nothing at all.
+ChScore.prototype._doubleBarChordPositions = function () {
+  const chordPositions = new Set();
+  const measures = Array.from(this._scoreData.meiParsed.querySelectorAll('measure'));
+  measures.forEach((measure, index) => {
+    const first = measure.querySelector('[ch-chord-position]')?.getAttribute('ch-chord-position');
+    if (first == null) return;
+    // Either side of the same break: a double bar can be written as this measure's left
+    // barline or as the previous measure's right one
+    if (measure.getAttribute('left') === 'dbl' || measures[index - 1]?.getAttribute('right') === 'dbl') {
+      chordPositions.add(Number.parseInt(first));
+    }
+  });
+  return chordPositions;
+}
+
+// Whether a chorus stanza is really the end of the verse before it -- the words the verse
+// ends on, engraved once because every verse ends the same way. One line only: at two a
+// chorus and a verse ending are the same shape, and a passage that long stands on its own.
+ChScore.prototype._isRefrain = function (stanza, doubleBarChordPositions) {
+  if (!stanza.lyricsText || stanza.lyricsText.includes('\n')) return false;
+  // A double bar is the engraving saying the passage ends here, which settles it
+  return !doubleBarChordPositions.has(stanza.chordPositionRanges[0]?.start);
+}
+
+// How often each passage's words are sung, which is what tells a chorus from a verse.
+// Takes stanzas or sections -- anything carrying `lyricsText`.
+ChScore.prototype._timesSungByText = function (stanzas) {
+  const timesSung = new Map();
+  for (const stanza of stanzas) {
+    if (!stanza.lyricsText) continue;
+    timesSung.set(stanza.lyricsText, (timesSung.get(stanza.lyricsText) ?? 0) + 1);
+  }
+  return timesSung;
+}
+
+ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, hasInitialChorus, melodyLyricElements = this._melodyLyricElementIndex(), knownRefrainLineNumbers = []) {
   const meiParsed = this._scoreData.meiParsed;
   const sections = [];
 
   // Get chorus ranges and line numbers from melody lyrics
   const chorusCpRanges = [];
   const chorusLineNumbers = new Set();
+  // A refrain the verse sings itself, on a lyric line of its own -- every verse reads it.
+  // Seeded with the lines the caller has already found to be refrains rather than choruses.
+  const refrainLineNumbers = new Set(knownRefrainLineNumbers);
   if (meiParsed.querySelector('verse:not([n="1"])')) {
     // How long a run of single-line lyrics has to be to read as a chorus rather than a
     // verse carrying an extra syllable or two. Counted in melody syllables, not chord
@@ -6977,16 +7112,26 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
       return /^\p{Lu}/u.test(syl.textContent.trim());
     };
 
-    for (const lyricGap of lyricGaps) {
-      const allowedGap = startsNewPhrase(lyricGap[0]) ? maxLyricGap - 1 : maxLyricGap;
-      if (lyricGap.length > allowedGap) {
-        // Save chorus line numbers
-        for (const chordPosition of lyricGap) {
-          const lineNumbers = lineNumbersByCp[chordPosition];
-          for (const lineNumber of lineNumbers) {
-            chorusLineNumbers.add(lineNumber);
-          }
-        }
+    const chorusGaps = lyricGaps.filter(lyricGap => lyricGap.length
+      > (startsNewPhrase(lyricGap[0]) ? maxLyricGap - 1 : maxLyricGap)
+      && !lineNumbersByCp[lyricGap[0]].some(lineNumber => refrainLineNumbers.has(lineNumber)));
+    // A chorus is sung once where the verse is sung once, so a single-line stretch that
+    // comes round again inside the verse is the verse's own refrain and none of them is a
+    // chorus. Stretches parted by a stacked syllable or two are one stretch.
+    const isVerseRefrain = chorusGaps.some((lyricGap, index) => index > 0
+      && Number.parseInt(lyricGap[0]) - Number.parseInt(chorusGaps[index - 1].at(-1)) > maxLyricGap);
+
+    // Save the line numbers -- as the chorus's, or as a refrain every verse sings
+    const lineNumberTarget = isVerseRefrain ? refrainLineNumbers : chorusLineNumbers;
+    for (const lyricGap of chorusGaps) {
+      for (const chordPosition of lyricGap) {
+        for (const lineNumber of lineNumbersByCp[chordPosition]) lineNumberTarget.add(lineNumber);
+      }
+    }
+
+    // A refrain the verses carry has no chorus ranges of its own
+    if (!isVerseRefrain) {
+      for (const lyricGap of chorusGaps) {
         // Handle notes without lyrics at the beginning or end of the song
         if (nothingSungBefore(Number.parseInt(lyricGap[0]))) {
           lyricGap[0] = '0';
@@ -7082,6 +7227,12 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
     // says which verse the staff carrying them joins in on, which _stavesPlayingIn answers.
     for (const num of additionalSecondaryLyricLineNumbers) {
       if (verseNumber === 1 || lateEntryLineNumbers.has(num)) verseLineNumbers.add(num);
+    }
+    // Only a line of the refrain's own. One engraved on a verse's line is already sung
+    // wherever it stands alone, and naming it here would let a verse read the other
+    // verse's words where the two are stacked.
+    for (const num of refrainLineNumbers) {
+      if (!verseNumbers.includes(num)) verseLineNumbers.add(num);
     }
     const rangeEntries = [];
     const claim = claims.get(verseNumber);
@@ -7181,6 +7332,11 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
 
 // TODO: Some of the logic in _markSingleLineChordPositions overlaps chorus detection in _generateSectionsFromSimpleScore – maybe they can be unified.
 ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRanges, melodyLyricElements = this._melodyLyricElementIndex(), maxAllowedGap = 3) {
+  // This pass only ever stamps `true`, so it clears what it owns first, back to the unasked
+  // state: the sections can be generated again over different ranges, and a flag left over
+  // from the first pass would stand where the second one no longer marks it.
+  for (const chordPosition of this._scoreData.chordPositions) chordPosition.isSingleLine = null;
+
   const lyricLinesByStaffAndCp = {};
   // Through the shared melody lyric index, which already grouped the elements by chord
   // position. Reading only verses on the melody note would miss a lower voice's words
@@ -7220,7 +7376,7 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
         if (lyricLinesByStaffAndCp[staffNumber][cp].size === 1) {
           if (oneLyricEcpRanges.at(-1).start == null) oneLyricEcpRanges.at(-1).start = ecp;
           oneLyricEcpRanges.at(-1).end = ecp + 1;
-          oneLyricEcpRanges.at(-1).lineNumbers.add(lyricLinesByStaffAndCp[staffNumber][cp][0])
+          oneLyricEcpRanges.at(-1).lineNumbers.add(lyricLinesByStaffAndCp[staffNumber][cp].values().next().value)
         }
       } else {
         noLyricEcps.push(ecp);
@@ -7537,6 +7693,11 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
   // Carried alongside rather than folded into the flag above: this one must not break a
   // run before phrase detection has read it (see _splitRunsAtRepeatedSections).
   let isFirstSyllableOfRepeatedSection = false;
+  // The other edge of the same boundary: music following a section the score plays more
+  // than once is not more of it. Where a song opens with its chorus, this is the only mark
+  // the verse's first syllable carries.
+  let isFirstSyllableAfterRepeatedSection = false;
+  let previousRangeWasRepeated = false;
 
   // Test cases:
   // "Gethsemane" (Hymns—For Home and Church), "This Is the Christ" (Hymns—For Home and Church), "Beautiful Savior" (1989 CSB) – complex sections
@@ -7547,6 +7708,8 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
     if (cp === range.start) {
       isFirstSyllableOfSection = range.startsSection ?? false;
       isFirstSyllableOfRepeatedSection = range.startsRepeatedSection ?? false;
+      isFirstSyllableAfterRepeatedSection = previousRangeWasRepeated && !isFirstSyllableOfRepeatedSection;
+      previousRangeWasRepeated = isFirstSyllableOfRepeatedSection;
     }
     // The per-staff signal needs the two-part guard; range.hasSingleLine does not
     // (see _hasStackedMelodyLyrics)
@@ -7608,11 +7771,13 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
         isSingleLine: chordPositionIsSingleLine || range.hasSingleLine || false,
         startsSection: isFirstSyllableOfSection,
         startsRepeatedSection: isFirstSyllableOfRepeatedSection,
+        followsRepeatedSection: isFirstSyllableAfterRepeatedSection,
         sectionType: range.sectionType ?? null,
         sectionIndex: range.sectionIndex ?? null,
       });
       isFirstSyllableOfSection = false;
       isFirstSyllableOfRepeatedSection = false;
+      isFirstSyllableAfterRepeatedSection = false;
     } else {
       const currentSyllable = extractedLyricSyllables.at(-1);
       currentSyllable.chordPositions.push(cp);
@@ -8017,7 +8182,8 @@ ChScore.prototype._syllableStanzaRuns = function (syllables) {
 // held notes and rests between them don't count against it.
 ChScore.prototype._maxPickupSyllables = 3;
 
-// Start a stanza wherever a section the score plays more than once begins. On a
+// Start a stanza at either edge of a section the score plays more than once -- where it
+// begins, and where the music after it takes over. On a
 // complex-sections song nothing else marks that boundary: a chorus following a verse on the
 // same lyric line, unlabelled and running forward, reads as more of the same verse. Kept out
 // of _syllableStanzaRuns' own break rules because phrase starts are derived from the runs, so
@@ -8038,9 +8204,13 @@ ChScore.prototype._splitRunsAtRepeatedSections = function (runs, phraseStarts) {
       // phrase test rejects one opening mid-line ("Isaiah Said", HHC), and wants the boundary
       // exactly on a phrase start or on the syllable after a pickup that opens it -- a
       // pickup's worth of slack instead splits "A Child's Prayer" mid-line.
-      if (run.syllables[index].startsRepeatedSection
-        && index - pieceStart > this._maxPickupSyllables
-        && (startsPhrase(run.syllables[index]) || startsPhrase(run.syllables[index - 1]))) {
+      // The pickup's worth of slack is for a boundary reached through a repeat, whose
+      // opening word can be engraved before it. Nothing leads into the far edge, so a
+      // syllable there that opens no phrase is the section's own ending running on.
+      const opensStanza = startsPhrase(run.syllables[index])
+        || (run.syllables[index].startsRepeatedSection && startsPhrase(run.syllables[index - 1]));
+      if ((run.syllables[index].startsRepeatedSection || run.syllables[index].followsRepeatedSection)
+        && index - pieceStart > this._maxPickupSyllables && opensStanza) {
         candidates.push(index);
         pieceStart = index;
       }
@@ -8189,6 +8359,11 @@ ChScore.prototype._mergeSingleLineRuns = function (runs, phraseStarts) {
     if (previous.type !== run.type || previous.lyricLineId === run.lyricLineId) continue;
     if (first.label || first.startsSection || first.startsRepeatedSection) continue;
 
+    // A word is never cut across two stanzas, whoever's line each half sits on. Read off
+    // the syllable that opened the word, not the one closing it: a score can mark the
+    // closing half `single` where the opening half says `begin`.
+    const continuesWord = ['i', 'm'].includes(previousLast.syls?.at(-1)?.wordpos);
+
     // A chorus after a verse has this same "forward, new lyric line" shape and must not
     // be swallowed. What separates them is whose line it is: a second ending reuses one
     // of the lines already stacked on the verse it follows -- everyone converges onto it
@@ -8204,7 +8379,7 @@ ChScore.prototype._mergeSingleLineRuns = function (runs, phraseStarts) {
         return start <= previousEnd && previousStart <= end;
       })
       .map(other => other.lyricLineId));
-    if (!siblingLineIds.has(run.lyricLineId)) continue;
+    if (!continuesWord && !siblingLineIds.has(run.lyricLineId)) continue;
 
     // Where the next section's words start. A run with none of its own opens no section
     // -- it is all continuation -- so it joins the verse whole; the empty run left behind
@@ -8309,18 +8484,50 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
     stanza.lyricsAnnotated = this._applyFindReplace(words.annotatedText());
   }
 
-  const stanzas = this._mergePickupStanzas(built.map(entry => entry.stanza));
+  let stanzas = this._mergePickupStanzas(built.map(entry => entry.stanza));
+
+  // A refrain belongs to the verse before it, as that verse's last line. Only where the
+  // sections are built from these stanzas: where they came first, each stanza is paired
+  // with the section it was read from, and merging two would leave one wordless.
+  const fromSections = syllables.some(syllable => syllable.sectionType != null);
+  const isChorus = (stanza) => stanza.isChorus || stanza.type === 'chorus';
+  if (!fromSections) {
+    const doubleBars = this._doubleBarChordPositions();
+    // A song gives its repeated passage one reading throughout, so a last copy extended by a
+    // tag is still the verse's tail rather than a chorus of its own. A refrain matches its
+    // own text here, so this covers the plain case too.
+    const refrainTexts = stanzas
+      .filter(stanza => isChorus(stanza) && this._isRefrain(stanza, doubleBars))
+      .map(stanza => stanza.lyricsText);
+    const withRefrains = [];
+    for (const stanza of stanzas) {
+      const previous = withRefrains.at(-1);
+      if (previous && !isChorus(previous) && isChorus(stanza)
+        && refrainTexts.some(refrain => stanza.lyricsText?.startsWith(refrain))) {
+        previous.lyricsText = `${previous.lyricsText}\n${stanza.lyricsText}`.trim();
+        previous.lyricsAnnotated = `${previous.lyricsAnnotated}\n${stanza.lyricsAnnotated}`.trim();
+        previous.chordPositionRanges = previous.chordPositionRanges.concat(stanza.chordPositionRanges);
+        previous.lyricElements.push(...stanza.lyricElements);
+        if (stanza.expandedChordPositions.length) {
+          previous.expandedChordPositions[1] = stanza.expandedChordPositions.at(-1);
+        }
+        continue;
+      }
+      withRefrains.push(stanza);
+    }
+    stanzas = withRefrains;
+  }
 
   // A passage everyone sings, sung again in the same words, is the chorus. One lyric line
   // alone doesn't say it: a later verse engraved after the stacked ones is on its own line
   // too ("Did Jesus Really Live Again?"), and is sung once where a chorus comes back.
-  const timesSung = new Map();
-  for (const stanza of stanzas) {
-    if (!stanza.lyricsText) continue;
-    timesSung.set(stanza.lyricsText, (timesSung.get(stanza.lyricsText) ?? 0) + 1);
-  }
+  const timesSung = this._timesSungByText(stanzas);
+  // Starts with those words rather than says exactly those words: a last chorus extended
+  // by a tag would never match its siblings on an exact count.
+  const repeated = [...timesSung].filter(([, count]) => count > 1).map(([text]) => text);
   const chorusStanzas = stanzas.filter(stanza =>
-    !stanza.type && stanza.isChorus && timesSung.get(stanza.lyricsText) > 1);
+    !stanza.type && stanza.isChorus && stanza.lyricsText
+    && repeated.some(text => stanza.lyricsText.startsWith(text)));
   // A chorus is what the verses alternate with, so a song that is all chorus is none:
   // in a round every voice sings the same words, and they are the verse
   if (chorusStanzas.length < stanzas.length) {
@@ -8354,6 +8561,10 @@ ChScore.prototype._phraseStartWeights = {
   // What a break has to be worth before it's taken at all, and what a line straying
   // from the song's typical length costs per syllable
   breakCost: 1.9, lengthCost: 0.3,
+  // How much of `breakCost` a score is let off for a signal it cannot give at all (see
+  // _scorePhraseStarts). Half: full relief lets the length prior place the extra breaks in
+  // the wrong places.
+  absentSignalRelief: 0.5,
 };
 
 // Verse numbers an instruction spells out rather than writing as a digit ("Chorus after
@@ -8518,6 +8729,22 @@ ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
     punctuation: this._signalInformativeness(wordStarts ? totalHits('punctuation') / wordStarts : 0),
   };
 
+  // What a break has to be worth is a share of what this score can offer. `scale` takes the
+  // text signals away from a score that marks no phrases with case or punctuation, and a
+  // fixed threshold would then reject every break it has left, so the threshold is weighted
+  // by the same signals. A score keeping both is unchanged.
+  const musicalWeight = weights.gap + weights.fermata + weights.barLine
+    + weights.beatPhase + weights.printedLine;
+  const textWeight = weights.capital + weights.punctuation;
+  // Only a signal the score gives *no* evidence for is discounted. Where one fires at an
+  // ordinary rate the weights were fitted with it in hand, so its share of the cost stands
+  // and a Latin-script score is left exactly as before.
+  const available = (signal) => (scale[signal] > 0 ? weights[signal] : 0);
+  const availableRatio = (available('capital') + available('punctuation') + musicalWeight)
+    / (textWeight + musicalWeight);
+  const breakCost = weights.breakCost
+    * (1 - weights.absentSignalRelief * (1 - availableRatio));
+
   const scores = new Map();
   for (const [cp, entry] of hits) {
     let score = 0;
@@ -8530,7 +8757,9 @@ ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
 
   this._addBeatPhaseBonus(scores);
   this._addPrintedLineBonus(scores, runs);
-  return scores;
+  // `breakCost` is returned alongside the scores because only this pass knows how much of
+  // the weight table this score's own text actually supports
+  return { scores: scores, breakCost: breakCost };
 }
 
 // Phrases start at the same point in the measure all song long — not necessarily the
@@ -8645,8 +8874,8 @@ ChScore.prototype._addPrintedLineBonus = function (scores, runs) {
 // second segments against it.
 ChScore.prototype._getPhraseStartChordPositions = function (syllables, runs = null) {
   runs = runs ?? this._syllableStanzaRuns(syllables);
-  const scores = this._scorePhraseStarts(syllables, runs);
-  const { breakCost, lengthCost } = this._phraseStartWeights;
+  const { scores, breakCost } = this._scorePhraseStarts(syllables, runs);
+  const { lengthCost } = this._phraseStartWeights;
   const minLength = 4;
   const maxLength = 16;
 

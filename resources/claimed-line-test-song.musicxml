@@ -31,8 +31,8 @@
     <measure number="4">
       <note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><stem>up</stem><lyric number="1" name="chorus"><syllabic>single</syllabic><text>clear</text></lyric></note>
       <note><pitch><step>D</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><stem>up</stem><lyric number="1" name="chorus"><syllabic>single</syllabic><text>and</text></lyric><lyric number="2" name="chorus"><syllabic>single</syllabic><text>soft</text></lyric></note>
-      <note><pitch><step>E</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><stem>up</stem><lyric number="1" name="chorus"><syllabic>single</syllabic><text>strong</text></lyric><lyric number="2" name="chorus"><syllabic>single</syllabic><text>low</text></lyric></note>
-      <note><pitch><step>D</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><stem>up</stem><lyric number="1" name="chorus"><syllabic>single</syllabic><text>and</text></lyric></note>
+      <note><pitch><step>E</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><stem>up</stem><lyric number="1" name="chorus"><syllabic>single</syllabic><text>strong.</text></lyric><lyric number="2" name="chorus"><syllabic>single</syllabic><text>low.</text></lyric></note>
+      <note><pitch><step>D</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><stem>up</stem><lyric number="1" name="chorus"><syllabic>single</syllabic><text>And</text></lyric></note>
     </measure>
     <measure number="5">
       <note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><stem>up</stem><lyric number="1" name="chorus"><syllabic>single</syllabic><text>true</text></lyric></note>

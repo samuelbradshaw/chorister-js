@@ -130,7 +130,7 @@ describe('_scorePhraseStarts', () => {
     const score = fakeScore(8);
     // "won-der-ful" occupies chord positions 1, 2 and 3
     const syllables = syllablesFrom(['How', 'won-der-ful', 'it', 'is']);
-    const scores = score._scorePhraseStarts(syllables);
+    const { scores } = score._scorePhraseStarts(syllables);
     expect(scores.has(1)).toBe(true);  // "won" opens the word
     expect(scores.has(2)).toBe(false); // "der" is mid-word
     expect(scores.has(3)).toBe(false); // "ful" ends the word
@@ -139,14 +139,14 @@ describe('_scorePhraseStarts', () => {
   it('scores a syllable after phrase punctuation above one after none', () => {
     const score = fakeScore(8);
     const syllables = syllablesFrom(['sing.', 'now', 'and', 'then']);
-    const scores = score._scorePhraseStarts(syllables);
+    const { scores } = score._scorePhraseStarts(syllables);
     expect(scores.get(1)).toBeGreaterThan(scores.get(2));
   });
 
   it('scores a capitalized word start above a lowercase one', () => {
     const score = fakeScore(8);
     const syllables = syllablesFrom(['sing', 'Now', 'and', 'then']);
-    const scores = score._scorePhraseStarts(syllables);
+    const { scores } = score._scorePhraseStarts(syllables);
     expect(scores.get(1)).toBeGreaterThan(scores.get(2));
   });
 
@@ -159,15 +159,15 @@ describe('_scorePhraseStarts', () => {
     syllables[0].chordPositionRuns = [[0, 3]];
     syllables.splice(1, 1); // drop the syllable that was at cp 1
     syllables[1].chordPositions = [3];
-    const scores = held._scorePhraseStarts(syllables);
+    const { scores } = held._scorePhraseStarts(syllables);
     expect(scores.get(3)).toBeGreaterThan(0);
   });
 
   it('calibrates away a signal that fires at every word start', () => {
     const allCaps = syllablesFrom(['One', 'Two', 'Three', 'Four', 'Five', 'Six']);
     const mixed = syllablesFrom(['one', 'Two', 'three', 'four', 'five', 'six']);
-    const capitalEverywhere = fakeScore(12)._scorePhraseStarts(allCaps);
-    const capitalOnce = fakeScore(12)._scorePhraseStarts(mixed);
+    const { scores: capitalEverywhere } = fakeScore(12)._scorePhraseStarts(allCaps);
+    const { scores: capitalOnce } = fakeScore(12)._scorePhraseStarts(mixed);
     // Capitalization tells you nothing in a text that capitalizes everything, so the
     // one meaningful capital has to outscore any of the uniform ones
     expect(capitalOnce.get(1)).toBeGreaterThan(capitalEverywhere.get(1));
@@ -229,8 +229,8 @@ describe('_getPhraseStartChordPositions', () => {
     const repeat = fakeScore(16, { rightBarLine: 'rptend' });
     const double = fakeScore(16, { rightBarLine: 'dbl' });
     const words = ['la', 'la', 'la', 'la', 'la', 'la', 'la', 'la', 'la', 'la', 'la', 'la'];
-    const repeatScores = repeat._scorePhraseStarts(syllablesFrom(words));
-    const doubleScores = double._scorePhraseStarts(syllablesFrom(words));
+    const { scores: repeatScores } = repeat._scorePhraseStarts(syllablesFrom(words));
+    const { scores: doubleScores } = double._scorePhraseStarts(syllablesFrom(words));
     // Position 4 opens the second measure, so a barline was crossed to reach it
     expect(doubleScores.get(4)).toBeGreaterThan(repeatScores.get(4));
   });

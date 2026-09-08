@@ -953,9 +953,9 @@ describe('A chorus whose middle stretch is claimed for one pass', { timeout: 300
   it('should sing the chorus as printed on every pass but the one claimed', () => {
     expect(score._scoreData.lyricsText).toBe([
       '[Verse 1]', 'I will sing a song of joy now', '',
-      '[Chorus]', 'Sing out loud and clear and strong and true all day long.', '',
+      '[Chorus]', 'Sing out loud and clear and strong.', 'And true all day long.', '',
       '[Verse 2]', 'We will sing a song of peace too', '',
-      '[Chorus]', 'Sing out loud and clear soft low and true all day long.',
+      '[Chorus]', 'Sing out loud and clear soft low.', 'And true all day long.',
     ].join('\n'));
   });
 
