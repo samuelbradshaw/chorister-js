@@ -1981,13 +1981,13 @@ ChScore.prototype._fixUnterminatedMelismas = function () {
 
 // Improve appearance of dir elements.
 // Adds attributes to intro brackets: @ch-intro-bracket.
-// Adds attributes to dir, harm, and fermata: @ch-chord-position.
+// Adds attributes to dir, harm, fermata, breath and caesura: @ch-chord-position.
 ChScore.prototype._annotateDirections = function (elementsById, chordPositionQstamps) {
   let currentMeasureId = null;
   this._scoreData.features.hasOstinato = (this._scoreData.scoreMetadata.textBlocks ?? [])
     .some(block => this._patterns.ostinato.test(block.text));
 
-  for (const element of this._scoreData.meiParsed.querySelectorAll('measure, dir, harm, fermata')) {
+  for (const element of this._scoreData.meiParsed.querySelectorAll('measure, dir, harm, fermata, breath, caesura')) {
     if (element.matches('measure')) {
       currentMeasureId = element.getAttribute('xml:id');
     } else {
@@ -2015,6 +2015,11 @@ ChScore.prototype._annotateDirections = function (elementsById, chordPositionQst
 
       // Set chord position
       if (chordPosition != null) element.setAttribute('ch-chord-position', chordPosition);
+
+      // Drawn in the space after the note it is attached to, so the bisect above lands on the
+      // note after the mark -- the chord position the next phrase starts at, which is what
+      // reads it. Neither carries text or takes layout, so the rest of this loop is moot.
+      if (element.matches('breath, caesura')) continue;
 
       // Clean up formatted text
       for (const rend of element.querySelectorAll('rend')) {
@@ -7109,7 +7114,7 @@ ChScore.prototype._generateSectionsFromSimpleScore = function (verseNumbers, has
     const startsNewPhrase = (chordPosition) => {
       const syl = lyricElementsByCp[chordPosition]?.[0]?.querySelector('syl:not(:empty)');
       if (!syl || ['m', 't'].includes(syl.getAttribute('wordpos'))) return false;
-      return /^\p{Lu}/u.test(syl.textContent.trim());
+      return this._opensWithCapital(syl.textContent);
     };
 
     const chorusGaps = lyricGaps.filter(lyricGap => lyricGap.length
@@ -7614,6 +7619,28 @@ ChScore.prototype._lyricElementSoundingAt = function (lyricElements, passNumber,
 
   if (isSingleLine) return soundingIndex(0);
   return soundingIndex(sungElements.findIndex(ve => this._verseLineNumber(ve) === passNumber));
+}
+
+// The chord position each system starts at -- where the engraver wrapped the music onto a new
+// line. Hymn engraving often puts a phrase to a system, so it is evidence, but weak: how much
+// fits on a line is as much a question of page width as of phrasing.
+ChScore.prototype._systemBreakChordPositions = function () {
+  if (this._scoreData.systemBreakChordPositions) return this._scoreData.systemBreakChordPositions;
+  const chordPositions = new Set();
+  for (const sb of this._scoreData.meiParsed?.querySelectorAll('sb') ?? []) {
+    let node = sb;
+    let found = null;
+    while (node && found === null) {
+      node = node.nextElementSibling ?? node.parentElement?.nextElementSibling;
+      if (!node) break;
+      const element = node.hasAttribute?.('ch-chord-position')
+        ? node : node.querySelector?.('[ch-chord-position]');
+      if (element) found = Number.parseInt(element.getAttribute('ch-chord-position'));
+    }
+    if (found !== null && !Number.isNaN(found)) chordPositions.add(found);
+  }
+  this._scoreData.systemBreakChordPositions = chordPositions;
+  return chordPositions;
 }
 
 // Round markers, by the chord position they're engraved at. The marker is the dir's own
@@ -8142,18 +8169,62 @@ ChScore.prototype._continuesLyricLine = function (lyricLineId, nextLyricLineId) 
   return lyricLineId?.split('.')[1] === nextLyricLineId?.split('.')[1];
 }
 
-// Group syllables into the runs that become stanzas: one lyric line, one section, one
-// verse type, up to a label or a jump back into a repeat. Split out so phrase-start
-// detection and stanza building can't drift apart about where a stanza begins.
+// A chorus the engraving labels, but which the verse sings its way through and out of again
+// -- the same verse line on both sides -- is that verse's own refrain, not a chorus
+// ("When I Go to Church"). The same reasoning _generateSectionsFromSimpleScore applies as
+// `isVerseRefrain`, marked on the syllables here because a complex-sections score never
+// reaches it: its sections come from the stanzas, so nothing asks before the runs are cut.
+ChScore.prototype._markMidVerseRefrains = function (syllables) {
+  const typeOf = (syllable) => syllable.sectionType ?? syllable.verseLabel ?? null;
+  const lineOf = (syllable) => syllable.lyricLineIds?.[0] ?? null;
+
+  // The syllables as contiguous stretches of one type on one lyric line
+  const stretches = [];
+  for (const syllable of syllables) {
+    if (!syllable.text) continue;
+    const previous = stretches.at(-1);
+    if (previous && previous.type === typeOf(syllable) && previous.line === lineOf(syllable)) {
+      previous.syllables.push(syllable);
+      continue;
+    }
+    stretches.push({ type: typeOf(syllable), line: lineOf(syllable), syllables: [syllable] });
+  }
+
+  for (let index = 1; index < stretches.length - 1; index++) {
+    const stretch = stretches[index];
+    if (stretch.type !== 'chorus') continue;
+    const before = stretches[index - 1];
+    const after = stretches[index + 1];
+    // Bracketed by the same verse line: the verse goes into it and comes back out
+    if (before.type !== 'verse' || after.type !== 'verse') continue;
+    if (before.line !== after.line) continue;
+    // The verse resuming, not the next one starting: a verse number after the chorus says
+    // a new verse begins there. "Grandmother" carries the chorus between verses and marks
+    // each one "2.", "3."; its chorus is a chorus, and only the unlabelled case is a
+    // refrain the verse sings its way out of.
+    if (after.syllables[0]?.label) continue;
+    // And the verse has to actually resume: a syllable or two after the chorus is a
+    // fragment left over from it -- "Grandmother" closes on "you." in a third ending --
+    // not the verse carrying on, which would make its chorus a refrain wrongly.
+    if (after.syllables.length <= this._maxPickupSyllables) continue;
+    for (const syllable of stretch.syllables) syllable.isMidVerseRefrain = before.line;
+  }
+}
+
 ChScore.prototype._syllableStanzaRuns = function (syllables) {
+  this._markMidVerseRefrains(syllables);
   const runs = [];
   let current = null;
   for (const syllable of syllables) {
-    const lyricLineId = syllable.lyricLineIds?.[0] ?? null;
+    let lyricLineId = syllable.lyricLineIds?.[0] ?? null;
     if (!lyricLineId || !syllable.text) continue;
+    // A refrain the verse sings through belongs to the verse, whichever line it is
+    // engraved on and whatever the engraving calls it
+    if (syllable.isMidVerseRefrain) lyricLineId = syllable.isMidVerseRefrain;
     // A section says what it is; fall back to the lyric element's own label for
     // scores walked without sections to align to
-    const type = syllable.sectionType ?? syllable.verseLabel ?? null;
+    const type = syllable.isMidVerseRefrain
+      ? 'verse' : (syllable.sectionType ?? syllable.verseLabel ?? null);
 
     // Inside one section the lyric line may change and change back, and it is still one
     // stanza; only across sections does a new line start a new run
@@ -8189,7 +8260,8 @@ ChScore.prototype._maxPickupSyllables = 3;
 // of _syllableStanzaRuns' own break rules because phrase starts are derived from the runs, so
 // breaking there first hides the phrases that straddle the new boundary.
 ChScore.prototype._splitRunsAtRepeatedSections = function (runs, phraseStarts) {
-  const startsPhrase = (syllable) => phraseStarts.has(syllable.chordPositions[0]);
+  const startsPhraseIn = (run, syllable) =>
+    this._phraseStartsFor(phraseStarts, run).has(syllable.chordPositions[0]);
 
   const split = [];
   for (const run of runs) {
@@ -8207,8 +8279,9 @@ ChScore.prototype._splitRunsAtRepeatedSections = function (runs, phraseStarts) {
       // The pickup's worth of slack is for a boundary reached through a repeat, whose
       // opening word can be engraved before it. Nothing leads into the far edge, so a
       // syllable there that opens no phrase is the section's own ending running on.
-      const opensStanza = startsPhrase(run.syllables[index])
-        || (run.syllables[index].startsRepeatedSection && startsPhrase(run.syllables[index - 1]));
+      const opensStanza = startsPhraseIn(run, run.syllables[index])
+        || (run.syllables[index].startsRepeatedSection
+          && startsPhraseIn(run, run.syllables[index - 1]));
       if ((run.syllables[index].startsRepeatedSection || run.syllables[index].followsRepeatedSection)
         && index - pieceStart > this._maxPickupSyllables && opensStanza) {
         candidates.push(index);
@@ -8223,7 +8296,8 @@ ChScore.prototype._splitRunsAtRepeatedSections = function (runs, phraseStarts) {
     const cuts = [run.syllables.length];
     for (let at = candidates.length - 1; at >= 0; at--) {
       const opensALine = run.syllables
-        .slice(candidates[at] + 1, cuts[0]).some(startsPhrase);
+        .slice(candidates[at] + 1, cuts[0])
+        .some(syllable => startsPhraseIn(run, syllable));
       if (opensALine) cuts.unshift(candidates[at]);
     }
     cuts.unshift(0);
@@ -8236,6 +8310,27 @@ ChScore.prototype._splitRunsAtRepeatedSections = function (runs, phraseStarts) {
     }
   }
   return split;
+}
+
+// Join a chorus the score sings twice to the same words back into one stanza: engraved once
+// inside a repeat it arrives as two runs, the jump back being a stanza boundary everywhere
+// else. The type matters -- a verse repeated the same way is numbered afresh instead, because
+// a score counts its verses and sings its chorus through.
+ChScore.prototype._mergeRepeatedChorusRuns = function (runs) {
+  const textOf = (run) => this._foldedRunStream(run).stream;
+
+  const merged = [];
+  for (const run of runs) {
+    const previous = merged.at(-1);
+    if (previous && run.type === 'chorus' && previous.type === 'chorus'
+      && previous.lyricLineId === run.lyricLineId && textOf(previous) === textOf(run)) {
+      previous.syllables.push(...run.syllables);
+      previous.lastChordPosition = run.syllables.at(-1).chordPositions.at(-1);
+      continue;
+    }
+    merged.push({ ...run, syllables: [...run.syllables] });
+  }
+  return merged;
 }
 
 // Fix pickup syllables that are grouped with the wrong section. Example: Teacher, Do You Love Me (Children’s Songbook)
@@ -8264,7 +8359,8 @@ ChScore.prototype._movePickupSyllables = function (runs, phraseStarts, syllables
     const run = runs[r];
     const firstChordPosition = run.syllables[0]?.chordPositions[0];
     // A run opening on a phrase start is whole; it was entered from the front
-    if (firstChordPosition == null || phraseStarts.has(firstChordPosition)) continue;
+    const runPhraseStarts = this._phraseStartsFor(phraseStarts, run);
+    if (firstChordPosition == null || runPhraseStarts.has(firstChordPosition)) continue;
 
     let phraseStart = null;
     const nearer = (candidate) => {
@@ -8272,7 +8368,7 @@ ChScore.prototype._movePickupSyllables = function (runs, phraseStarts, syllables
         phraseStart = candidate;
       }
     };
-    for (const candidate of phraseStarts) nearer(candidate);
+    for (const candidate of runPhraseStarts) nearer(candidate);
     for (const candidate of openingsByLyricLine.get(run.lyricLineId) ?? []) nearer(candidate);
     if (phraseStart === null) continue;
 
@@ -8284,6 +8380,11 @@ ChScore.prototype._movePickupSyllables = function (runs, phraseStarts, syllables
     }
     if (missing.length === 0 || missing.length > this._maxPickupSyllables) continue;
     if (previous.syllables.length <= missing.length) continue;
+    // A run smaller than the pickup it would claim is not a stanza opening but a fragment:
+    // "Grandmother" engraves a pickup before each verse, and the last one belongs to a
+    // fourth verse the song never sings, so filling it pulled "like you." backwards out of
+    // the closing chorus. The same test already guards the run being drawn from.
+    if (run.syllables.length <= missing.length) continue;
 
     const moved = previous.syllables.splice(-missing.length);
     // Standing in for a position means carrying its round marker -- the ➀ engraved over the
@@ -8315,17 +8416,12 @@ ChScore.prototype._markSingleLineRunsAsChorus = function (runs) {
   }
 }
 
-// A passage engraved with one lyric line -- a second ending, a coda lead-in -- carries
-// one line because everyone sings the same words there, not because those words belong
-// to verse 1. The line number changing at its edge is what ends the run, so those words
-// land in a stanza of their own instead of finishing the verse that ran into them
-// ("Teacher, Do You Love Me?", 1989 CSB: verse 2 stops on "And", and "lead me safely
-// with his light." starts a stanza). Give them back to that verse, up to the phrase
-// start where the next section's own words begin -- which is also what leaves a trailing
-// pickup ("I", into the chorus) behind as a fragment for _mergePickupStanzas.
-//
-// Only a boundary the music runs straight through: a jump back into a repeat is a real
-// stanza break, and so is a labelled or section-starting syllable.
+// A passage engraved with one lyric line -- a second ending, a coda lead-in -- carries one
+// line because everyone sings the same words there, not because they belong to verse 1. The
+// line number changing at its edge ends the run, stranding those words in a stanza of their
+// own ("Teacher, Do You Love Me?"); give them back, up to the phrase start where the next
+// section's words begin. Only where the music runs straight through: a jump back into a
+// repeat is a real stanza break, and so is a labelled or section-starting syllable.
 ChScore.prototype._mergeSingleLineRuns = function (runs, phraseStarts) {
   // In a two-part score the stacked lines are parts singing at once, not a verse's
   // alternatives, so a later single-line passage isn't the two of them converging and
@@ -8356,7 +8452,15 @@ ChScore.prototype._mergeSingleLineRuns = function (runs, phraseStarts) {
     const previousLast = previous.syllables.at(-1);
     if (!first || !previousLast) continue;
     if (first.chordPositions[0] <= previousLast.chordPositions.at(-1)) continue;
-    if (previous.type !== run.type || previous.lyricLineId === run.lyricLineId) continue;
+    // A run that asserts nothing of its own -- no verse number, no section boundary, and
+    // too short to hold a phrase -- is the previous stanza still going, whatever type it
+    // was given by default. "Grandmother" closes its last chorus on "you.", engraved in a
+    // third ending and so on the third verse's lyric line, which starts a run the type test
+    // below would otherwise refuse to give back.
+    const assertsNothing = !first.label && !first.startsSection && !first.startsRepeatedSection
+      && run.syllables.length < this._maxPickupSyllables;
+    if (!assertsNothing
+      && (previous.type !== run.type || previous.lyricLineId === run.lyricLineId)) continue;
     if (first.label || first.startsSection || first.startsRepeatedSection) continue;
 
     // A word is never cut across two stanzas, whoever's line each half sits on. Read off
@@ -8379,7 +8483,9 @@ ChScore.prototype._mergeSingleLineRuns = function (runs, phraseStarts) {
         return start <= previousEnd && previousStart <= end;
       })
       .map(other => other.lyricLineId));
-    if (!continuesWord && !siblingLineIds.has(run.lyricLineId)) continue;
+    // A fragment asserting nothing needs no sibling line to vouch for it: it is not a
+    // passage everyone converges onto, it is a word or two left over from the one before.
+    if (!continuesWord && !assertsNothing && !siblingLineIds.has(run.lyricLineId)) continue;
 
     // Where the next section's words start. A run with none of its own opens no section
     // -- it is all continuation -- so it joins the verse whole; the empty run left behind
@@ -8387,7 +8493,7 @@ ChScore.prototype._mergeSingleLineRuns = function (runs, phraseStarts) {
     // above, not the presence of a phrase start here.
     let end = 1;
     while (end < run.syllables.length
-      && !phraseStarts.has(run.syllables[end].chordPositions[0])) end += 1;
+      && !this._phraseStartsFor(phraseStarts, run).has(run.syllables[end].chordPositions[0])) end += 1;
 
     previous.syllables.push(...run.syllables.splice(0, end));
     previous.lastChordPosition = previous.syllables.at(-1).chordPositions.at(-1);
@@ -8409,17 +8515,25 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   // where a verse actually began and ended, so they have to follow rather than precede
   // them. Pickups move first: shedding a trailing pickup is what can leave a run that is
   // pure continuation, which is what the merge then hands back to the verse.
-  const phraseStarts = this._getPhraseStartChordPositions(syllables, provisionalRuns);
+  const phraseStarts = this._getPhraseStartsByStaff(syllables, provisionalRuns);
   const sectionRuns = this._splitRunsAtRepeatedSections(provisionalRuns, phraseStarts);
-  const withPickups = this._movePickupSyllables(sectionRuns, phraseStarts, syllables);
+  const wholeChoruses = this._mergeRepeatedChorusRuns(sectionRuns);
+  const withPickups = this._movePickupSyllables(wholeChoruses, phraseStarts, syllables);
   const runs = this._mergeSingleLineRuns(withPickups, phraseStarts);
   this._markSingleLineRunsAsChorus(runs);
+
+  // Segmented again over the stanzas that came out rather than the ones that went in: the
+  // passes above cut and join runs, so the earlier walk was dividing stanzas that no longer
+  // exist, blind to boundaries those passes went on to make.
+  const finalPhraseStarts = this._getPhraseStartsByStaff(syllables, runs);
 
   // Walk the syllables in the order they're sung
   const built = [];
   let current = null;
   let builder = null;
+  let runPhraseStarts = null;
   for (const run of runs) for (const [index, syllable] of run.syllables.entries()) {
+    if (index === 0) runPhraseStarts = this._alignPhraseStartsToRun(finalPhraseStarts, run);
     const chordPosition = syllable.chordPositions[0];
     const label = syllable.label ?? null;
 
@@ -8429,7 +8543,7 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
       current.isChorus = run.isChorus ?? false;
       builder = this._wordBuilder();
       built.push({ stanza: current, builder: builder });
-    } else if (phraseStarts.has(chordPosition)) {
+    } else if (runPhraseStarts.has(chordPosition)) {
       builder.breakLine();
     }
 
@@ -8438,7 +8552,13 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
     // positions leaves out any stanza whose range came out degenerate.
     if (syllable.lyricElement) current.lyricElements.push(syllable.lyricElement);
 
-    if (syllable.roundMarker) builder.addRoundMarker(syllable.roundMarker);
+    // A round marker is the engraving naming where the next voice comes in, so the part it
+    // marks starts a line of its own -- the one place a line break is stated outright
+    // rather than inferred. Harmless at the top of a stanza, where there is no line yet.
+    if (syllable.roundMarker) {
+      builder.breakLine();
+      builder.addRoundMarker(syllable.roundMarker);
+    }
 
     // The syllables as engraved, carried over from _extractLyricStanzas, which
     // read them off the lyric element: @wordpos is what joins them into words
@@ -8547,25 +8667,85 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   return stanzas;
 }
 
-// How much each phrase-start signal is worth, fitted on the training half of the corpus.
-// Text carries most of it — `capital` and `punctuation` are what a break really turns on —
-// and `gap` is the musical signal that fires often enough to matter. `fermata` and
-// `barLine` are musically the right idea but hardly ever fire in hymnody, so they're kept
-// for repertoire that does mark its phrases rather than for what they earn here.
-ChScore.prototype._phraseStartWeights = {
-  punctuation: 1.0, capital: 1.5, gap: 0.8,
-  fermata: 0.4, barLine: 0.6, beatPhase: 0.5,
-  printedLine: 0.8,
-  // Negative: evidence against breaking here, not for it
-  functionWord: -0.4,
-  // What a break has to be worth before it's taken at all, and what a line straying
-  // from the song's typical length costs per syllable
-  breakCost: 1.9, lengthCost: 0.3,
-  // How much of `breakCost` a score is let off for a signal it cannot give at all (see
-  // _scorePhraseStarts). Half: full relief lets the length prior place the extra breaks in
-  // the wrong places.
-  absentSignalRelief: 0.5,
-};
+// Languages whose hymn texts leave about half their lines uncapitalized, and what `capital`
+// is worth there as a share of its usual weight.
+const CH_LOW_CAPITAL_LANGUAGES = new Set(['es', 'de', 'it', 'mg', 'ru']);
+const CH_LOW_CAPITAL_SHARE = 0.5;
+
+// What each phrase-start signal is worth in this score. Four layers, in the order they
+// apply: the general table, the language's share of `capital`, a caller's overrides, the rates.
+ChScore.prototype._weights = function (rates = null) {
+  const overrides = this._phraseWeightOverrides ?? null;
+  // Memoized per language and per override set. `rates` are known only to the scoring walk;
+  // the callers reading a cost rather than a signal ask without them, inside loops.
+  const lang = this._scoreData?.scoreMetadata?.lang ?? null;
+  const memo = this._resolvedWeights;
+  if (!rates && memo?.overrides === overrides && memo?.lang === lang) return memo.weights;
+
+  // 1. Fitted on the training half of the English corpus. Text carries most of it; `fermata`
+  // and `barLine` are for repertoire that marks its phrases, not for what they earn here.
+  const generalWeights = {
+    punctuation: 1.0, capital: 1.5, gap: 0.8,
+    fermata: 0.4, barLine: 0.6, beatPhase: 0.5,
+    printedLine: 0.8, systemBreak: 0.25,
+    // Negative: evidence against breaking here, not for it
+    functionWord: -0.4,
+    // What a break has to be worth to be taken at all, and what a line straying from the
+    // song's typical length costs per syllable
+    breakCost: 1.9, lengthCost: 0.3,
+    // What each syllable short of a comfortable line costs. A cost rather than a floor, so
+    // strong evidence can buy a short line ("Evermore!") and weak evidence still can't.
+    shortLineCost: 1.0,
+    // How much better a neighbouring syllable has to look, to one verse's own words, before
+    // that verse moves off the break its staff agreed on (see _alignPhraseStartsToRun)
+    verseShiftMargin: 1.5,
+    // Below this, a verse has no evidence of its own at a break another verse asked for,
+    // and declines it rather than dividing where its own words don't
+    foreignBreakFloor: 0.5,
+    // What a short closing line costs, as a share of the above: a closing tag is a real form
+    finalShortLineCost: 0.4,
+    // How much of `breakCost` a score is let off for a signal it cannot give at all (step 4)
+    absentSignalRelief: 0.5,
+  };
+
+  // 2. In these languages `capital` both misses breaks and lands on proper nouns, so it is
+  // worth a share of its usual weight -- a share, so a caller zeroing it still gets zero.
+  const weights = Object.assign({}, generalWeights);
+  if (CH_LOW_CAPITAL_LANGUAGES.has(lang)) weights.capital *= CH_LOW_CAPITAL_SHARE;
+  // 3. The seam for a caller segmenting with weights of its own -- the phrase diagnostics,
+  // measuring one signal at a time, and the tuning sweeps
+  Object.assign(weights, overrides ?? {});
+
+  if (!rates) {
+    this._resolvedWeights = { overrides: overrides, lang: lang, weights: weights };
+    return weights;
+  }
+
+  // 4. A signal firing at almost every word start, or at almost none, says nothing about where
+  // phrases begin. A rate near 1/8 is the informative case, falling to 0 at either extreme.
+  const informativeness = (rate) =>
+    (rate <= 0.01 || rate >= 0.75) ? 0 : Math.min(1, (0.75 - rate) / 0.6);
+
+  const calibrated = Object.assign({}, weights);
+  for (const signal of ['capital', 'punctuation']) {
+    calibrated[signal] = weights[signal] * informativeness(rates[signal] ?? 0);
+  }
+
+  // `breakCost` is a share of what this score can offer, so a score that marks no phrases with
+  // case or punctuation isn't held to a threshold its remaining signals could never clear.
+  const musicalWeight = weights.gap + weights.fermata + weights.barLine
+    + weights.beatPhase + weights.printedLine + weights.systemBreak;
+  const textWeight = weights.capital + weights.punctuation;
+  // Only a signal the score gives no evidence for is discounted; one firing at an ordinary
+  // rate keeps its share, since the weights were fitted with it in hand.
+  const available = (signal) => (calibrated[signal] > 0 ? weights[signal] : 0);
+  const availableRatio = (available('capital') + available('punctuation') + musicalWeight)
+    / (textWeight + musicalWeight);
+  calibrated.breakCost = weights.breakCost
+    * (1 - weights.absentSignalRelief * (1 - availableRatio));
+
+  return calibrated;
+}
 
 // Verse numbers an instruction spells out rather than writing as a digit ("Chorus after
 // fourth verse:" in "O Thou Rock of Our Salvation"). Only as far as a verse count reaches.
@@ -8578,11 +8758,14 @@ ChScore.prototype._verseNumberWords = {
   // pt: { 1: 'primeiro', 2: 'segundo', 3: 'terceiro', 4: 'quarto', ... },
 };
 
-// Words a line doesn't end on
 ChScore.prototype._phraseFunctionWords = {
-  en: new Set(['a', 'an', 'the', 'and', 'or', 'nor', 'but', 'my', 'i’m', 'i’ll', 'thy',
-    'your', 'you’re', 'you’ll', 'our', 'we’re', 'we’ll', 'their', 'they’re', 'they’ll',
-    'very', 'every', 'ev’ry']),
+  en: new Set(['a', 'an', 'the', 'and', 'or', 'nor', 'but',
+    // Possessive determiners
+    'my', 'thy', 'your', 'our', 'their', 'his', 'her', 'its', 'whose',
+    'i’m', 'i’ll', 'you’re', 'you’ll', 'we’re', 'we’ll', 'they’re', 'they’ll',
+    'very', 'every', 'ev’ry',
+    // Prepositions that cannot close a line
+    'of', 'to', 'with', 'as', 'from', 'unto', 'into']),
 };
 
 // Phrases used only in attributions
@@ -8620,12 +8803,13 @@ ChScore.prototype._median = function (numbers) {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
-// A signal firing at almost every word start, or at almost none, says nothing about
-// where phrases begin. Phrases run roughly 6–10 syllables, so a rate near 1/8 is the
-// informative case; the weight falls off from there and reaches 0 at the extremes.
-ChScore.prototype._signalInformativeness = function (rate) {
-  if (rate <= 0.01 || rate >= 0.75) return 0;
-  return Math.min(1, (0.75 - rate) / 0.6);
+// Whether a word opens with a capital, reading past whatever is printed before the first
+// letter. A word can be engraved with an opening quote or bracket on it ("\u201cFr\u00f6h-li-cher"),
+// and testing the first character of the syllable then answers about the quote instead --
+// which took the capital signal away from exactly the line-opening words that carry it.
+ChScore.prototype._opensWithCapital = function (text) {
+  const letters = (text ?? '').trim().replace(/^[^\p{L}\p{N}]+/u, '');
+  return /^\p{Lu}/u.test(letters);
 }
 
 // Evidence that a phrase starts at each chord position, as a Map. Only word starts are
@@ -8637,16 +8821,47 @@ ChScore.prototype._signalInformativeness = function (rate) {
 ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
   runs = runs ?? this._syllableStanzaRuns(syllables);
   const chordPositions = this._scoreData.chordPositions ?? [];
-  const weights = this._phraseStartWeights;
 
   const measures = this._scoreData.measures ?? [];
   const measureIndexById = new Map();
   measures.forEach((measure, index) => measureIndexById.set(measure.measureId, index));
 
-  const fermataChordPositions = new Set();
-  for (const fermata of this._scoreData.meiParsed?.querySelectorAll('fermata[ch-chord-position]') ?? []) {
-    fermataChordPositions.add(Number.parseInt(fermata.getAttribute('ch-chord-position')));
-  }
+  const systemBreakChordPositions = this._systemBreakChordPositions();
+
+  // Cached on the score: all three read only _scoreData, and _scorePhraseStarts runs several
+  // times per score -- twice per staff group, and once per signal again under diagnostics.
+  this._scoreData.markChordPositions ??= (() => {
+    const at = (selector) => {
+      const found = new Set();
+      for (const element of this._scoreData.meiParsed?.querySelectorAll(selector) ?? []) {
+        found.add(Number.parseInt(element.getAttribute('ch-chord-position')));
+      }
+      return found;
+    };
+    const rests = new Set();
+    for (const chordPosition of chordPositions) {
+      if (chordPosition?.notesAndRests?.some(element => element.isRest && element.isMelody)) {
+        rests.add(chordPosition.chordPosition);
+      }
+    }
+    return {
+      fermata: at('fermata[ch-chord-position]'),
+      breath: at('breath[ch-chord-position], caesura[ch-chord-position]'),
+      rest: rests,
+    };
+  })();
+  const fermataChordPositions = this._scoreData.markChordPositions.fermata;
+
+  // A breath mark or caesura is the engraver saying outright where a phrase ends, which
+  // nothing else here does -- every other signal infers it. Both are annotated with the chord
+  // position the next phrase starts at (see _annotateDirections), so unlike the backward-looking
+  // signals they are read at the candidate itself.
+  const breathChordPositions = this._scoreData.markChordPositions.breath;
+
+  // Where the melody rests. A rest is a phrase break the engraver wrote down whatever its
+  // length: an eighth note followed by an eighth rest says "stop here" more plainly than the
+  // quarter note's worth of time they add up to, which is all the duration test below can see.
+  const restChordPositions = this._scoreData.markChordPositions.rest;
 
   const durations = [];
   for (const cp of this._scoreData.audibleChordPositions ?? []) {
@@ -8657,10 +8872,20 @@ ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
   // Raw per-signal hits, kept unweighted so the text signals can be calibrated once the
   // whole score has been seen
   const hits = new Map(); // cp -> { count, punctuation, capital, ... }
+  // The same, kept per lyric line. The shared scores average the verses stacked on a staff
+  // against each other, which is what lets them reinforce a break; these say what each
+  // verse on its own saw, which is what lets one shift off the shared answer (see
+  // _alignPhraseStartsToRun).
+  const hitsByLine = new Map(); // lyricLineId -> cp -> { ... }
+  let currentLine = null;
   const bump = (cp, signal, value = 1) => {
     if (!hits.has(cp)) hits.set(cp, { count: 0 });
-    const entry = hits.get(cp);
-    entry[signal] = (entry[signal] ?? 0) + value;
+    hits.get(cp)[signal] = (hits.get(cp)[signal] ?? 0) + value;
+    if (currentLine == null) return;
+    if (!hitsByLine.has(currentLine)) hitsByLine.set(currentLine, new Map());
+    const byCp = hitsByLine.get(currentLine);
+    if (!byCp.has(cp)) byCp.set(cp, {});
+    byCp.get(cp)[signal] = (byCp.get(cp)[signal] ?? 0) + value;
   };
 
   const functionWords = this._phraseFunctionWords[this._scoreData.scoreMetadata?.lang];
@@ -8674,6 +8899,7 @@ ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
 
   let wordStarts = 0;
   for (const run of runs) {
+    currentLine = run.lyricLineId ?? null;
     for (let i = 1; i < run.syllables.length; i++) {
       const syllable = run.syllables[i];
       const previous = run.syllables[i - 1];
@@ -8685,7 +8911,14 @@ ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
       bump(cp, 'count');
 
       const previousText = (previous.syls?.at(-1)?.text ?? previous.text ?? '').trim();
-      if (this._patterns.phrasePunctuation.test(previousText)) bump(cp, 'punctuation');
+      if (this._patterns.phrasePunctuation.test(previousText)) {
+        // An initial's period ends a name, not a line ("Joseph F. Smith", and seven more
+        // like it in "Latter-day Prophets"). Read as the whole word, gathered back over
+        // the notes it is sung across, so a word whose last syllable happens to be one
+        // letter is not mistaken for one.
+        const previousWord = this._wordEndingAt(run.syllables, i - 1).trim();
+        if (!this._patterns.initialAbbreviation.test(previousWord)) bump(cp, 'punctuation');
+      }
       // A line ending on a word that leans on the next one is evidence against a break.
       // Compared as a whole word, gathered back across the notes it's sung over: a word
       // split between them arrives a fragment at a time, and matching on the fragment it
@@ -8694,7 +8927,7 @@ ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
         const bare = foldWordCached(this._wordEndingAt(run.syllables, i - 1));
         if (functionWords.has(bare)) bump(cp, 'functionWord');
       }
-      if (/^\p{Lu}/u.test((firstSyl?.text ?? syllable.text ?? '').trim())) bump(cp, 'capital');
+      if (this._opensWithCapital(firstSyl?.text ?? syllable.text)) bump(cp, 'capital');
 
       // The span the previous syllable occupies: its own onset plus every position with
       // no syllable of its own, which _gatherSyllables already appended to it
@@ -8703,8 +8936,15 @@ ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
       // note and a rest are the same thing to a singer waiting to start the next phrase, and
       // measuring them separately made one graded and the other merely present-or-absent.
       const gapDuration = span.reduce((total, spanCp) => total + (chordPositions[spanCp]?.durationQ ?? 0), 0);
-      if (gapDuration >= medianDuration * 1.75) bump(cp, 'gap');
+      // One signal, not three: a long wait, a rest of any length, and a breath mark or
+      // caesura are the same evidence arriving by different routes, and a position with
+      // two of them is not twice the evidence -- an eighth rest is already a wait, and a
+      // breath mark is usually written over one.
+      if (gapDuration >= medianDuration * 1.75
+        || span.some(spanCp => restChordPositions.has(spanCp))
+        || breathChordPositions.has(cp)) bump(cp, 'gap');
       if (span.some(spanCp => fermataChordPositions.has(spanCp))) bump(cp, 'fermata');
+      if (systemBreakChordPositions.has(cp)) bump(cp, 'systemBreak');
 
       // Barlines crossed between the previous syllable and this one.
       // Repeat barlines are deliberately not evidence: in a song that doesn't start on a
@@ -8719,56 +8959,54 @@ ChScore.prototype._scorePhraseStarts = function (syllables, runs = null) {
     }
   }
 
-  // Calibrate the text signals against how often they fire in this score, so one weight
-  // table works across languages: a score that capitalizes every word start (or none),
-  // or that engraves no punctuation, simply falls back on the musical signals.
+  // What this score's own text supports, which is the last thing deciding a weight
   const totalHits = (signal) => [...hits.values()].reduce((total, entry) => total + (entry[signal] ?? 0), 0);
-
-  const scale = {
-    capital: this._signalInformativeness(wordStarts ? totalHits('capital') / wordStarts : 0),
-    punctuation: this._signalInformativeness(wordStarts ? totalHits('punctuation') / wordStarts : 0),
-  };
-
-  // What a break has to be worth is a share of what this score can offer. `scale` takes the
-  // text signals away from a score that marks no phrases with case or punctuation, and a
-  // fixed threshold would then reject every break it has left, so the threshold is weighted
-  // by the same signals. A score keeping both is unchanged.
-  const musicalWeight = weights.gap + weights.fermata + weights.barLine
-    + weights.beatPhase + weights.printedLine;
-  const textWeight = weights.capital + weights.punctuation;
-  // Only a signal the score gives *no* evidence for is discounted. Where one fires at an
-  // ordinary rate the weights were fitted with it in hand, so its share of the cost stands
-  // and a Latin-script score is left exactly as before.
-  const available = (signal) => (scale[signal] > 0 ? weights[signal] : 0);
-  const availableRatio = (available('capital') + available('punctuation') + musicalWeight)
-    / (textWeight + musicalWeight);
-  const breakCost = weights.breakCost
-    * (1 - weights.absentSignalRelief * (1 - availableRatio));
+  const rateOf = (signal) => (wordStarts ? totalHits(signal) / wordStarts : 0);
+  const weights = this._weights({ capital: rateOf('capital'), punctuation: rateOf('punctuation') });
+  const breakCost = weights.breakCost;
 
   const scores = new Map();
   for (const [cp, entry] of hits) {
     let score = 0;
     for (const [signal, weight] of Object.entries(weights)) {
       if (!entry[signal]) continue;
-      score += weight * (scale[signal] ?? 1) * (entry[signal] / entry.count);
+      score += weight * (entry[signal] / entry.count);
     }
     scores.set(cp, score);
   }
 
-  this._addBeatPhaseBonus(scores);
-  this._addPrintedLineBonus(scores, runs);
+  // Added into a map of their own first: a bonus belongs to the chord position rather than
+  // to any one verse, so each line's own score needs the same figure added to it.
+  const bonuses = new Map([...hits.keys()].map(cp => [cp, 0]));
+  this._addBeatPhaseBonus(bonuses, runs);
+  this._addPrintedLineBonus(bonuses, runs);
+  for (const [cp, bonus] of bonuses) scores.set(cp, (scores.get(cp) ?? 0) + bonus);
+
+  const scoresByLine = new Map();
+  for (const [lyricLineId, byCp] of hitsByLine) {
+    const lineScores = new Map();
+    for (const [cp, entry] of byCp) {
+      let score = bonuses.get(cp) ?? 0;
+      for (const [signal, weight] of Object.entries(weights)) {
+        if (!entry[signal]) continue;
+        score += weight;
+      }
+      lineScores.set(cp, score);
+    }
+    scoresByLine.set(lyricLineId, lineScores);
+  }
   // `breakCost` is returned alongside the scores because only this pass knows how much of
   // the weight table this score's own text actually supports
-  return { scores: scores, breakCost: breakCost };
+  return { scores: scores, breakCost: breakCost, scoresByLine: scoresByLine };
 }
 
-// Phrases start at the same point in the measure all song long — not necessarily the
-// downbeat. "Behold the Wounds in Jesus\u2019 Hands" starts every line on beat 4 of 4, so
+// Phrases start at the same point in the measure throughout a stanza — not necessarily the
+// downbeat, and not necessarily the same point in every stanza. "Behold the Wounds in Jesus\u2019 Hands" starts every line on beat 4 of 4, so
 // rewarding downbeats pointed at the wrong syllable every time; the beat has to be read off
 // the score. One signal among the others, not a rule: it lifts the candidates on that beat
 // and never rules out the ones off it. Reading only where notes fall, it works the same in a
 // language whose spelling marks no phrase at all.
-ChScore.prototype._addBeatPhaseBonus = function (scores) {
+ChScore.prototype._addBeatPhaseBonus = function (scores, runs) {
   const chordPositions = this._scoreData.chordPositions ?? [];
   const measuresById = this._scoreData.measuresById ?? {};
 
@@ -8788,19 +9026,52 @@ ChScore.prototype._addBeatPhaseBonus = function (scores) {
     return (lead + chordPositions[cp].startQ - measure.startQ) % fullMeasureQ;
   };
 
-  // Which beat it is comes from the pickup, not from the evidence: a song opening with a
-  // one-beat pickup into 4/4 starts its phrases a beat before each barline, all song long.
+  // Which beat it is comes from the music, not from the evidence: the song's pickup says
+  // where a phrase falls against the barline, all song long -- a one-beat pickup into 4/4
+  // starts its phrases a beat before each one.
   const firstMeasure = (this._scoreData.measures ?? [])[0];
   if (!firstMeasure || firstMeasure.startQ == null) return;
   const [fc, fu] = firstMeasure.timeSignature ?? [0, 0];
   const fullQ = fc && fu ? fc * (4 / fu) : 0;
   if (!fullQ) return;
   const pickupQ = firstMeasure.measureType === 'partial-pickup' ? firstMeasure.durationQ : 0;
-  const phraseBeat = ((fullQ - pickupQ) % fullQ + fullQ) % fullQ;
-  for (const cp of scores.keys()) {
-    const beat = beatOf(cp);
-    if (beat != null && Math.abs(beat - phraseBeat) < 0.01) {
-      scores.set(cp, scores.get(cp) + this._phraseStartWeights.beatPhase);
+  const songPhraseBeat = ((fullQ - pickupQ) % fullQ + fullQ) % fullQ;
+
+  // A chorus need not come in on the same beat as the verses ("It Is Well with My Soul"), so
+  // a section type may keep its own -- but only on the whole type's say-so, since one stanza
+  // can open off the beat its phrases keep. Every stanza of the type long enough to hold a
+  // phrase must agree, and there must be more than one; otherwise the song's pickup stands.
+  const CH_MIN_PHRASE_SYLLABLES = 4;
+  const openingsByType = new Map();
+  for (const run of runs) {
+    if (run.syllables.length < CH_MIN_PHRASE_SYLLABLES) continue;
+    const opening = run.syllables[0]?.chordPositions?.[0];
+    const beat = opening == null ? null : beatOf(opening);
+    if (beat == null) continue;
+    const type = run.type ?? '';
+    if (!openingsByType.has(type)) openingsByType.set(type, []);
+    openingsByType.get(type).push(beat);
+  }
+  const beatByType = new Map();
+  for (const [type, beats] of openingsByType) {
+    if (beats.length > 1 && beats.every(beat => Math.abs(beat - beats[0]) < 0.01)) {
+      beatByType.set(type, beats[0]);
+    }
+  }
+
+  const bonus = this._weights().beatPhase;
+  const bonused = new Set();
+  for (const run of runs) {
+    const phraseBeat = beatByType.get(run.type ?? '') ?? songPhraseBeat;
+    for (const syllable of run.syllables) {
+      const cp = syllable.chordPositions[0];
+      // Stacked verses sing the same chord positions, so the bonus is paid once for each
+      if (!scores.has(cp) || bonused.has(cp)) continue;
+      const beat = beatOf(cp);
+      if (beat != null && Math.abs(beat - phraseBeat) < 0.01) {
+        scores.set(cp, scores.get(cp) + bonus);
+        bonused.add(cp);
+      }
     }
   }
 }
@@ -8811,51 +9082,135 @@ ChScore.prototype._addBeatPhaseBonus = function (scores) {
 // or repeat. Matching on the head and tail of a line rather than the whole of it is what
 // makes a typo in the middle harmless. Strong evidence, not an override: printed verses
 // are sometimes wrapped to fit a column rather than by phrase.
-ChScore.prototype._addPrintedLineBonus = function (scores, runs) {
-  const printedStanzas = this._stanzaTextBlocks().map(block => block.html);
-  if (printedStanzas.length === 0) return;
-  // Memoized: syllable texts repeat heavily across a song's verses, and the normalizer is
-  // built for whole documents rather than the 2–5 characters it's handed here.
-  const folded = new Map();
-  const fold = (text) => {
-    if (!folded.has(text)) {
-      folded.set(text, this._foldForMatching(text, 'remove'));
+// A run's syllables as one folded string, with each character remembering which syllable
+// it came from -- what both readers of the printed verses match against.
+ChScore.prototype._foldedRunStream = function (run) {
+  // Memoized per syllable rather than per run: syllables repeat heavily across verses, and a
+  // run's stream would outlive its syllables, since later passes rebuild runs by spreading them.
+  this._foldedSyllableText ??= new Map();
+  const cache = this._foldedSyllableText;
+  let stream = '';
+  const syllableIndexByChar = [];
+  run.syllables.forEach((syllable, index) => {
+    const text = syllable.text ?? '';
+    let folded = cache.get(text);
+    if (folded === undefined) {
+      folded = this._foldForMatching(text, 'remove');
+      cache.set(text, folded);
     }
-    return folded.get(text);
-  };
+    for (const char of folded) {
+      stream += char;
+      syllableIndexByChar.push(index);
+    }
+  });
+  return { stream: stream, syllableIndexByChar: syllableIndexByChar };
+}
 
-  const printedLines = [];
-  for (const stanza of printedStanzas) {
-    for (const line of stanza.split('\n')) {
-      const folded = fold(line);
-      if (folded.length >= 6) printedLines.push(folded);
+// The stanzas printed below the music, each line as its folded words and their joined text.
+// The one place they are read: both the division taken as fact and the bonus anchors start here.
+ChScore.prototype._printedStanzaLines = function () {
+  if (!this._printedLines) {
+    this._printedLines = this._stanzaTextBlocks().map(block => {
+      const lines = [];
+      for (const raw of block.html.split('\n')) {
+        const words = raw.split(/\s+/)
+          .map(word => this._foldForMatching(word, 'remove')).filter(Boolean);
+        if (words.length) lines.push({ words: words, text: words.join('') });
+      }
+      return { lines: lines, text: lines.map(line => line.text).join('') };
+    });
+  }
+  return this._printedLines;
+}
+
+// What each printed line is recognized by: whole words from either end, until the anchor is
+// long enough and spans a word boundary -- one long word matched anywhere is not evidence.
+ChScore.prototype._printedLineAnchors = function () {
+  if (!this._printedAnchors) {
+    const ANCHOR_LENGTH = 10;
+    // The words rather than the string, so the tail can be gathered backwards and put back
+    // in reading order
+    const anchorWords = (words) => {
+      let length = 0;
+      for (let count = 0; count < words.length; count++) {
+        length += words[count].length;
+        if (length >= ANCHOR_LENGTH && count >= 1) return words.slice(0, count + 1);
+      }
+      return null;
+    };
+
+    this._printedAnchors = [];
+    for (const stanza of this._printedStanzaLines()) {
+      for (const line of stanza.lines) {
+        if (line.text.length < 6) continue;
+        // Both ends answer to the same word count and total, so either both anchor or neither
+        const head = anchorWords(line.words);
+        if (!head) continue;
+        const tail = anchorWords([...line.words].reverse());
+        this._printedAnchors.push({
+          head: head.join(''),
+          tail: [...tail].reverse().join(''),
+        });
+      }
     }
   }
-  if (printedLines.length === 0) return;
+  return this._printedAnchors;
+}
 
+// Where a printed stanza divides its lines, for a run whose words it matches exactly. Taken
+// as the answer rather than weighed as evidence: the text printed below the music is the
+// poet's own line division, and beats anything inferred from case, punctuation and note
+// length. Exact agreement on the words is the guard -- printed verses that are a partial set,
+// or wrapped to fit a column, differ in their letters and leave the run to be scored.
+ChScore.prototype._printedBreaksForRun = function (run) {
+  if (this._ignorePrintedVerses) return null;
+  const stanzas = this._printedStanzaLines();
+  if (!stanzas.length) return null;
+  const { stream, syllableIndexByChar } = this._foldedRunStream(run);
+  if (!stream) return null;
+
+  const stanza = stanzas.find(candidate => candidate.text === stream);
+  if (!stanza || stanza.lines.length < 2) return null;
+
+  const breaks = [];
+  let at = 0;
+  for (const line of stanza.lines.slice(0, -1)) {
+    at += line.text.length;
+    const index = syllableIndexByChar[at];
+    // A printed line that ends mid-word is the engraver wrapping a column, not dividing a
+    // phrase, and nothing else here may break a word across two lines
+    const opensWord = !['m', 't'].includes(run.syllables[index]?.syls?.[0]?.wordpos);
+    if (index == null || index === 0 || !opensWord) return null;
+    breaks.push(index);
+  }
+  return breaks;
+}
+
+ChScore.prototype._addPrintedLineBonus = function (scores, runs) {
+  if (this._ignorePrintedVerses) return;
+  const anchors = this._printedLineAnchors();
+  if (!anchors.length) return;
+
+  const bonus = this._weights().printedLine;
+  const bonused = new Set();
   for (const run of runs) {
-    // The run's syllables as one folded string, with each character remembering which
-    // syllable it came from
-    let stream = '';
-    const syllableIndexByChar = [];
-    run.syllables.forEach((syllable, index) => {
-      for (const char of fold(syllable.text ?? '')) {
-        stream += char;
-        syllableIndexByChar.push(index);
-      }
-    });
+    const { stream, syllableIndexByChar } = this._foldedRunStream(run);
     if (!stream) continue;
 
     const bonusAt = (syllableIndex) => {
       const syllable = run.syllables[syllableIndex];
       if (!syllable) return;
       const cp = syllable.chordPositions[0];
-      if (scores.has(cp)) scores.set(cp, scores.get(cp) + this._phraseStartWeights.printedLine);
+      // Paid once per position, whatever finds it. Every printed line is matched against
+      // every stanza, and a repeated line matches in several of them at the same place, so
+      // adding on each hit let one signal reach many times its own weight -- the six
+      // signals scored above are averaged over the lines singing a position and cannot.
+      if (!scores.has(cp) || bonused.has(cp)) return;
+      bonused.add(cp);
+      scores.set(cp, scores.get(cp) + bonus);
     };
 
-    for (const line of printedLines) {
-      const head = line.slice(0, 10);
-      const tail = line.slice(-10);
+    for (const { head, tail } of anchors) {
       for (let at = stream.indexOf(head); at !== -1; at = stream.indexOf(head, at + 1)) {
         bonusAt(syllableIndexByChar[at]);
       }
@@ -8866,34 +9221,175 @@ ChScore.prototype._addPrintedLineBonus = function (scores, runs) {
   }
 }
 
-// The chord positions where a lyric phrase starts, as a Set. Rather than thresholding the
-// evidence, each stanza is segmented with dynamic programming against a prior on how long
-// a line runs, so "phrases have at least a few syllables" and "a stanza's lines are about
-// the same length" are costs rather than special cases — and a one-syllable line can't be
-// produced at all. Two passes: the first finds the song's own typical line length, the
-// second segments against it.
-ChScore.prototype._getPhraseStartChordPositions = function (syllables, runs = null) {
+// Rather than thresholding the evidence, each stanza is segmented with dynamic programming
+// against a prior on how long a line runs, so "phrases have at least a few syllables" and
+// "a stanza's lines are about the same length" are costs rather than special cases. Two
+// passes: the first finds the group's own typical line length, the second segments against it.
+//
+// Which staff a stanza is sung from. Lyric line ids are 'staff.line'.
+ChScore.prototype._staffOfRun = function (run) {
+  return String(run?.lyricLineId ?? '').split('.')[0];
+}
+
+// The phrase starts that apply to one stanza. On a two-part song each staff keeps its own;
+// everywhere else every stanza shares the one set.
+ChScore.prototype._phraseStartsFor = function (phraseStarts, run) {
+  return phraseStarts.byLine.get(run.lyricLineId ?? '') ?? new Set();
+}
+
+// Where lyric phrases start, as a Map of staff to the chord positions that open one there.
+//
+// Segmented per staff on a two-part song, and over the whole score otherwise. Two parts
+// sing different words across the same chord positions, so scoring them together averages
+// one part's evidence against the other's, and one target length is struck between two
+// line lengths that were never meant to agree -- which is what breaks "I Pray in Faith"
+// after "He hears" rather than after "Father.". Stacked verses of one part still share,
+// which is what lets verses agreeing on a break reinforce it.
+ChScore.prototype._getPhraseStartsByStaff = function (syllables, runs = null) {
   runs = runs ?? this._syllableStanzaRuns(syllables);
-  const { scores, breakCost } = this._scorePhraseStarts(syllables, runs);
-  const { lengthCost } = this._phraseStartWeights;
-  const minLength = 4;
+  const byLine = new Map();
+  const askedByLine = new Map();
+  const scoresByLine = new Map();
+  let breakCost = this._weights().breakCost;
+  const groups = this._scoreData.features?.hasTwoPartMelody
+    ? [...new Set(runs.map(run => this._staffOfRun(run)))]
+      .map(staff => runs.filter(run => this._staffOfRun(run) === staff))
+    : [runs];
+  for (const group of groups) {
+    const segmented = this._segmentRuns(syllables, group);
+    breakCost = segmented.breakCost;
+    for (const lyricLineId of segmented.askedByLine.keys()) byLine.set(lyricLineId, segmented.starts);
+    for (const [lyricLineId, asked] of segmented.askedByLine) askedByLine.set(lyricLineId, asked);
+    for (const [lyricLineId, lineScores] of segmented.scoresByLine) {
+      scoresByLine.set(lyricLineId, lineScores);
+    }
+  }
+  return { byLine: byLine, askedByLine: askedByLine,
+    scoresByLine: scoresByLine, breakCost: breakCost };
+}
+
+// The staff's phrase starts, moved onto syllables this stanza can actually break at.
+//
+// Verses stacked on one staff share their breaks -- they are sung to the same notes -- but
+// they do not divide their words at the same notes: "light-ing" in one verse spans the
+// note "be-fore" starts on in another. A break landing inside this verse's word is dropped
+// outright at emission, where breakLine leaves a half-built word alone, and the verse comes
+// out a line short. So it is moved to the nearest syllable that opens a word, a syllable
+// either way -- earlier for preference, which keeps the whole word on the new line.
+ChScore.prototype._alignPhraseStartsToRun = function (phraseStarts, run) {
+  const starts = this._phraseStartsFor(phraseStarts, run);
+  const lineScores = phraseStarts.scoresByLine?.get(run.lyricLineId) ?? new Map();
+  const weights = this._weights();
+  const breakCost = phraseStarts.breakCost ?? weights.breakCost;
+  const opensWord = (syllable) => !['m', 't'].includes(syllable?.syls?.[0]?.wordpos);
+  const ownScore = (index) => lineScores.get(run.syllables[index]?.chordPositions[0]) ?? 0;
+
+  const asked = phraseStarts.askedByLine?.get(run.lyricLineId ?? '') ?? null;
+  const vetoBelow = weights.foreignBreakFloor;
+
+  const aligned = new Set();
+  for (const [index, syllable] of run.syllables.entries()) {
+    if (index === 0 || !starts.has(syllable.chordPositions[0])) continue;
+
+    // A break another verse asked for, which this verse's own words say nothing about, is
+    // declined: stacked verses divide where their own sentences end, and "I Have Two Ears"
+    // ends its first verse's line two syllables after its second's, which left "me" alone
+    // on a line. Only where this verse is silent -- any real signal of its own and it keeps
+    // the break, which is what verses reinforcing each other means.
+    if (asked && !asked.has(syllable.chordPositions[0])
+      && (lineScores.get(syllable.chordPositions[0]) ?? 0) < vetoBelow) continue;
+
+    // Where this verse could take the break instead, a syllable either way
+    const neighbours = [index - 1, index + 1].filter(at =>
+      at > 0 && at < run.syllables.length && opensWord(run.syllables[at]));
+
+    if (!opensWord(syllable)) {
+      // The break cannot stand here at all -- emission would drop it, leaving this verse a
+      // line short -- so it moves whether or not the neighbour is any stronger. Earlier for
+      // preference, which keeps the whole word on the new line.
+      const moved = neighbours[0] ?? neighbours[1];
+      if (moved != null) aligned.add(run.syllables[moved].chordPositions[0]);
+      continue;
+    }
+
+    // Both are legal, so the shared answer stands unless this verse's own words say
+    // otherwise: a neighbour has to be worth breaking on by itself and to beat what is
+    // under the break here. Verses stacked on a staff can then divide a syllable apart --
+    // one taking the strong signal at cp 5 and another the one at cp 6 -- rather than both
+    // being held to the average between them.
+    let best = index;
+    for (const at of neighbours) {
+      if (ownScore(at) > breakCost
+        && ownScore(at) > ownScore(best) + weights.verseShiftMargin) best = at;
+    }
+    aligned.add(run.syllables[best].chordPositions[0]);
+  }
+  return aligned;
+}
+
+// Every phrase start in the score, whichever staff answered for it.
+ChScore.prototype._getPhraseStartChordPositions = function (syllables, runs = null) {
+  const all = new Set();
+  for (const starts of this._getPhraseStartsByStaff(syllables, runs).byLine.values()) {
+    for (const chordPosition of starts) all.add(chordPosition);
+  }
+  return all;
+}
+
+// One group of stanzas segmented against its own evidence and its own typical line length.
+ChScore.prototype._segmentRuns = function (syllables, runs) {
+  const { scores, breakCost, scoresByLine } = this._scorePhraseStarts(syllables, runs);
+  const { lengthCost, shortLineCost, finalShortLineCost } = this._weights();
+  // How long a line wants to be. Not a floor: a line shorter than this pays
+  // shortLineCost for every syllable it lacks, wherever in the stanza it falls, so a
+  // closing tag ("Evermore!") is affordable where the evidence is there and a stray
+  // two-syllable line still isn't.
+  const comfortableLength = 4;
   const maxLength = 16;
 
   const segment = (run, targetLength, lengthWeight = lengthCost) => {
     const positions = run.syllables.map(syllable => syllable.chordPositions[0]);
     const count = positions.length;
-    if (count < minLength * 2) return [];
+    // A stanza has to be long enough to hold two comfortable lines before splitting it
+    // is a question at all
+    if (count < comfortableLength * 2) return [];
+
+    // Where a line may begin at all. A phrase never starts inside a word, and a score is keyed
+    // by chord position, so breaking there would pay breakCost for another verse's evidence.
+    const opensWord = (index) =>
+      !['m', 't'].includes(run.syllables[index].syls?.[0]?.wordpos);
+
+    // A round marker breaks the line whatever the walk decides, so it goes into the walk
+    // rather than being cut in afterwards: with the marker in view an earlier break can be
+    // the better split ("Listen, Listen"), and without it the later one wins.
+    const forced = new Set();
+    for (let index = 1; index < count; index++) {
+      if (run.syllables[index].roundMarker) forced.add(index);
+    }
+    // The last forced break before each position, which is as far back as a line ending
+    // there may reach
+    const earliestStart = Array(count + 1).fill(0);
+    for (let index = 1, previous = 0; index <= count; index++) {
+      earliestStart[index] = previous;
+      if (forced.has(index)) previous = index;
+    }
     // best[j]: cost of covering the first j syllables, cameFrom[j]: the break before j
     const best = Array(count + 1).fill(Infinity);
     const cameFrom = Array(count + 1).fill(-1);
     best[0] = 0;
-    for (let j = minLength; j <= count; j++) {
-      for (let i = Math.max(0, j - maxLength); i <= j - minLength; i++) {
+    for (let j = 1; j <= count; j++) {
+      for (let i = Math.max(earliestStart[j], j - maxLength); i <= j - 1; i++) {
         if (best[i] === Infinity) continue;
+        if (i > 0 && !opensWord(i)) continue;
         // A break has to pay for itself: without breakCost every position carrying any
         // evidence at all is worth breaking on, and stanzas come out split roughly double
         const evidence = i === 0 ? 0 : (scores.get(positions[i]) ?? 0) - breakCost;
-        const cost = best[i] - evidence + lengthWeight * Math.abs((j - i) - targetLength);
+        const lineLength = j - i;
+        const short = Math.max(0, comfortableLength - lineLength);
+        const shortWeight = j === count ? shortLineCost * finalShortLineCost : shortLineCost;
+        const cost = best[i] - evidence
+          + lengthWeight * Math.abs(lineLength - targetLength)
+          + shortWeight * short;
         if (cost < best[j]) { best[j] = cost; cameFrom[j] = i; }
       }
     }
@@ -8905,27 +9401,50 @@ ChScore.prototype._getPhraseStartChordPositions = function (syllables, runs = nu
     return breaks.reverse();
   };
 
-  // First pass on evidence alone — no length prior at all, so a song whose lines really
-  // are short says so instead of being pulled toward a generic length. Its median is the
-  // prior the second pass regularizes against.
-  const lengths = [];
-  for (const run of runs) {
-    const breaks = segment(run, 8, lengthCost * 0.5);
-    let previous = 0;
-    for (const at of breaks.concat(run.syllables.length)) {
-      lengths.push(at - previous);
-      previous = at;
+  // The song's typical line length: a first pass on evidence alone -- no length prior, so a
+  // song whose lines really are short says so -- whose median is the prior the second pass
+  // regularizes against. One median for the whole song, since a stanza's own estimate is too
+  // noisy to steer by, at the price of a song whose stanzas genuinely differ in length.
+  // Re-asked of its own answer until it settles, and bounded in case it oscillates.
+  const CH_MAX_TARGET_PASSES = 4;
+  let targetLength = 8;
+  for (let pass = 0; pass < CH_MAX_TARGET_PASSES; pass++) {
+    const lengths = [];
+    for (const run of runs) {
+      const breaks = segment(run, targetLength, lengthCost * 0.5);
+      let previous = 0;
+      for (const at of breaks.concat(run.syllables.length)) {
+        lengths.push(at - previous);
+        previous = at;
+      }
     }
+    const settled = this._median(lengths) ?? 8;
+    if (settled === targetLength) break;
+    targetLength = settled;
   }
-  const targetLength = this._median(lengths) ?? 8;
 
-  const phraseStarts = new Set();
+  // Kept per lyric line rather than merged into one set for the group. Stacked verses are
+  // scored together -- that is what lets them reinforce a break -- but they are segmented
+  // apart, and each answer is right for the words it was reached from: "I Have Two Ears"
+  // divides its first verse after "carry me" and its second after "loving helpers", two
+  // syllables apart, because that is where each verse's own sentence ends. Merging them
+  // gave both verses both breaks, and left "me" alone on a line.
+  // Shared across the stanzas scored together -- a break one verse found is offered to the
+  // rest, which is how verses reinforce each other -- alongside what each asked for alone,
+  // so a verse can decline one its own words say nothing about (see _alignPhraseStartsToRun).
+  const shared = new Set();
+  const askedByLine = new Map();
   for (const run of runs) {
-    for (const at of segment(run, targetLength)) {
-      phraseStarts.add(run.syllables[at].chordPositions[0]);
+    const key = run.lyricLineId ?? '';
+    if (!askedByLine.has(key)) askedByLine.set(key, new Set());
+    for (const at of this._printedBreaksForRun(run) ?? segment(run, targetLength)) {
+      const chordPosition = run.syllables[at].chordPositions[0];
+      shared.add(chordPosition);
+      askedByLine.get(key).add(chordPosition);
     }
   }
-  return phraseStarts;
+  return { starts: shared, askedByLine: askedByLine,
+    breakCost: breakCost, scoresByLine: scoresByLine };
 }
 
 // Walk the song in sung order — through repeats, endings and jumps — yielding one entry
@@ -9192,6 +9711,8 @@ ChScore.prototype._patterns = {
 
   // Phrase punctuation, allowing a closing quote or bracket after it
   phrasePunctuation: /[.,:;?!—–…]["'’”\)\]]*$/u,
+  // A name's initial ("Joseph F. Smith", "Heber J. Grant"), whose period ends nothing
+  initialAbbreviation: /^\p{L}\.["'’”\)\]]*$/u,
 
   // The two character sets above, as patterns
   hyphen: new RegExp(`[${ChScore.prototype._hyphenCharacters}]`),

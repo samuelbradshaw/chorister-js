@@ -745,3 +745,49 @@ describe('_parseAndAnnotateMei() — layer normalization', () => {
     }
   });
 });
+
+
+// ============================================================
+// Breath marks and caesuras
+// ============================================================
+// No score in the corpus carries either, so these are injected: the point of annotating
+// them is repertoire that does mark its phrases, and the scorer reads the chord position
+// as the one the next phrase starts at (see _scorePhraseStarts).
+describe('ch-chord-position — breath marks and caesuras', () => {
+  // Attaches `markup` to the score's first note, where the chord position it resolves to
+  // is known: the mark is drawn in the space after that note, so it belongs to the next one
+  const onFirstNote = (xml, markup) => {
+    const at = xml.indexOf('</note>');
+    return xml.slice(0, at)
+      + `<notations><articulations>${markup}</articulations></notations>`
+      + xml.slice(at);
+  };
+
+  const loadMei = async (xml) => {
+    const score = new ChScore('#score-container');
+    ChScore.prototype._drawScore = function() {};
+    try {
+      await score.load('musicxml', { scoreContent: xml });
+      return score._scoreData.meiParsed;
+    } finally { ChScore.prototype._drawScore = origDrawScore; }
+  };
+
+  it('should annotate a breath mark with the chord position the next phrase starts at', async () => {
+    const mei = await loadMei(onFirstNote(sampleMusicXml, '<breath-mark/>'));
+    const breath = mei.querySelector('breath');
+    expect(breath).not.toBe(null);
+    expect(breath.getAttribute('ch-chord-position')).toBe('1');
+  });
+
+  it('should annotate a caesura the same way', async () => {
+    const mei = await loadMei(onFirstNote(sampleMusicXml, '<caesura/>'));
+    const caesura = mei.querySelector('caesura');
+    expect(caesura).not.toBe(null);
+    expect(caesura.getAttribute('ch-chord-position')).toBe('1');
+  });
+
+  it('should leave a breath mark no text and no layout of its own', async () => {
+    const mei = await loadMei(onFirstNote(sampleMusicXml, '<breath-mark/>'));
+    expect(mei.querySelector('breath').querySelector('rend')).toBe(null);
+  });
+});
