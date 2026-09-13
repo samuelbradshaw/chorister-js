@@ -8,9 +8,8 @@
  * extraction answers it to decide which syllables to read into the lyrics. They share
  * `_lyricElementSoundingAt`, and these tests assert the two results still line up.
  *
- * This invariant is worth owning here because nothing else can check it: the corpus
- * script never renders, so `expandScore: 'full-score'` is entirely unmeasured by it, and
- * a fix landing in only one of the two paths shows up nowhere.
+ * Nothing else can check it: the corpus script never renders, so a fix landing in only one
+ * of the two paths shows up nowhere.
  *
  * Covers:
  * - Whole-song sung text agreement, folded to letters
@@ -21,6 +20,8 @@
  * - For Health and Strength: a labelled pickup engraved inside a first ending, and the
  *   only fixture with no lyrics file, so the only one whose stanzas are derived from the
  *   engraved syllables and then reshaped by _mergePickupStanzas
+ * - Two-Part, with its own words handed back: the together pass _splitTwoPartFinalPass
+ *   invents a section for, which nothing else here renders
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -207,15 +208,37 @@ describe('Expansion keeps each part to its own words — two-part score', { time
   });
 
   it('should render each expanded section with only its own part words', () => {
-    expect(actual.size).toBe(expected.size);
+    // The together pass is the one place the two answers part company on purpose: it is real
+    // music, so the expansion renders it, and it sings nothing the two verses before it
+    // haven't, so extraction gives it no stanza of its own (see _splitTwoPartFinalPass and
+    // _getLyricChordPositionRanges' twoPartFinalPass). Every other section must be in both.
+    const togetherPass = score._scoreData.sections.filter(section =>
+      (section.chordPositionRanges?.[0]?.lyricLineIds?.length ?? 0) > 1);
+    expect(togetherPass).toHaveLength(1);
+    expect(actual.size).toBe(expected.size + togetherPass.length);
+
     for (const [sectionId, text] of actual) {
-      // Every section the walk stamped is one it also extracted lyrics for
+      if (sectionId === togetherPass[0].sectionId) continue;
+      // Every other section the walk stamped is one it also extracted lyrics for
       expect(expected.has(sectionId)).toBe(true);
       // The rendered text is built from that section's own verse and nothing else, so it
       // starts where the extracted verse starts (repetition of its own body aside — see
       // the known gap above)
       expect(text.startsWith(expected.get(sectionId).slice(0, 30))).toBe(true);
     }
+  });
+
+  it('should render the together pass with both parts words', () => {
+    // It is the two verses sung at once, so both sets of words are engraved on it -- which is
+    // exactly why it adds no stanza of its own. They interleave rather than following one
+    // another: the parts sing syllable against syllable, so the folded text alternates
+    // ("wesingasong" + "youhearourcall" + "ofpraisetoday" + ...).
+    const together = score._scoreData.sections.find(section =>
+      (section.chordPositionRanges?.[0]?.lyricLineIds?.length ?? 0) > 1);
+    const text = actual.get(together.sectionId);
+    expect(text).toBeDefined();
+    expect(text).toContain('wesingasong');
+    expect(text).toContain('youhearourcall');
   });
 
   it('should not leak the other part words into a section', () => {
@@ -363,5 +386,161 @@ describe('Expanded chord positions index the data model', { timeout: 30000 }, ()
       expect(score._scoreData.expandedChordPositions[ecp].sectionId)
         .toBe(verse.getAttribute('ch-section-id'));
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// The two-part together pass
+// ═══════════════════════════════════════════════════════════
+//
+// _splitTwoPartFinalPass gives the pass where both parts sing together a section of its own,
+// invented rather than read off the engraving. Nothing else exercises one through a redraw,
+// which is where it bites: _updateMei walks one MEI section element per pass the expansion
+// plays, and a section the expansion has no pass for runs that walk off the end.
+describe('Two-part together pass — invented section survives a redraw', { timeout: 30000 }, () => {
+  let score;
+
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function () {};
+    const plain = new ChScore('#score-container');
+    await plain.load('musicxml', {
+      scoreContent: sampleMusicXmlTwoPart,
+      partsTemplate: 'Two-Part',
+    });
+    const ownWords = plain._scoreData.lyricsText;
+
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+    await score.load('musicxml', {
+      scoreContent: sampleMusicXmlTwoPart,
+      partsTemplate: 'Two-Part',
+      lyricsText: ownWords,
+    });
+  });
+
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  it('should give the together pass a verse naming both lyric lines', () => {
+    const sections = score._scoreData.sections;
+    const together = sections.at(-1);
+    expect(together.type).toBe('verse');
+    expect(together.chordPositionRanges[0].lyricLineIds).toEqual(['1.1', '2.2']);
+    // The two before it are one part each
+    for (const section of sections.slice(0, -1)) {
+      expect(section.chordPositionRanges[0].lyricLineIds).toHaveLength(1);
+    }
+  });
+
+  it('should keep the together pass out of the lyrics', () => {
+    // It sings nothing the two verses before it haven't
+    expect(score._scoreData.lyricsText.split('\n\n')).toHaveLength(2);
+  });
+
+  it('should name the together pass in both forms of the sections template', () => {
+    for (const form of ['chord-position', 'measure-beat']) {
+      expect(score._convertSectionsToTemplate(score._scoreData.sections, form))
+        .toMatch(/:1\.1,2\.2/);
+    }
+  });
+
+  it('should redraw the full score without throwing', () => {
+    // The regression this describe exists for: more sections than the expansion has passes
+    expect(() => score.setOptions({ expandScore: 'full-score' })).not.toThrow();
+  });
+
+  it('should redraw without throwing when the template is handed back', async () => {
+    // The shape that actually threw: a caller storing the sections template and supplying it
+    // again. Read back, the together verse claims a pass of its own over the whole song, and
+    // this score's expansion has none to give it.
+    document.body.innerHTML = '<div id="score-container"></div>';
+    const rebuilt = new ChScore('#score-container');
+    await rebuilt.load('musicxml', {
+      scoreContent: sampleMusicXmlTwoPart,
+      partsTemplate: 'Two-Part',
+      sectionsTemplate: 'V(:1.1); V(:2.2); V(:1.1,2.2)',
+    });
+    expect(rebuilt._scoreData.sections).toHaveLength(3);
+    expect(() => rebuilt.setOptions({ expandScore: 'full-score' })).not.toThrow();
+  });
+
+  it('should still sing each part its own words after the redraw', () => {
+    const sung = expandedLyricsBySection(score);
+    const words = [...sung.values()].join(' ');
+    expect(words).toContain('wesingasongofpraisetoday');
+    expect(words).toContain('youhearourcallandknoweachname');
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// The together pass, found from the sections alone
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * _splitTwoPartFinalPass reads the two parts coming together off the sections themselves, so
+ * that a score parsed without words describes itself the way the same score parsed with them
+ * does. These are the shape where the together pass ends somewhere of its own -- a third
+ * ending, with words no other verse sings.
+ */
+describe('_splitTwoPartFinalPass — a third ending the engraving did not classify', () => {
+  const twoPartScore = (sections) => {
+    const score = Object.create(ChScore.prototype);
+    score._scoreData = { features: { hasTwoPartMelody: true }, sections: sections };
+    return score;
+  };
+  const section = (type, ranges) => ({ type: type, chordPositionRanges: ranges });
+  const parts = () => [
+    section('verse', [{ start: 16, end: 87, lyricLineIds: ['1.1'] }]),
+    section('verse', [{ start: 16, end: 94, lyricLineIds: ['2.2'] }]),
+  ];
+
+  // The music the third ending is sung after belongs to it: the parts sang it in turn as
+  // verses 1 and 2, and sing it together on the way into the ending.
+  const together = [
+    { start: 16, end: 87, lyricLineIds: ['1.1', '2.2'] },
+    { start: 94, end: 114, lyricLineIds: ['1.1'] },
+  ];
+
+  it('should fold the shared music into a closing section with no type of its own', () => {
+    // "Love Is Spoken Here" prints "(3rd ending)" over its closing words, which numbers
+    // nothing, so on a score that labels its other verses the stanza is left unclassified --
+    // and the together pass was built without it, while the same song read from supplied
+    // words (whose text says [Verse 3]) built it with.
+    const sections = parts().concat(section('unknown', [{ start: 94, end: 114, lyricLineIds: ['1.1'] }]));
+    twoPartScore(sections)._splitTwoPartFinalPass([]);
+
+    expect(sections).toHaveLength(3);
+    expect(sections[2].chordPositionRanges).toEqual(together);
+    // It is the verses before it sung at once, so it is one of them
+    expect(sections[2].type).toBe('verse');
+  });
+
+  it('should do the same where the words did classify it', () => {
+    const sections = parts().concat(section('verse', [{ start: 94, end: 114, lyricLineIds: ['1.1'] }]));
+    twoPartScore(sections)._splitTwoPartFinalPass([]);
+
+    expect(sections).toHaveLength(3);
+    expect(sections[2].chordPositionRanges).toEqual(together);
+  });
+
+  it('should leave a closing section that starts inside the music the parts share', () => {
+    // Only where the last section begins past all of it are the parts singing it together
+    const sections = parts().concat(section('unknown', [{ start: 60, end: 114, lyricLineIds: ['1.1'] }]));
+    twoPartScore(sections)._splitTwoPartFinalPass([]);
+
+    expect(sections[2].chordPositionRanges).toEqual([{ start: 60, end: 114, lyricLineIds: ['1.1'] }]);
+    expect(sections[2].type).toBe('unknown');
+  });
+
+  it('should leave a score whose parts are one lyric line alone', () => {
+    const sections = [
+      section('verse', [{ start: 16, end: 87, lyricLineIds: ['1.1'] }]),
+      section('verse', [{ start: 16, end: 94, lyricLineIds: ['1.1'] }]),
+      section('unknown', [{ start: 94, end: 114, lyricLineIds: ['1.1'] }]),
+    ];
+    twoPartScore(sections)._splitTwoPartFinalPass([]);
+
+    expect(sections[2].chordPositionRanges).toEqual([{ start: 94, end: 114, lyricLineIds: ['1.1'] }]);
   });
 });

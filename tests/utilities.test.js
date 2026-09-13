@@ -118,10 +118,10 @@ describe('_normalizeParts()', () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="score-container"></div>';
     score = new ChScore('#score-container');
+    score._suppliedTemplates = { parts: null, sections: null, lyricLines: null };
     score._scoreData = {
       parts: [],
       partsById: null,
-      partsTemplate: null,
       staffNumbers: [1, 2],
       numChordPositions: 64,
       features: { hasLyrics: true },
@@ -139,28 +139,28 @@ describe('_normalizeParts()', () => {
 
   it('should derive a template from the engraving when none was given', () => {
     score._normalizeParts();
-    expect(score._scoreData.partsTemplate).toBeTruthy();
+    expect(score._convertPartsToTemplate(score._scoreData.parts)).toBeTruthy();
   });
 
   it('should call a score with nothing sung in it instrumental', () => {
     // The fixture's engraving has no staffDef to read a singing part off
     score._normalizeParts();
-    expect(score._scoreData.partsTemplate).toBe('I');
+    expect(score._convertPartsToTemplate(score._scoreData.parts)).toBe('I');
     expect(score._scoreData.parts.map(p => p.partId)).toContain('instrumental');
   });
 
   it('should build its parts from the template it derived', () => {
     score._normalizeParts();
     const fromTemplate = score._buildPartsFromTemplate(
-      score._scoreData.partsTemplate, score._scoreData.staffNumbers,
+      score._convertPartsToTemplate(score._scoreData.parts), score._scoreData.staffNumbers,
       score._scoreData.numChordPositions, score._scoreData.features.hasLyrics);
     expect(score._scoreData.parts.map(p => p.partId)).toEqual(fromTemplate.map(p => p.partId));
   });
 
-  // ── partsTemplate branch ──
+  // ── supplied template branch ──
 
-  it('should delegate to _buildPartsFromTemplate when partsTemplate is set', () => {
-    score._scoreData.partsTemplate = 'SATB';
+  it('should delegate to _buildPartsFromTemplate when a parts template is supplied', () => {
+    score._suppliedTemplates.parts = 'SATB';
     score._normalizeParts();
     const partIds = score._scoreData.parts.map(p => p.partId);
     expect(partIds).toContain('soprano');
@@ -170,7 +170,7 @@ describe('_normalizeParts()', () => {
   });
 
   it('should pass staffNumbers and numChordPositions to _buildPartsFromTemplate', () => {
-    score._scoreData.partsTemplate = 'Unison';
+    score._suppliedTemplates.parts = 'Unison';
     score._scoreData.staffNumbers = [1, 2, 3];
     score._normalizeParts();
     const accompaniment = score._scoreData.parts.find(p => p.partId === 'accompaniment');
@@ -188,12 +188,12 @@ describe('_normalizeParts()', () => {
     expect(score._scoreData.parts).toEqual(customParts);
   });
 
-  it('should prefer explicit parts over partsTemplate', () => {
+  it('should prefer explicit parts over a supplied parts template', () => {
     const customParts = [
       { partId: 'custom', name: 'Custom', isVocal: true, chordPositionRefs: {} },
     ];
     score._scoreData.parts = customParts;
-    score._scoreData.partsTemplate = 'SATB';
+    score._suppliedTemplates.parts = 'SATB';
     score._normalizeParts();
     expect(score._scoreData.parts.length).toBe(1);
     expect(score._scoreData.parts[0].partId).toBe('custom');
@@ -210,7 +210,7 @@ describe('_normalizeParts()', () => {
   });
 
   it('should populate partsById when using a template', () => {
-    score._scoreData.partsTemplate = 'SATB';
+    score._suppliedTemplates.parts = 'SATB';
     score._normalizeParts();
     expect(score._scoreData.partsById['soprano']).toBeDefined();
     expect(score._scoreData.partsById['alto']).toBeDefined();
@@ -1405,6 +1405,45 @@ In word and deed and mind.</credit-words></credit>
     expect(placements).toEqual(['inline', 'below', 'below']);
   });
 
+  // A block that prints stanzas the staff already sings is the page showing the singers
+  // their words again, not a stanza of its own -- even where it prints several of them
+  // together, and not in the order they are sung. "Gethsémané" in French closes with a block
+  // holding its first chorus and its last, which matched no single section and arrived below
+  // the music as a fourth verse, dragging a copy of the chorus after it.
+  it('should add nothing for a block reprinting stanzas the staff sings', async () => {
+    const twoVerses = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <credit page="1"><credit-words valign="bottom">1. Do Re Mi
+Fa Sol La</credit-words></credit>
+  <credit page="1"><credit-words valign="bottom">Fa Sol La
+Do Re Mi</credit-words></credit>
+  <part-list><score-part id="P1"><part-name>Voice</part-name></score-part></part-list>
+  <part id="P1"><measure number="1">
+    <attributes><divisions>1</divisions><key><fifths>0</fifths></key>
+      <time><beats>3</beats><beat-type>4</beat-type></time>
+      <clef><sign>G</sign><line>2</line></clef></attributes>
+    <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type>
+      <lyric number="1"><syllabic>single</syllabic><text>Do</text></lyric>
+      <lyric number="2"><syllabic>single</syllabic><text>Fa</text></lyric></note>
+    <note><pitch><step>D</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type>
+      <lyric number="1"><syllabic>single</syllabic><text>Re</text></lyric>
+      <lyric number="2"><syllabic>single</syllabic><text>Sol</text></lyric></note>
+    <note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type>
+      <lyric number="1"><syllabic>single</syllabic><text>Mi</text></lyric>
+      <lyric number="2"><syllabic>single</syllabic><text>La</text></lyric></note>
+  </measure></part>
+</score-partwise>`;
+    const reprinted = new ChScore('#score-container');
+    ChScore.prototype._drawScore = function() {};
+    await reprinted.load('musicxml', { scoreContent: twoVerses });
+
+    const sung = reprinted._scoreData.sections.filter(section => section.lyricsText);
+    expect(sung.map(section => section.lyricsText)).toEqual(['Do Re Mi', 'Fa Sol La']);
+    expect(reprinted._scoreData.sections.filter(section => section.placement === 'below'))
+      .toEqual([]);
+    reprinted.removeScore();
+  });
+
   it('should add nothing for a score with no printed verses', async () => {
     const plain = new ChScore('#score-container');
     ChScore.prototype._drawScore = function() {};
@@ -1471,6 +1510,228 @@ describe('_optimizeMusicXml() — intro brackets', () => {
   it('should leave a bracket that carries no printed position', () => {
     const musicXml = scoreXml(note(10), note(50), '<direction><direction-type><words>\u231C</words></direction-type></direction>');
     expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+});
+
+
+// ============================================================
+// _optimizeMusicXml — a hyphen typed into the lyrics
+// ============================================================
+describe('_optimizeMusicXml() — typed hyphens', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  const scoreXml = (lyric) => '<score-partwise><part id="P1"><measure number="1">'
+    + `<note><pitch><step>C</step><octave>4</octave></pitch>${lyric}</note>`
+    + '</measure></part></score-partwise>';
+
+  /** Each syllable the lyric holds, as `syllabic:text`. */
+  const syllables = (musicXml) => {
+    const lyric = new DOMParser().parseFromString(musicXml, 'text/xml').querySelector('lyric');
+    return Array.from(lyric.querySelectorAll('text')).map(text => {
+      const syllabic = text.previousElementSibling?.nodeName === 'syllabic'
+        ? text.previousElementSibling.textContent : null;
+      return `${syllabic}:${text.textContent}`;
+    });
+  };
+
+  it('should read a hyphen hung on elided empty syllables as the word continuing', () => {
+    // "Gethsemane": the second ending prints "a‑" so the reader can see the word carries on,
+    // and the engraver typed the hyphen in rather than letting <syllabic> say it
+    const musicXml = scoreXml('<lyric number="2"><syllabic>end</syllabic><text>a</text>'
+      + '<elision> </elision><syllabic>single</syllabic><text/>'
+      + '<elision> </elision><syllabic>single</syllabic><text>\u2011</text></lyric>');
+    expect(syllables(score._optimizeMusicXml(musicXml))).toEqual(['middle:a']);
+  });
+
+  it('should open a word where the hyphen was hung on a whole one', () => {
+    const musicXml = scoreXml('<lyric number="1"><syllabic>single</syllabic><text>Geth</text>'
+      + '<elision> </elision><syllabic>single</syllabic><text>-</text></lyric>');
+    expect(syllables(score._optimizeMusicXml(musicXml))).toEqual(['begin:Geth']);
+  });
+
+  it('should read a hyphen typed onto the syllable itself', () => {
+    const musicXml = scoreXml('<lyric number="1"><syllabic>end</syllabic><text>a\u2011</text></lyric>');
+    expect(syllables(score._optimizeMusicXml(musicXml))).toEqual(['middle:a']);
+  });
+
+  it('should leave a syllable that already says the word continues', () => {
+    const musicXml = scoreXml('<lyric number="1"><syllabic>middle</syllabic><text>sem</text></lyric>');
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+
+  it('should leave a hyphen inside a word the score really prints that way', () => {
+    // A hyphen the words own -- "self-control" sung on one note -- is not a continuation mark
+    const musicXml = scoreXml('<lyric number="1"><syllabic>single</syllabic><text>self-control</text></lyric>');
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+});
+
+
+// ============================================================
+// Every voice sung at a chord position
+// ============================================================
+describe('_everyVoiceByChordPosition()', () => {
+  let score;
+  const parser = new DOMParser();
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  // Two notes the tune sings and two the part under it answers on, which is how a chorus
+  // whose parts echo it is engraved ("It Is Well with My Soul" in French)
+  const mei = parser.parseFromString(`<music><body><mdiv><score><section><measure>
+    <staff n="1"><layer>
+      <note ch-chord-position="0" ch-melody="true"><verse ch-lyric-line-id="1.1"><syl>Et</syl></verse></note>
+      <note ch-chord-position="1" ch-melody="true"><verse ch-lyric-line-id="1.1"><syl>mon</syl></verse></note>
+      <note ch-chord-position="2" ch-melody="true"/>
+      <note ch-chord-position="3" ch-melody="true"/>
+    </layer></staff>
+    <staff n="2"><layer>
+      <note ch-chord-position="2"><verse ch-lyric-line-id="1.2"><syl>est</syl></verse></note>
+      <note ch-chord-position="3"><verse ch-lyric-line-id="1.2"><syl>en</syl><syl>paix</syl></verse></note>
+    </layer></staff>
+  </measure></section></score></mdiv></body></music>`, 'text/xml');
+
+  it('should report the tune and the parts under it, apart', () => {
+    score._scoreData = { meiParsed: mei };
+    const melody = { lyricElements: Array.from(mei.querySelectorAll('note[ch-melody] verse')) };
+    const byChordPosition = score._everyVoiceByChordPosition(melody);
+
+    expect([...byChordPosition.keys()]).toEqual([0, 1, 2, 3]);
+    expect(byChordPosition.get(0)).toEqual([{ lyricLineId: '1.1', isMelody: true, text: 'Et' }]);
+    // The part's own words, which no reading of the tune alone would find
+    expect(byChordPosition.get(2)).toEqual([{ lyricLineId: '1.2', isMelody: false, text: 'est' }]);
+    // A verse's syllables join into the one piece of text sung there
+    expect(byChordPosition.get(3)[0].text).toBe('enpaix');
+  });
+});
+
+
+// ============================================================
+// _optimizeMusicXml — a mark given a lyric element of its own
+// ============================================================
+describe('_optimizeMusicXml() — a mark on its own lyric element', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  const scoreXml = (...lyrics) => '<score-partwise><part id="P1"><measure number="1">'
+    + `<note><pitch><step>C</step><octave>4</octave></pitch>${lyrics.join('')}</note>`
+    + '</measure></part></score-partwise>';
+  const lyric = (text, number = '1') =>
+    `<lyric number="${number}"><syllabic>single</syllabic><text>${text}</text></lyric>`;
+
+  /** Each lyric element's text after the repair. */
+  const syllables = (musicXml) =>
+    Array.from(new DOMParser().parseFromString(musicXml, 'text/xml').querySelectorAll('lyric'))
+      .map(element => Array.from(element.querySelectorAll('text'))
+        .map(text => text.textContent).join(''));
+
+  it('should join a mark to the syllable it was hung beside', () => {
+    // French sets a space before "!", and the engraver hangs the mark on the note as a second
+    // lyric of the same number -- only one of which survives into the reading, so
+    // "Oh ! que nous serons bénis" came out "Oh ! nous serons bénis"
+    const musicXml = scoreXml(lyric('!'), lyric('que'));
+    expect(syllables(score._optimizeMusicXml(musicXml))).toEqual(['! que']);
+  });
+
+  it('should join a mark that follows its syllable', () => {
+    const musicXml = scoreXml(lyric('\u0422\u0432\u043e\u0439'), lyric('\u2013'));
+    expect(syllables(score._optimizeMusicXml(musicXml))).toEqual(['\u0422\u0432\u043e\u0439 \u2013']);
+  });
+
+  it('should join every mark around one syllable, in the order they are written', () => {
+    const musicXml = scoreXml(lyric('\u00ab'), lyric('mot'), lyric('\u00bb'));
+    expect(syllables(score._optimizeMusicXml(musicXml))).toEqual(['\u00ab mot \u00bb']);
+  });
+
+  it('should leave two real syllables alone', () => {
+    // A word engraved twice, or two voices squeezed onto one lyric line: which to keep is a
+    // different question from where a mark belongs
+    const musicXml = scoreXml(lyric('Ven'), lyric('3.Ven'));
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+
+  it('should leave a mark that is the only thing on the note', () => {
+    const musicXml = scoreXml(lyric('\u2014'));
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+
+  it('should leave lyrics of different numbers alone', () => {
+    const musicXml = scoreXml(lyric('!', '1'), lyric('que', '2'));
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+});
+
+
+// ============================================================
+// Elisions that print a space, not a breve
+// ============================================================
+describe('elisions that print a space', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  const scoreXml = (...lyrics) => '<score-partwise><part id="P1"><measure number="1">'
+    + lyrics.map(lyric =>
+      `<note><pitch><step>C</step><octave>4</octave></pitch>${lyric}</note>`).join('')
+    + '</measure></part></score-partwise>';
+  const elided = (first, spacer, second) => `<lyric number="1"><syllabic>end</syllabic>`
+    + `<text>${first}</text><elision>${spacer}</elision>`
+    + `<syllabic>single</syllabic><text>${second}</text></lyric>`;
+
+  // The MEI Verovio writes for an elision, whatever the elision said to print: the breve
+  // connector on the syllable before it
+  const mei = (...pairs) => '<music><body><mdiv><score><scoreDef/><section><measure>'
+    + '<staff><layer>' + pairs.map(([first, second]) =>
+      `<note><verse n="1"><syl con="b">${first}</syl><syl con="s">${second}</syl></verse></note>`).join('')
+    + '</layer></staff></measure></section></score></mdiv></body></music>';
+
+  /** Each syllable's @con after the MEI repair, in document order. */
+  const connectors = (musicXml, meiXml) => {
+    score._optimizeMusicXml(musicXml);
+    const meiParsed = new DOMParser().parseFromString(meiXml, 'text/xml');
+    score._spaceElisionConnectors(meiParsed);
+    return Array.from(meiParsed.querySelectorAll('syl'))
+      .map(syl => `${syl.textContent}:${syl.getAttribute('con')}`);
+  };
+
+  it('should read a no-break space as a space, not an elision', () => {
+    // French prints "ne !" with a no-break space before the mark and hangs it on the note as
+    // an elision; drawn as a breve it reads as two vowels sung together
+    const musicXml = scoreXml(elided('n\u00e9', '\u00a0', '!'));
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+    expect(connectors(musicXml, mei(['n\u00e9', '!']))).toEqual(['n\u00e9:s', '!:s']);
+  });
+
+  it('should leave an elision that really is one', () => {
+    // "te‿ha" in Spanish: two vowels on one note, which is what the breve is for
+    const musicXml = scoreXml(elided('te', '\u203f', 'ha'));
+    expect(connectors(musicXml, mei(['te', 'ha']))).toEqual(['te:b', 'ha:s']);
+  });
+
+  it('should tell one from the other in a score carrying both', () => {
+    const musicXml = scoreXml(elided('te', '\u203f', 'ha'), elided('n\u00e9', '\u00a0', '!'));
+    expect(connectors(musicXml, mei(['te', 'ha'], ['n\u00e9', '!'])))
+      .toEqual(['te:b', 'ha:s', 'n\u00e9:s', '!:s']);
+  });
+
+  it('should leave a breve whose syllables no elision in this score fell between', () => {
+    const musicXml = scoreXml(elided('n\u00e9', '\u00a0', '!'));
+    expect(connectors(musicXml, mei(['Su', 'a']))).toEqual(['Su:b', 'a:s']);
   });
 });
 
@@ -2069,6 +2330,38 @@ describe('_getScoreMetadata()', () => {
     // score says -- a block is the words printed, and <lb/> is where they break.
     expect(metadata.title).toBe('Sweet Hour of Prayer');
     expect(typed(metadata, 'stanza')).toEqual(['3. Sweet hour of prayer\nThat calls me from a world of care']);
+  });
+
+  it('should read a verse set as prose as a stanza, and say it is wrapped', () => {
+    // A verse printed below the music is wrapped to the width of the page rather than to the
+    // tune, so two sung lines arrive as one printed line -- long enough that the guard
+    // keeping performance notes out reads the verse as a note. Its own number says otherwise.
+    const verse = '1. Jesus climbed the hill to the Garden still; his steps were heavy and slow.'
+      + '<lb/>Love and a prayer took him there to the place only he could go.';
+    const metadata = score._getScoreMetadata(buildMei({ pgFoot: `<pgFoot><rend>${verse}</rend></pgFoot>` }));
+
+    expect(typed(metadata, 'stanza')).toHaveLength(1);
+    // The words are the verse's; the line endings are the column's, so nothing downstream
+    // reads them as where the music divides
+    expect(metadata.textBlocks[0].wrapped).toBe(true);
+  });
+
+  it('should leave a long block with no verse number a footnote', () => {
+    const note = 'This hymn may be sung as a duet, with the second verse taken by the choir '
+      + 'and the congregation joining again at the refrain.';
+    const metadata = score._getScoreMetadata(buildMei({ pgFoot: `<pgFoot><rend>${note}</rend></pgFoot>` }));
+
+    expect(typed(metadata, 'stanza')).toEqual([]);
+    expect(typed(metadata, 'footnote')).toEqual([note]);
+  });
+
+  it('should not call a stanza wrapped where its printed lines are the tune’s', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgFoot: '<pgFoot><rend>3. Sweet hour of prayer<lb/>That calls me from a world of care</rend></pgFoot>',
+    }));
+
+    expect(metadata.textBlocks[0].type).toBe('stanza');
+    expect(metadata.textBlocks[0].wrapped).toBe(false);
   });
 
   it('should still find the verse marker on a stanza printed in italics', () => {

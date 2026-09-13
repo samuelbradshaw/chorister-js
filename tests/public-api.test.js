@@ -75,7 +75,8 @@ describe('load()', () => {
       scoreContent: sampleMusicXml,
       partsTemplate: 'SATB',
     });
-    expect(scoreData.partsTemplate).toBe('SATB');
+    // Reported back as the parts it built, which is what 'SATB' spells out
+    expect(scoreData.templates.partsTemplateCp).toBe('SA+TB');
   });
 
   it('should store scoreId when provided', async () => {
@@ -3172,7 +3173,7 @@ describe('load() — sectionsTemplate', () => {
 
   it('should store the template it was given', async () => {
     const scoreData = await loadWithTemplate('I(0-12); V(12-37)');
-    expect(scoreData.sectionsTemplate).toBe('I(0-12); V(12-37)');
+    expect(scoreData.templates.sectionsTemplateCp).toBe('I(0-12); V(12-37)');
   });
 
   it('should build sections in template order, with ids, names, and markers', async () => {

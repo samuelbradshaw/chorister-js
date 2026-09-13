@@ -298,6 +298,242 @@ describe('_weights', () => {
 // Segmentation
 // ═══════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════
+// Aligning a staff's breaks onto one stanza
+// ═══════════════════════════════════════════════════════════
+
+describe('_alignPhraseStartsToRun', () => {
+  // The shared answer, as _getPhraseStartsByStaff hands it over. `asked` is what this verse
+  // wanted for itself, `openInAll` the positions every stanza sung there can break at.
+  const phraseStartsFor = (run, { shared, asked, scores = {}, openInAll = null,
+    templated = [] }) => ({
+    byLine: new Map([[run.lyricLineId, new Set(shared)]]),
+    askedByLine: new Map([[run.lyricLineId, new Set(asked)]]),
+    templatedByLine: new Map([[run.lyricLineId, new Set(templated)]]),
+    scoresByLine: new Map([[run.lyricLineId, new Map(Object.entries(scores)
+      .map(([cp, value]) => [Number(cp), value]))]]),
+    openInAllLines: new Map((openInAll ?? shared).map(cp => [cp, true])
+      .concat(shared.filter(cp => openInAll && !openInAll.includes(cp)).map(cp => [cp, false]))),
+    breakCost: 1.9,
+  });
+
+  const runOf = (words) => {
+    const score = fakeScore(16);
+    const run = score._syllableStanzaRuns(syllablesFrom(words))[0];
+    return { score, run };
+  };
+
+  it('keeps both of two breaks a comfortable line apart', () => {
+    const { score, run } = runOf(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']);
+    const aligned = score._alignPhraseStartsToRun(
+      phraseStartsFor(run, { shared: [4, 8], asked: [4, 8] }), run);
+    expect([...aligned].sort((x, y) => x - y)).toEqual([4, 8]);
+  });
+
+  it('keeps one break where two land a syllable apart', () => {
+    // Two verses of one tune dividing a syllable apart, both breaks offered to both --
+    // taking both is a line of one syllable, which the segmenter itself would never choose
+    const { score, run } = runOf(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']);
+    const aligned = score._alignPhraseStartsToRun(
+      phraseStartsFor(run, { shared: [4, 5], asked: [4], scores: { 4: 2, 5: 0.5 } }), run);
+    expect([...aligned]).toEqual([4]);
+  });
+
+  it('prefers the break every stanza sung there can take', () => {
+    // "Behold the Wounds in Jesus' Hands": the note after 'madera,' carries a whole word in
+    // two verses and the tail of one in the other two, so it is not where this music divides
+    const { score, run } = runOf(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']);
+    const aligned = score._alignPhraseStartsToRun(phraseStartsFor(run, {
+      shared: [4, 5], asked: [4], scores: { 4: 2, 5: 0.5 }, openInAll: [5],
+    }), run);
+    expect([...aligned]).toEqual([5]);
+  });
+
+  // A caller's lyricLinesTemplate is instruction, not evidence: the walk may still move a
+  // break it asked for by a syllable -- which is the room a template written for one
+  // language's engraving needs against another's -- but none of the rules that weigh
+  // candidates against each other may drop one.
+  it('keeps both breaks a syllable apart when the template asked for both', () => {
+    // "The Chapel Doors" asks for a line of three syllables ("Sh, be still."), which the
+    // collapse below would otherwise read as two verses disagreeing about one break
+    const { score, run } = runOf(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']);
+    const aligned = score._alignPhraseStartsToRun(phraseStartsFor(run, {
+      shared: [4, 5], asked: [4, 5], templated: [4, 5], scores: { 4: 2, 5: 0.5 },
+    }), run);
+    expect([...aligned].sort((x, y) => x - y)).toEqual([4, 5]);
+  });
+
+  it('keeps the break the template asked for over one merely inferred', () => {
+    const { score, run } = runOf(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']);
+    // The template's is the weaker of the two by every other measure, and still stands
+    const aligned = score._alignPhraseStartsToRun(phraseStartsFor(run, {
+      shared: [4, 5], asked: [4, 5], templated: [5], scores: { 4: 2, 5: 0.5 },
+      openInAll: [4, 5],
+    }), run);
+    expect([...aligned]).toEqual([5]);
+  });
+
+  it('still moves a template break off a syllable that does not open a word', () => {
+    // The flexibility the multilingual corpus needs: a template written for English lands
+    // mid-word in another language, and a break emitted inside a word is dropped outright
+    const { score, run } = runOf(['a', 'b', 'c', 'de-f', 'g', 'h', 'i']);
+    const aligned = score._alignPhraseStartsToRun(phraseStartsFor(run, {
+      shared: [4], asked: [4], templated: [4],
+    }), run);
+    expect([...aligned]).toEqual([3]);
+  });
+
+  it('widens the search past a syllable when the word is longer than two', () => {
+    // Earlier for preference, so a break landing inside 'de-f-g-h' opens the line at 'de'
+    // rather than being dropped for want of a neighbour that opens a word
+    const { score, run } = runOf(['a', 'b', 'c', 'de-f-g-h', 'i', 'j', 'k', 'l']);
+    const aligned = score._alignPhraseStartsToRun(phraseStartsFor(run, {
+      shared: [5], asked: [5], templated: [5],
+    }), run);
+    expect([...aligned]).toEqual([3]);
+  });
+
+  it('keeps its own break when every stanza could take either', () => {
+    // "I Have Two Ears": both verses can break at both places, so each keeps where its own
+    // sentence ended rather than being pulled onto the other's
+    const { score, run } = runOf(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']);
+    const aligned = score._alignPhraseStartsToRun(phraseStartsFor(run, {
+      shared: [4, 5], asked: [5], scores: { 4: 2, 5: 0.5 }, openInAll: [4, 5],
+    }), run);
+    expect([...aligned]).toEqual([5]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Resolving a supplied lyricLinesTemplate onto one stanza
+// ═══════════════════════════════════════════════════════════
+
+describe('_lyricLineBreaksForRun', () => {
+  // A run and the score it was read from, with the template already supplied. Positions are
+  // written in chord-position form, which needs nothing of the score to resolve.
+  const runWith = (syllables, template, { lyricLineId = '1.1' } = {}) => {
+    const score = fakeScore(24);
+    score._suppliedTemplates = { lyricLines: template };
+    return { score, run: { lyricLineId: lyricLineId, syllables: syllables } };
+  };
+
+  // Two lines sung against each other, one on even chord positions and one on odd, so each
+  // run's span brackets positions it does not sing itself
+  const interleaved = (words, { lyricLineId, offset }) => {
+    const syllables = syllablesFrom(words, { lyricLineId: lyricLineId });
+    for (const [at, syllable] of syllables.entries()) {
+      const cp = at * 2 + offset;
+      syllable.chordPositions = [cp];
+      syllable.chordPositionRuns = [[cp, cp + 1]];
+      syllable.expandedChordPositions = [cp];
+    }
+    return syllables;
+  };
+
+  it('takes the breaks the template asks for', () => {
+    const syllables = syllablesFrom(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
+    const { score, run } = runWith(syllables, '3; 6');
+    expect(score._lyricLineBreaksForRun(run)).toEqual([3, 6]);
+  });
+
+  it('leaves a position another stanza sings to that stanza', () => {
+    // A chorus given a section of its own, or two lines stacked on a staff: this run's first
+    // and last positions bracket positions it does not sing, and a break addressed to one of
+    // those is not this template failing to fit the score
+    const mine = interleaved(['a', 'b', 'c', 'd', 'e', 'f'], { lyricLineId: '1.1', offset: 0 });
+    const theirs = interleaved(['q', 'r', 's', 't', 'u', 'v'], { lyricLineId: '1.2', offset: 1 });
+    const sung = new Set([...mine, ...theirs].map(syllable => syllable.chordPositions[0]));
+    const { score, run } = runWith(mine, '4; 5');
+    // 4 is its own, 5 is the other line's -- and the run keeps the one it can place
+    expect(score._lyricLineBreaksForRun(run, sung)).toEqual([2]);
+  });
+
+  it('falls back where a position inside its span is sung by nothing at all', () => {
+    // That is a template written against another engraving of the song, and half a stanza's
+    // breaks leaves it worse off than none
+    const mine = interleaved(['a', 'b', 'c', 'd', 'e', 'f'], { lyricLineId: '1.1', offset: 0 });
+    const sung = new Set(mine.map(syllable => syllable.chordPositions[0]));
+    const { score, run } = runWith(mine, '4; 5');
+    expect(score._lyricLineBreaksForRun(run, sung)).toBe(null);
+  });
+
+  it('takes a break addressed to a line the run sings but is not named for', () => {
+    // "Gethsemane" closes on its two lyric lines one after the other, and a supplied sections
+    // template hands that back as one run named for the first of them
+    const first = syllablesFrom(['a', 'b', 'c', 'd'], { lyricLineId: '1.1' });
+    const second = syllablesFrom(['e', 'f', 'g', 'h'], { lyricLineId: '1.2' });
+    for (const [at, syllable] of second.entries()) {
+      const cp = at + 4;
+      syllable.chordPositions = [cp];
+      syllable.chordPositionRuns = [[cp, cp + 1]];
+      syllable.expandedChordPositions = [cp];
+    }
+    const syllables = first.concat(second);
+    const sung = new Set(syllables.map(syllable => syllable.chordPositions[0]));
+    const { score, run } = runWith(syllables, '4[1.2]');
+    expect(score._lyricLineBreaksForRun(run, sung)).toEqual([4]);
+  });
+
+  it('leaves a break addressed to a line the run does not sing alone', () => {
+    const syllables = syllablesFrom(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
+    const { score, run } = runWith(syllables, '4[2.1]');
+    expect(score._lyricLineBreaksForRun(run)).toBe(null);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Round entry marks across repeated stanzas
+// ═══════════════════════════════════════════════════════════
+
+describe('_carryRoundMarkersToRepeats', () => {
+  // Two stanzas of the same round, the mark engraved over the first one's opening only
+  const twoStanzas = (score, { first = 'Oh,', second = 'Oh,', marker = '\u2780' } = {}) => {
+    const runs = [
+      { lyricLineId: '1.1', syllables: syllablesFrom([first, 'come', 'with', 'me']) },
+      { lyricLineId: '1.1', syllables: syllablesFrom([second, 'come', 'with', 'me']) },
+    ];
+    runs[0].syllables[0].roundMarker = marker;
+    runs[1].syllables[0].roundMarker = null;
+    score._carryRoundMarkersToRepeats(runs);
+    return runs;
+  };
+
+  const roundScore = (hasRound = true) => {
+    const score = fakeScore(8);
+    score._scoreData.features = { hasRound: hasRound };
+    return score;
+  };
+
+  it('should give a repeated stanza the mark its first pass carries', () => {
+    // The mark is engraved once, over the first pickup; a stanza taking its pickup from the
+    // written repeat never comes past that position and has nothing to read it from
+    const runs = twoStanzas(roundScore());
+    expect(runs[1].syllables[0].roundMarker).toBe('\u2780');
+  });
+
+  it('should leave a stanza opening on a different word alone', () => {
+    const runs = twoStanzas(roundScore(), { second: 'Wherever' });
+    expect(runs[1].syllables[0].roundMarker).toBeNull();
+  });
+
+  it('should not carry marks in a score that is not a round', () => {
+    const runs = twoStanzas(roundScore(false));
+    expect(runs[1].syllables[0].roundMarker).toBeNull();
+  });
+
+  it('should leave a mark the stanza already carries', () => {
+    const score = roundScore();
+    const runs = [
+      { lyricLineId: '1.1', syllables: syllablesFrom(['Oh,', 'come']) },
+      { lyricLineId: '1.1', syllables: syllablesFrom(['Oh,', 'come']) },
+    ];
+    runs[0].syllables[0].roundMarker = '\u2780';
+    runs[1].syllables[0].roundMarker = '\u2781';
+    score._carryRoundMarkersToRepeats(runs);
+    expect(runs[1].syllables[0].roundMarker).toBe('\u2781');
+  });
+});
+
 describe('_getPhraseStartChordPositions', () => {
   it('breaks a two-line stanza where the punctuation and capital agree', () => {
     const score = fakeScore(20);

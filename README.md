@@ -171,6 +171,7 @@ Input data is provided to Chorister.js when loading the score (see “Methods”
 - **partsTemplate** – Parts template string (more details below). Optional.
 - **sections** – Sections object (more details below). Optional.
 - **sectionsTemplate** – Sections template string (more details below). Optional.
+- **lyricLinesTemplate** – Lyric lines template string: where the lyrics break into lines (more details below). Optional.
 - **chordSets** – Chord sets object (more details below). Optional.
 - **fermatas** – Fermatas object (more details below). Optional.
 - **lang** – Language code (e.g. `'en'`) selecting the hard-coded dictionary of known hyphenated words used when extracting lyrics from the score's own syllables. Optional, defaults to `'en'`. A score's own printed title/lyrics (if present) are also used and take priority over the hard-coded dictionary, regardless of `lang`.
@@ -407,9 +408,42 @@ Examples:
 - `I(0-25[2,3])(57-65[2,3]); V(0-32[2,3]:2.1); C(32-65[2,3]:2.1); V(:below); C(:below)` – An introduction played from staves 2 and 3, a sung verse and chorus, then a verse and chorus whose words are only printed below the music.
 
 If sections aren’t provided as an object, they’re built from the template; if neither is
-provided, Chorister.js generates them automatically. Either way `sectionsTemplate` in the
-returned score data reports the sections as a template, the way `partsTemplate` reports the
-parts – so a generated set of sections can be read, corrected by hand, and handed back.
+provided, Chorister.js generates them automatically. Either way the returned score data
+reports the sections as a template – so a generated set of sections can be read, corrected by
+hand, and handed back.
+
+#### Templates in the returned score data
+
+`templates` reports the score as templates, whether or not any were provided – the parts, the
+sections, and where the lyrics break into lines:
+
+| key | what it names |
+| --- | --- |
+| `partsTemplateInput`, `partsTemplateCp`, `partsTemplateMb` | the parts |
+| `sectionsTemplateInput`, `sectionsTemplateCp`, `sectionsTemplateMb` | the sections |
+| `lyricLinesTemplateInput`, `lyricLinesTemplateCp`, `lyricLinesTemplateMb` | where the lyric lines break |
+
+`Cp` and `Mb` are always filled in, so anything Chorister worked out for itself can be read,
+corrected by hand, and handed back. They describe the parts, sections and line breaks that
+were actually built, so a template provided as input comes back resolved against this score
+rather than echoed – `partsTemplate: 'SATB'` is reported as `'SA+TB'`.
+
+`Input` is the template that was provided, verbatim and in whichever form it was written, or
+`null` if none was. It's there so a caller can tell what they asked for apart from what the
+score answered.
+
+The two forms differ only in how a position is written, and either is accepted wherever a
+template names one:
+
+- **`Cp`** – a chord position (`12`). Exact, and the cheaper read against the score it came
+  from.
+- **`Mb`** – a measure number and beat (`4@1`, `12@3.5`). The beat counts from 1 within the
+  time signature, and runs on through a bar written in two pieces, so a bar split across a
+  section end stays one bar (`1@4`, never `1b@2`). This is the form that survives a different
+  engraving of the same song – a translation set to the same music, for instance.
+
+So `sectionsTemplate: 'V(0-32)'` and `sectionsTemplate: 'V(0-9@1)'` say the same thing about a
+score whose measure 9 begins at chord position 32.
 
 #### Sections object
 
