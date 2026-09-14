@@ -54,7 +54,7 @@
         }
       }
       g.dir { font-style: italic; }
-      [data-ch-pinch] g.ch-shapes > *:not(.ch-staff-label, .ch-chord-position-label, .ch-lyric-line-label) {
+      [data-ch-pinch] g.ch-shapes > *:not(.ch-staff-label, .ch-measure-label, .ch-beat-label, .ch-chord-position-label, .ch-lyric-line-label) {
         display: none !important;
       }
       svg .ch-shapes-foreground .ch-chord-position-line { stroke-width: 300px; }
@@ -292,8 +292,10 @@
           </select>
         </label></p>
         <p><label><input type="checkbox" name="drawForegroundShapes" value="ch-staff-label" switch> Staff labels</label></p>
-        <p><label><input type="checkbox" name="drawForegroundShapes" value="ch-chord-position-label" switch> Chord position labels</label></p>
         <p><label><input type="checkbox" name="drawForegroundShapes" value="ch-lyric-line-label" switch> Lyric line labels</label></p>
+        <p><label><input type="checkbox" name="drawForegroundShapes" value="ch-measure-label" switch> Measure labels</label></p>
+        <p><label><input type="checkbox" name="drawForegroundShapes" value="ch-beat-label" switch> Beat labels</label></p>
+        <p><label><input type="checkbox" name="drawForegroundShapes" value="ch-chord-position-label" switch> Chord position labels</label></p>
       </form>
       
       <p>Tap details:</p>

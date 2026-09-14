@@ -713,6 +713,8 @@ describe('Shape types — smoke tests for all shape classes', () => {
     { shape: 'ch-chord-position-line', layer: 'foreground', expectedMin: 1 },
     { shape: 'ch-chord-position-rect', layer: 'background', expectedMin: 1 },
     { shape: 'ch-chord-position-label', layer: 'foreground', expectedMin: 1 },
+    { shape: 'ch-measure-label', layer: 'foreground', expectedMin: 1 },
+    { shape: 'ch-beat-label', layer: 'foreground', expectedMin: 1 },
     { shape: 'ch-lyric-line-label', layer: 'background', expectedMin: 1 },
     { shape: 'ch-staff-label', layer: 'background', expectedMin: 1 },
   ])('should render $shape in $layer layer', ({ shape, layer, expectedMin }) => {
@@ -895,11 +897,184 @@ describe('_updateSvg() — SVG post-processing', () => {
       drawForegroundShapes: ['ch-chord-position-label'],
     });
     const svg = score._container.querySelector('svg');
-    const labels = svg.querySelectorAll('.ch-shapes-foreground .ch-chord-position-label');
+    const labels = svg.querySelectorAll('.ch-shapes-foreground .ch-chord-position-label:not(.ch-row-header)');
     expect(labels.length).toBe(score._scoreData.chordPositions.length);
     for (const label of labels) {
       expect(label.getAttribute('data-ch-chord-position')).toBeTruthy();
       expect(label.textContent.trim()).toMatch(/^\d+$/);
+    }
+  });
+
+  it('should draw a measure label for every measure, including partial measures', () => {
+    score.setOptions({
+      drawForegroundShapes: ['ch-measure-label'],
+    });
+    const svg = score._container.querySelector('svg');
+    const labels = svg.querySelectorAll('.ch-shapes-foreground .ch-measure-label:not(.ch-row-header)');
+    expect(labels.length).toBe(score._scoreData.measures.length);
+    const measureNumbers = Array.from(labels).map(label => label.getAttribute('data-ch-measure-number'));
+    expect(measureNumbers).toEqual(score._scoreData.measures.map(measure => measure.measureNumber));
+  });
+
+  it('should set measure numbers bold, but bracket continuations of a split bar in plain text', () => {
+    score.setOptions({
+      drawForegroundShapes: ['ch-measure-label'],
+    });
+    const svg = score._container.querySelector('svg');
+    const labels = Array.from(
+      svg.querySelectorAll('.ch-shapes-foreground .ch-measure-label:not(.ch-row-header)'));
+    const isContinuation = (label) => /[a-z]$/.test(label.getAttribute('data-ch-measure-number'));
+    // The fixture carries both kinds (it splits bar 7), so neither branch goes unchecked
+    expect(labels.filter(isContinuation).length).toBeGreaterThan(0);
+    expect(labels.filter(label => !isContinuation(label)).length).toBeGreaterThan(0);
+    for (const label of labels) {
+      const measureNumber = label.getAttribute('data-ch-measure-number');
+      if (isContinuation(label)) {
+        expect(label.textContent.trim()).toBe(`(${measureNumber})`);
+        expect(label.getAttribute('font-weight')).toBe(null);
+        expect(label.getAttribute('font-style')).toBe(null);
+      } else {
+        expect(label.textContent.trim()).toBe(measureNumber);
+        expect(label.getAttribute('font-weight')).toBe('bold');
+        expect(label.getAttribute('font-style')).toBe(null);
+      }
+    }
+  });
+
+  it('should draw measure labels on the copies an expanded score plays', () => {
+    score.setOptions({ expandScore: 'full-score', drawForegroundShapes: ['ch-measure-label'] });
+    const svg = score._container.querySelector('svg');
+    const labels = Array.from(svg.querySelectorAll('.ch-measure-label:not(.ch-row-header)'));
+    // More measures than the score has, because passes repeat them, and every copy is
+    // labelled with the number of the measure it copies
+    expect(svg.querySelectorAll('.measure').length)
+      .toBeGreaterThan(score._scoreData.measures.length);
+    expect(labels.length).toBeGreaterThan(score._scoreData.measures.length);
+    const numbers = new Set(score._scoreData.measures.map(measure => measure.measureNumber));
+    for (const label of labels) {
+      expect(numbers).toContain(label.getAttribute('data-ch-measure-number'));
+    }
+    score.setOptions({ expandScore: false });
+  });
+
+  it('should draw a beat label for every chord position', () => {
+    score.setOptions({
+      drawForegroundShapes: ['ch-beat-label'],
+    });
+    const svg = score._container.querySelector('svg');
+    const labels = svg.querySelectorAll('.ch-shapes-foreground .ch-beat-label:not(.ch-row-header)');
+    expect(labels.length).toBe(score._scoreData.chordPositions.length);
+    for (const label of labels) {
+      expect(label.getAttribute('data-ch-chord-position')).toBeTruthy();
+      expect(label.textContent.trim()).toMatch(/^\d+(\.\d+)?$/);
+    }
+  });
+
+  it('should stack labels below the system as measure, beat, then chord position', () => {
+    score.setOptions({
+      drawForegroundShapes: ['ch-measure-label', 'ch-beat-label', 'ch-chord-position-label'],
+    });
+    const svg = score._container.querySelector('svg');
+    const firstY = (className) => Number.parseInt(
+      svg.querySelector(`.ch-shapes-foreground .${className}:not(.ch-row-header)`).getAttribute('y'));
+    expect(firstY('ch-measure-label')).toBeLessThan(firstY('ch-beat-label'));
+    expect(firstY('ch-beat-label')).toBeLessThan(firstY('ch-chord-position-label'));
+  });
+
+  it('should line measure labels up with the measure\'s first chord position', () => {
+    score.setOptions({
+      drawForegroundShapes: ['ch-measure-label', 'ch-chord-position-label'],
+    });
+    const svg = score._container.querySelector('svg');
+    const measureIdOf = (label) => label.getAttribute('data-related').split(' ')[1];
+    const firstCpXByMeasureId = {};
+    for (const cpLabel of svg.querySelectorAll('.ch-chord-position-label:not(.ch-row-header)')) {
+      const measureId = measureIdOf(cpLabel);
+      if (!(measureId in firstCpXByMeasureId)) firstCpXByMeasureId[measureId] = cpLabel.getAttribute('x');
+    }
+    const measureLabels = svg.querySelectorAll('.ch-measure-label:not(.ch-row-header)');
+    expect(measureLabels.length).toBeGreaterThan(0);
+    for (const measureLabel of measureLabels) {
+      expect(measureLabel.getAttribute('x')).toBe(firstCpXByMeasureId[measureIdOf(measureLabel)]);
+    }
+  });
+
+  it('should draw a row header per system for each row of labels, at the start of the system', () => {
+    score.setOptions({
+      drawForegroundShapes: ['ch-measure-label', 'ch-beat-label', 'ch-chord-position-label'],
+    });
+    const svg = score._container.querySelector('svg');
+    const systems = Array.from(svg.querySelectorAll('.system'))
+      .filter(system => system.querySelector('.measure'));
+    const headers = Array.from(svg.querySelectorAll('.ch-row-header'));
+    expect(headers.length).toBe(systems.length * 3);
+    expect(new Set(headers.map(header => header.textContent.trim())))
+      .toEqual(new Set(['M:', 'B:', 'CP:']));
+    // Right-aligned against each other: one shared right edge, and the text ends there
+    expect(new Set(headers.map(header => header.getAttribute('x'))).size).toBe(1);
+    expect(new Set(headers.map(header => header.getAttribute('text-anchor')))).toEqual(new Set(['end']));
+    // Inside the system, in the blank space under the clef and time signature
+    for (const system of systems) {
+      const staffLines = Array.from(system.querySelectorAll('.measure .staff > path'));
+      const d = (path) => path.getAttribute('d').split(' ');
+      const systemX1 = Number.parseInt(d(staffLines[0])[0].replace('M', ''));
+      const systemX2 = Number.parseInt(d(staffLines.at(-1))[2].replace('L', ''));
+      for (const header of headers.filter(h => h.getAttribute('data-related') === system.id)) {
+        const x = Number.parseInt(header.getAttribute('x'));
+        expect(x).toBeGreaterThan(systemX1);
+        expect(x).toBeLessThan(systemX2);
+      }
+    }
+    // Each header sits on its own row's baseline
+    for (const className of ['ch-measure-label', 'ch-beat-label', 'ch-chord-position-label']) {
+      const header = svg.querySelector(`.ch-row-header.${className}`);
+      const label = svg.querySelector(`.${className}:not(.ch-row-header)`);
+      expect(header.getAttribute('y')).toBe(label.getAttribute('y'));
+    }
+  });
+
+  it('should not narrow the score to make room for the row headers', () => {
+    // The headers live inside the system, so neither margin moves and the staves keep their
+    // full width -- only the space below the system grows
+    const systemSpan = () => {
+      const svg = score._container.querySelector('svg');
+      const staffLines = Array.from(svg.querySelectorAll('.system .measure .staff > path'));
+      const d = (path) => path.getAttribute('d').split(' ');
+      return [
+        svg.querySelector('.page-margin').getAttribute('transform'),
+        Number.parseInt(d(staffLines[0])[0].replace('M', '')),
+        Math.max(...staffLines.map(path => Number.parseInt(d(path)[2].replace('L', '')))),
+      ].join(' ');
+    };
+    score.setOptions({ drawForegroundShapes: [] });
+    const withoutLabels = systemSpan();
+    score.setOptions({
+      drawForegroundShapes: ['ch-measure-label', 'ch-beat-label', 'ch-chord-position-label'],
+    });
+    expect(systemSpan()).toBe(withoutLabels);
+  });
+
+  it('should draw row headers only for the rows being drawn', () => {
+    score.setOptions({ drawForegroundShapes: ['ch-beat-label'] });
+    const svg = score._container.querySelector('svg');
+    expect(new Set(Array.from(svg.querySelectorAll('.ch-row-header'))
+      .map(header => header.textContent.trim()))).toEqual(new Set(['B:']));
+  });
+
+  it('should leave room below the last system for every row of labels', () => {
+    for (const shapes of [
+      ['ch-chord-position-label'],
+      ['ch-measure-label', 'ch-chord-position-label'],
+      ['ch-measure-label', 'ch-beat-label', 'ch-chord-position-label'],
+    ]) {
+      score.setOptions({ drawForegroundShapes: shapes });
+      const svg = score._container.querySelector('svg');
+      const pageHeight = Number.parseInt(
+        svg.querySelector('svg.definition-scale').getAttribute('viewBox').split(' ')[3]);
+      const labels = Array.from(svg.querySelectorAll(
+        '.ch-measure-label:not(.ch-row-header), .ch-beat-label:not(.ch-row-header), .ch-chord-position-label:not(.ch-row-header)'));
+      const lowestBaseline = Math.max(...labels.map(label => Number.parseInt(label.getAttribute('y'))));
+      expect(lowestBaseline).toBeLessThan(pageHeight);
     }
   });
 

@@ -35,7 +35,7 @@ ChScore.prototype._loadStyles = function () {
   const generalStylesheet = this._addStylesheet('general');
   generalStylesheet.replaceSync(`
     /* Shape styles */
-    .ch-staff-label, .ch-chord-position-label, .ch-lyric-line-label {
+    .ch-staff-label, .ch-lyric-line-label, .ch-measure-label, .ch-beat-label, .ch-chord-position-label {
       opacity: 1;
     }
     .ch-system-rect, .ch-measure-rect, .ch-staff-rect,
@@ -81,7 +81,7 @@ ChScore.prototype._loadStyles = function () {
       fill: black !important;
       stroke: black !important;
     }
-    [data-ch-layout="print"] g.ch-shapes > *:not(.ch-staff-label, .ch-chord-position-label, .ch-lyric-line-label) {
+    [data-ch-layout="print"] g.ch-shapes > *:not(.ch-staff-label, .ch-measure-label, .ch-beat-label, .ch-chord-position-label, .ch-lyric-line-label) {
       display: none !important;
     }
   `);
@@ -489,9 +489,16 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
   // Set margin and spacing
   const shapeClassNames = (this._currentOptions.drawBackgroundShapes || []).concat(this._currentOptions.drawForegroundShapes || []);
   if (shapeClassNames.length > 0) {
-    if (shapeClassNames.includes('ch-chord-position-label')) {
-      verovioOptions.spacingSystem = Math.max(verovioOptions.spacingSystem, 12);
-      verovioOptions.pageMarginBottom = Math.max(verovioOptions.pageMarginBottom, 20);
+    // Each row of labels below the system after the first needs more room, both between
+    // systems and under the last one
+    const extraRows = Object.keys(this._belowSystemLabelHeaders)
+      .filter(className => shapeClassNames.includes(className)).length - 1;
+    if (extraRows >= 0) {
+      const extraHeight = extraRows * this._belowSystemLabelRowHeight;
+      verovioOptions.spacingSystem = Math.max(verovioOptions.spacingSystem,
+        12 + Math.ceil(extraHeight / this._verovioSpacingUnit));
+      verovioOptions.pageMarginBottom = Math.max(verovioOptions.pageMarginBottom,
+        20 + Math.ceil(extraHeight / this._verovioMarginUnit));
     }
     if (shapeClassNames.includes('ch-lyric-line-label')) {
       verovioOptions.pageMarginLeft = Math.max(verovioOptions.pageMarginLeft, 90);
@@ -1892,6 +1899,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   // for a verse number engraved into the first syllable
   this._fixUnterminatedMelismas();
 
+
   /********** Read notes, rests and measures **********/
 
   // Gather information about each note and rest
@@ -2685,14 +2693,14 @@ ChScore.prototype._annotateFromTimemap = function (vrvTimemap, elementsById) {
   previousMeasureInfo.durationQ = previousMeasureInfo.endQ - previousMeasureInfo.startQ;
   previousChordPositionInfo.endQ = vrvTimemap.at(-1).qstamp;
   previousChordPositionInfo.durationQ = previousChordPositionInfo.endQ - previousChordPositionInfo.startQ;
-  this._finalizeMeasures();
+  this._finalizeMeasures(elementsById);
   return chordPositionCounter;
 }
 
 // Measure types, the downbeats that follow from them, and measure numbers -- all settled after
 // the walk, since a split measure's near half is only told from its far half by the measure
 // after it, whose duration isn't known until the walk has passed it.
-ChScore.prototype._finalizeMeasures = function () {
+ChScore.prototype._finalizeMeasures = function (elementsById) {
   const measures = this._scoreData.measures;
   measures.forEach((measure, index) => {
     measure.measureType = this._measureType(measure, measures[index + 1]);
@@ -2702,14 +2710,20 @@ ChScore.prototype._finalizeMeasures = function () {
     }
   });
   const numbers = this._measureNumbersFor(measures.map(measure => measure.measureType));
-  measures.forEach((measure, index) => { measure.measureNumber = numbers[index]; });
+  measures.forEach((measure, index) => {
+    measure.measureNumber = numbers[index];
+    // Carry the number back onto the MEI so @n agrees with the score data. Runs before the
+    // complete MEI is serialized, so every later copy of the document carries it.
+    elementsById.get(measure.measureId)?.setAttribute('n', numbers[index]);
+  });
 }
 
 // Measure numbers as an engraver counts them: a pickup is 0, every measure opening a bar of its
 // own takes the next number, and the far half of a bar written in two pieces continues the one
 // before it as 1b, 1c and so on -- however that bar is barred, since a section can close
-// part-way through one. The engraved @n is no use for this: scores here suppress measure
-// numbering, writing "0", "X1", "X2" instead.
+// part-way through one. The engraved @n is no use for deriving this: scores here suppress
+// measure numbering, writing "0", "X1", "X2" instead. _finalizeMeasures writes the result
+// back to @n.
 //
 // Over measure types rather than the records they came from, because the parts template is
 // read before the walk has filled those in and has to ask the same question (see _measureRuns).
@@ -2732,6 +2746,39 @@ ChScore.prototype._measureNumbersFor = function (measureTypes) {
     }
   }
   return numbers;
+}
+
+// Number every measure in a document the way _finalizeMeasures numbers the score's own: a
+// pickup is 0, every measure opening a bar takes the next number, and the far half of a bar
+// written in two pieces continues it as 1b, 1c. For a document whose measures no longer answer
+// to the score data -- an expanded score. `measureDurationQ` reads a measure's length off the
+// notation, since a document still being assembled has no timemap.
+ChScore.prototype._renumberMeasures = function (meiParsed, measureDurationQ) {
+  const pieces = [];
+  // Same walk the score data is built from, so a meter change carries forward
+  const timeSignature = [4, 4];
+  for (const element of meiParsed.querySelectorAll('scoreDef, staffDef, meterSig, measure')) {
+    if (element.matches('measure')) {
+      pieces.push({
+        element: element,
+        durationQ: measureDurationQ(element, timeSignature),
+        timeSignature: [...timeSignature],
+        isFirstMeasure: pieces.length === 0,
+        isLastMeasure: false, // Settled after the walk, on the measure that turns out to be last
+        rightBarLine: element.getAttribute('right') ?? 'single',
+      });
+    } else {
+      timeSignature[0] = Number.parseInt(element.getAttribute('count')
+        ?? element.getAttribute('meter.count') ?? timeSignature[0]);
+      timeSignature[1] = Number.parseInt(element.getAttribute('unit')
+        ?? element.getAttribute('meter.unit') ?? timeSignature[1]);
+    }
+  }
+  if (pieces.length === 0) return;
+  pieces.at(-1).isLastMeasure = true;
+  const numbers = this._measureNumbersFor(
+    pieces.map((piece, index) => this._measureType(piece, pieces[index + 1])));
+  pieces.forEach((piece, index) => piece.element.setAttribute('n', numbers[index]));
 }
 
 // Get measure type: full, partial-pickup, partial-pickdown, partial-start, partial-end
@@ -3293,7 +3340,7 @@ ChScore.prototype._updateMei = function () {
       // Clean up endings
       for (const ending of this._scoreData.meiParsed.querySelectorAll('ending')) {
         const endingSection = this._createMeiElement(this._scoreData.meiParsed, 'section');
-        endingSection.setAttribute('xml:id', ending.getAttribute('xml:id'));
+        this._setMeiId(endingSection, ending.getAttribute('xml:id'));
         endingSection.setAttribute('ch-chord-position', ending.getAttribute('ch-chord-position'));
         if (ending.hasAttribute('ch-iteration')) {
           endingSection.setAttribute('ch-iteration', ending.getAttribute('ch-iteration'));
@@ -3702,6 +3749,14 @@ ChScore.prototype._createMeiElement = function (meiParsed, tagName) {
   return meiParsed.createElementNS('http://www.music-encoding.org/ns/mei', tagName);
 }
 
+// Give a newly created element its @xml:id, in the XML namespace. setAttribute would hang a
+// plain attribute named "xml:id" on it instead, which reads back the same by qualified name
+// but is invisible to the `[*|id]` walk and is not an id Verovio honours. An element that
+// already carries an @xml:id can be renamed with setAttribute, which keeps the namespace.
+ChScore.prototype._setMeiId = function (element, id) {
+  element.setAttributeNS('http://www.w3.org/XML/1998/namespace', 'xml:id', id);
+}
+
 ChScore.prototype._updateSvg = function (svg) {
   const svgParsed = (new DOMParser()).parseFromString(svg, 'text/xml');
   const definitionScaleElement = svgParsed.querySelector('.definition-scale');
@@ -3831,6 +3886,8 @@ ChScore.prototype._updateSvg = function (svg) {
   // Assign class names to layers
   const shapeLayersByClassName = {
     'ch-staff-label': [],
+    'ch-measure-label': [],
+    'ch-beat-label': [],
     'ch-chord-position-label': [],
     'ch-lyric-line-label': [],
     'ch-system-rect': [],
@@ -3847,6 +3904,19 @@ ChScore.prototype._updateSvg = function (svg) {
   for (const className of this._currentOptions.drawForegroundShapes || []) {
     shapeLayersByClassName[className]?.push(foregroundShapes);
   }
+
+  // Labels below the system stack in a fixed order, so each one's row and the space the
+  // system needs under it depend on which of them are drawn
+  const measureRuns = this._measureRuns();
+  const drawnBelowSystemLabels = Object.keys(this._belowSystemLabelHeaders)
+    .filter(className => shapeLayersByClassName[className].length > 0);
+  const belowSystemLabelY = {};
+  drawnBelowSystemLabels.forEach((className, row) => {
+    belowSystemLabelY[className] = this._belowSystemLabelFirstRow
+      + (row * this._belowSystemLabelRowHeight);
+  });
+  const belowSystemLabelExtension = drawnBelowSystemLabels.length > 0
+    ? belowSystemLabelY[drawnBelowSystemLabels.at(-1)] + this._belowSystemLabelDescender : 0;
 
   // Draw background and foreground shapes (except lyric rects, which are drawn below)
   const measureXsById = {};
@@ -3885,7 +3955,7 @@ ChScore.prototype._updateSvg = function (svg) {
         const staffLabel = this._createSvgElement(svgParsed, 'text');
         staffLabel.setAttribute('x', systemX1 - 300);
         staffLabel.setAttribute('y', staffY1 + ((staffY2 - staffY1) / 2));
-        staffLabel.setAttribute('font-size', 350);
+        staffLabel.setAttribute('font-size', this._labelFontSize);
         staffLabel.setAttribute('text-anchor', 'end');
         staffLabel.setAttribute('dominant-baseline', 'central');
         staffLabel.setAttribute('class', staffLabelClassName);
@@ -3927,6 +3997,24 @@ ChScore.prototype._updateSvg = function (svg) {
       systemRect.setAttribute('class', systemRectClassName);
       systemRect.setAttribute('data-related', system.id);
       shapeLayer.appendChild(systemRect);
+    }
+
+    // Draw row headers ("M:", "B:", "CP:"), one per row of labels below the system. Each
+    // carries its row's class so it comes and goes with the row, and they share a right edge.
+    // Drawn inside the system, in the blank space under the clef and time signature.
+    for (const className of drawnBelowSystemLabels) {
+      for (const shapeLayer of shapeLayersByClassName[className]) {
+        const rowHeader = this._createSvgElement(svgParsed, 'text');
+        rowHeader.setAttribute('x', systemX1 + this._belowSystemLabelHeaderOffset);
+        rowHeader.setAttribute('y', systemY2 + belowSystemLabelY[className]);
+        rowHeader.setAttribute('font-size', this._labelFontSize);
+        if (className === 'ch-measure-label') rowHeader.setAttribute('font-weight', 'bold');
+        rowHeader.setAttribute('text-anchor', 'end');
+        rowHeader.setAttribute('class', `${className} ch-row-header`);
+        rowHeader.setAttribute('data-related', system.id);
+        rowHeader.innerHTML = this._belowSystemLabelHeaders[className];
+        shapeLayer.append(rowHeader);
+      }
     }
 
     // Skip systems without measures (sometimes happens when the window is narrow)
@@ -3980,8 +4068,39 @@ ChScore.prototype._updateSvg = function (svg) {
         }
       }
 
-      let previousCpRect = null;
       const chordPositionNoteX1sEntries = Object.entries(chordPositionNoteX1s);
+
+      // Draw measure labels, over the measure's first chord position so that the three rows
+      // below the system line up with each other
+      const measureLabelClassName = 'ch-measure-label';
+      if (shapeLayersByClassName[measureLabelClassName].length > 0) {
+        // An expanded score plays a measure more than once, and the copies are the original id
+        // suffixed with the pass they belong to, so the number comes from the measure it copies
+        const measureId = this._scoreData.measuresById[measure.id]
+          ? measure.id : measure.id.split('-rend')[0];
+        const measureNumber = this._scoreData.measuresById[measureId]?.measureNumber;
+        // A piece picking a bar up part-way through is bracketed and left in a plain face,
+        // rather than taking the weight the number opening a bar carries
+        const isContinuation = measureRuns.byMeasureId.get(measureId)?.within > 0;
+        const firstNoteX1s = chordPositionNoteX1sEntries[0]?.[1];
+        for (const shapeLayer of measureNumber == null
+          ? [] : shapeLayersByClassName[measureLabelClassName]) {
+          const measureLabel = this._createSvgElement(svgParsed, 'text');
+          measureLabel.setAttribute('x', firstNoteX1s
+            ? Math.min(...firstNoteX1s) + (noteheadWidth / 2) : measureX1);
+          measureLabel.setAttribute('y', systemY2 + belowSystemLabelY[measureLabelClassName]);
+          measureLabel.setAttribute('font-size', this._labelFontSize);
+          if (!isContinuation) measureLabel.setAttribute('font-weight', 'bold');
+          measureLabel.setAttribute('text-anchor', 'middle');
+          measureLabel.setAttribute('class', measureLabelClassName);
+          measureLabel.setAttribute('data-related', `${system.id} ${measure.id}`);
+          measureLabel.setAttribute('data-ch-measure-number', measureNumber);
+          measureLabel.innerHTML = isContinuation ? `(${measureNumber})` : measureNumber;
+          shapeLayer.append(measureLabel);
+        }
+      }
+
+      let previousCpRect = null;
       for (let i = 0; i < chordPositionNoteX1sEntries.length; i++) {
         const [chordPosition, noteX1s] = chordPositionNoteX1sEntries[i];
         const expandedChordPositions = chordPositionToExpandedChordPositions[chordPosition];
@@ -3989,13 +4108,34 @@ ChScore.prototype._updateSvg = function (svg) {
         const cpLineX = cpLineX1 + (noteheadWidth / 2);
         const cpRectX1 = i === 0 ? measureX1 : cpLineX1 - (noteheadWidth / 2);
 
+        // Draw beat labels
+        const beatLabelClassName = 'ch-beat-label';
+        const beat = shapeLayersByClassName[beatLabelClassName].length > 0
+          ? this._chordPositionToMeasureBeat(Number.parseInt(chordPosition))?.beat : null;
+        for (const shapeLayer of beat == null
+          ? [] : shapeLayersByClassName[beatLabelClassName]) {
+          const beatLabel = this._createSvgElement(svgParsed, 'text');
+          beatLabel.setAttribute('x', cpLineX);
+          beatLabel.setAttribute('y', systemY2 + belowSystemLabelY[beatLabelClassName]);
+          beatLabel.setAttribute('font-size', this._labelFontSize);
+          beatLabel.setAttribute('text-anchor', 'middle');
+          beatLabel.setAttribute('class', beatLabelClassName);
+          beatLabel.setAttribute('data-related', `${system.id} ${measure.id}`);
+          beatLabel.setAttribute('data-ch-chord-position', chordPosition);
+          beatLabel.setAttribute('data-ch-expanded-chord-position', expandedChordPositions);
+          beatLabel.setAttribute('data-ch-beat', beat);
+          // Named the way a musician says them: "2.5", not "2.5000000001"
+          beatLabel.innerHTML = String(Number.parseFloat(beat.toFixed(2)));
+          shapeLayer.append(beatLabel);
+        }
+
         // Draw chord position labels
         const cpLabelClassName = 'ch-chord-position-label';
         for (const shapeLayer of shapeLayersByClassName[cpLabelClassName]) {
           const cpLabel = this._createSvgElement(svgParsed, 'text');
           cpLabel.setAttribute('x', cpLineX);
-          cpLabel.setAttribute('y', systemY2 + 800);
-          cpLabel.setAttribute('font-size', 350);
+          cpLabel.setAttribute('y', systemY2 + belowSystemLabelY[cpLabelClassName]);
+          cpLabel.setAttribute('font-size', this._labelFontSize);
           cpLabel.setAttribute('text-anchor', 'middle');
           cpLabel.setAttribute('class', cpLabelClassName);
           cpLabel.setAttribute('data-related', `${system.id} ${measure.id}`);
@@ -4022,13 +4162,12 @@ ChScore.prototype._updateSvg = function (svg) {
 
         // Draw chord position rects
         const cpRectClassName = 'ch-chord-position-rect';
-        const bottomExtension = shapeLayersByClassName['ch-chord-position-label'].length > 0 ? 1000 : 0;
         for (const shapeLayer of shapeLayersByClassName[cpRectClassName]) {
           const cpRect = this._createSvgElement(svgParsed, 'rect');
           cpRect.setAttribute('x', cpRectX1);
           cpRect.setAttribute('y', systemY1);
           cpRect.setAttribute('width', measureX2 - cpRectX1); // Updated later if not the last chord position in the measure
-          cpRect.setAttribute('height', systemY2 - systemY1 + bottomExtension);
+          cpRect.setAttribute('height', systemY2 - systemY1 + belowSystemLabelExtension);
           cpRect.setAttribute('class', cpRectClassName);
           cpRect.setAttribute('data-related', `${system.id} ${measure.id}`);
           cpRect.setAttribute('data-ch-chord-position', chordPosition);
@@ -4421,52 +4560,32 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
     return durTstamps;
   };
 
-  const getTstampUnit = (measure) => {
-    // Find time signature
-    let meterSig = measure.querySelector('meterSig');
-    if (!meterSig) {
-      const scoreDef = meiParsed.querySelector('scoreDef');
-      meterSig = scoreDef?.querySelector('meterSig');
-    }
-
-    if (meterSig) {
-      const unit = Number.parseInt(meterSig.getAttribute('unit') || '4');
-      // The tstamp unit is the denominator of the time signature
-      // In 3/2, unit=2, so 1 tstamp = 1 half note
-      // In 4/4, unit=4, so 1 tstamp = 1 quarter note
-      return unit;
-    }
-
-    return 4; // Default to quarter note
+  // The meter a measure is written in, as [count, unit], from its own meterSig or the opening
+  // one. The unit is also the tstamp unit -- a quarter note in 4/4, a half note in 3/2 -- so a
+  // full bar is `count` tstamps in any meter.
+  const openingMeterSig = meiParsed.querySelector('scoreDef meterSig');
+  const getMeter = (measure) => {
+    const meterSig = measure.querySelector('meterSig') ?? openingMeterSig;
+    return [
+      Number.parseInt(meterSig?.getAttribute('count') || '4'),
+      Number.parseInt(meterSig?.getAttribute('unit') || '4'),
+    ];
   };
 
   const convertTstampsToDur = (tstamps, tstampUnit = 4) => {
     // tstampUnit tells us what note value = 1 tstamp
     // In 3/2 time: tstampUnit = 2 (half note = 1 tstamp)
     // In 4/4 time: tstampUnit = 4 (quarter note = 1 tstamp)
-
-    // Handle dotted notes
-    const withOneDot = tstamps / 1.5;
-    const withTwoDots = tstamps / 1.75;
-
     const validDurs = [1, 2, 4, 8, 16, 32, 64];
-
-    // Check if it matches a dotted duration
     for (const validDur of validDurs) {
       const plainDur = tstampUnit / validDur;
-      if (Math.abs(withOneDot - plainDur) < 0.01) {
-        return { dur: validDur, dots: 1 };
-      }
-      if (Math.abs(withTwoDots - plainDur) < 0.01) {
-        return { dur: validDur, dots: 2 };
-      }
+      if (Math.abs((tstamps / 1.5) - plainDur) < 0.01) return { dur: validDur, dots: 1 };
+      if (Math.abs((tstamps / 1.75) - plainDur) < 0.01) return { dur: validDur, dots: 2 };
     }
-
     // Otherwise find nearest plain duration
     const meiDur = tstampUnit / tstamps;
     let nearest = validDurs[0];
     let minDiff = Math.abs(meiDur - nearest);
-
     for (const validDur of validDurs) {
       const diff = Math.abs(meiDur - validDur);
       if (diff < minDiff) {
@@ -4474,18 +4593,15 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
         nearest = validDur;
       }
     }
-
     return { dur: nearest, dots: 0 };
   };
 
   const clipElement = (elem, currentTstamp, elemEnd, startTstamp, endTstamp, idMap, tstampUnit) => {
     const newElem = elem.cloneNode(true);
 
-    if (currentTstamp >= startTstamp && elemEnd <= endTstamp) {
-      // Fully inside range - no clipping needed
-      updateElementIds(newElem, idMap);
-    } else {
-      // Partial overlap - clip the duration
+    // Fully inside the range needs no clipping; a partial overlap is shortened to what of it
+    // falls inside
+    if (!(currentTstamp >= startTstamp && elemEnd <= endTstamp)) {
       let newDur;
       if (currentTstamp < startTstamp) {
         newDur = Math.min(elemEnd, endTstamp) - startTstamp;
@@ -4500,8 +4616,8 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       } else {
         newElem.removeAttribute('dots');
       }
-      updateElementIds(newElem, idMap);
     }
+    updateElementIds(newElem, idMap);
 
     return newElem;
   };
@@ -4545,7 +4661,7 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
           const oldId = container.getAttribute('xml:id');
           const newId = `${oldId}-intro`;
           idMap[oldId] = newId;
-          newContainer.setAttribute('xml:id', newId);
+          this._setMeiId(newContainer, newId);
         }
 
         if (container.matches('tuplet')) {
@@ -4617,73 +4733,37 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
     }
   };
 
-  const getMeasureDuration = (measure) => {
-    const staff = measure.querySelector('staff');
-    if (!staff) return 0;
-
-    const layer = staff.querySelector('layer');
-    if (!layer) return 0;
-
-    const tstampUnit = getTstampUnit(measure);
-
-    let totalDur = 0;
-    const traverse = (elem) => {
-      if (MUSICAL_ELEMENTS.includes(elem.tagName)) {
-        totalDur += calculateDuration(elem, tstampUnit);
-      } else if (elem.matches('beam, tuplet')) {
-        for (const child of elem.children) traverse(child);
-      }
-    };
-
-    for (const elem of layer.children) traverse(elem);
-    return totalDur;
-  };
-
-  const getExpectedMeasureDuration = (measure) => {
-    // Look for time signature in this measure or previous measures
-    let timeEl = measure.querySelector('meterSig');
-    if (!timeEl) {
-      const scoreDef = meiParsed.querySelector('scoreDef');
-      timeEl = scoreDef?.querySelector('meterSig');
-    }
-
-    if (timeEl) {
-      const count = Number.parseInt(timeEl.getAttribute('count') || '4');
-      const unit = Number.parseInt(timeEl.getAttribute('unit') || '4');
-      return (4 / unit) * count;
-    }
-
-    return 4; // Default to 4/4
-  };
-
-  const renumberAndAppendMeasures = (allExtractedMeasures, introSection, startN) => {
-    let n = startN;
-
-    for (let rangeIdx = 0; rangeIdx < allExtractedMeasures.length; rangeIdx++) {
-      const measures = allExtractedMeasures[rangeIdx];
-      for (let i = 0; i < measures.length; i++) {
-        const m = measures[i];
-        m.setAttribute('n', String(n++));
-
-        // If this is the last measure of a range and the next range starts with a partial measure
-        if (i === measures.length - 1 && rangeIdx < allExtractedMeasures.length - 1) {
-          const nextRangeMeasures = allExtractedMeasures[rangeIdx + 1];
-          const thisIsPartial = m.getAttribute('metcon') === 'false';
-          const nextIsPartial = nextRangeMeasures[0]?.getAttribute('metcon') === 'false';
-
-          if (thisIsPartial && nextIsPartial) {
-            m.setAttribute('right', 'invis');
-          }
+  // How long a measure is as written, in tstamps, so a full bar is `count` in any meter. Asked
+  // of the bar rather than one staff: the longest any staff runs, since a resting staff says
+  // nothing about its length, and a whole-measure rest fills whatever the meter asks for.
+  // `meter` is for callers tracking it across the document, which a meter change needs. Only
+  // for measures as the score wrote them: a clipped copy keeps its resting staff's mRest.
+  const getMeasureDuration = (measure, meter = null) => {
+    const [count, tstampUnit] = meter ?? getMeter(measure);
+    const tstampsIn = (container) => {
+      let tstamps = 0;
+      for (const element of container.children) {
+        if (MUSICAL_ELEMENTS.includes(element.tagName)) {
+          tstamps += calculateDuration(element, tstampUnit);
+        } else if (element.matches('beam, tuplet')) {
+          tstamps += tstampsIn(element);
         }
-
-        introSection.appendChild(m);
       }
+      return tstamps;
+    };
+    let longestTstamps = 0;
+    for (const staff of measure.querySelectorAll('staff')) {
+      const layer = staff.querySelector('layer');
+      if (!layer) continue;
+      if (layer.querySelector(':scope > mRest, :scope > mSpace')) return count;
+      longestTstamps = Math.max(longestTstamps, tstampsIn(layer));
     }
-
-    return n;
+    return longestTstamps;
   };
 
-  const extractRange = (measures, startM, startTstamp, endM, endTstamp, idMap) => {
+  // `start` and `end` are [measureNumber, tstamp] pairs, read literally against the measures
+  // of this document: `4b` names the far half of a split bar, and indexes it directly
+  const extractRange = (measures, [startM, startTstamp], [endM, endTstamp], idMap) => {
     startM = startM ?? measures[0].getAttribute('n');
     endM = endM ?? measures.at(-1).getAttribute('n');
 
@@ -4699,7 +4779,7 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       const mEnd = i === selected.length - 1 ? endTstamp : null;
 
       // Get tstamp unit for this measure
-      const tstampUnit = getTstampUnit(measure);
+      const tstampUnit = getMeter(measure)[1];
 
       // Copy measure attributes (first measure only)
       if (i === 0) {
@@ -4741,10 +4821,11 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
         }
       }
 
-      // Check if this is a partial measure
-      const actualDur = getMeasureDuration(newM);
-      const expectedDur = getExpectedMeasureDuration(newM);
-      if (Math.abs(actualDur - expectedDur) > 0.01) {
+      // Partial measures: the range clipped this one if it opens after the first beat or
+      // closes on or before the last, and one already short in the score stays short
+      if (measure.getAttribute('metcon') === 'false'
+        || (mStart != null && mStart > 1)
+        || (mEnd != null && mEnd <= getMeter(measure)[0])) {
         newM.setAttribute('metcon', 'false');
       }
 
@@ -4752,21 +4833,21 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
     });
   };
 
+  // The brackets say which measures to copy and which chord positions those copies stand for.
+  // Read from the brackets rather than from _scoreData.sections -- built from these same
+  // brackets -- so the section's chord positions cannot drift from the measures extracted.
   const introMeasureRanges = [];
-  const introChordPositionRanges = [];
+  const introChordPositions = [];
   for (const introBracket of this._getIntroBrackets(meiParsed)) {
     introMeasureRanges.push([
       [introBracket.start.measureNumber, introBracket.start.tstamp],
       [introBracket.end.measureNumber, introBracket.end.tstamp],
     ]);
-    introChordPositionRanges.push([introBracket.start.chordPosition, introBracket.end.chordPosition]);
+    for (let cp = introBracket.start.chordPosition; cp < introBracket.end.chordPosition; cp++) {
+      introChordPositions.push(cp);
+    }
   }
   for (const element of meiParsed.querySelectorAll('[ch-intro-bracket]')) element.remove();
-
-  const introChordPositions = [];
-  for (const introChordPositionRange of introChordPositionRanges) {
-    for (let cp = introChordPositionRange[0]; cp < introChordPositionRange[1]; cp++) introChordPositions.push(cp);
-  }
 
   if (meiParsed.querySelector('section[type="introduction"]') || introMeasureRanges.length === 0) return meiParsed;
 
@@ -4783,17 +4864,24 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
   introSection.setAttribute('ch-chord-position', introChordPositions.join(' '));
 
   const idMap = {};
-  let n = 1;
 
   // Extract and add all ranges to the section
   const allExtractedMeasures = [];
-  for (const [[startM, startTstamp], [endM, endTstamp]] of introMeasureRanges) {
-    const extractedMeasures = extractRange(originalMeasures, startM, startTstamp, endM, endTstamp, idMap);
-    allExtractedMeasures.push(extractedMeasures);
+  for (const [start, end] of introMeasureRanges) {
+    allExtractedMeasures.push(extractRange(originalMeasures, start, end, idMap));
   }
 
-  // Renumber and add measures, setting invisible barlines between consecutive partial measures
-  n = renumberAndAppendMeasures(allExtractedMeasures, introSection, n);
+  // Add measures. Where one range ends part-way through a bar and the next picks it up, the
+  // barline between them is hidden. Numbering waits until the document is whole, below.
+  for (const [rangeIndex, measures] of allExtractedMeasures.entries()) {
+    const lastMeasure = measures.at(-1);
+    const nextRangeMeasure = allExtractedMeasures[rangeIndex + 1]?.[0];
+    if (lastMeasure?.getAttribute('metcon') === 'false'
+      && nextRangeMeasure?.getAttribute('metcon') === 'false') {
+      lastMeasure.setAttribute('right', 'invis');
+    }
+    for (const measure of measures) introSection.appendChild(measure);
+  }
 
   // Insert section after scoreDef
   const score = meiParsed.querySelector('score');
@@ -4848,10 +4936,10 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
     }
   }
 
-  // Renumber remaining measures
-  originalMeasures.forEach(m => {
-    m.setAttribute('n', n++);
-  });
+  // Number the whole document -- the introduction and the song it runs into -- the way the
+  // score data counts measures, so @n reads the same whether or not the score is expanded
+  this._renumberMeasures(meiParsed, (measure, timeSignature) =>
+    getMeasureDuration(measure, timeSignature) * (4 / timeSignature[1]));
 
   return meiParsed;
 }
@@ -4966,6 +5054,31 @@ ChScore.prototype._defaultOptions = {
   drawForegroundShapes: [],   // Array of shape class names
   customEvents: ['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw', 'ch:pagechange'], // array of custom event types
 }
+
+// Header text for each row of labels drawn below the system, in the order the rows stack from
+// top to bottom
+ChScore.prototype._belowSystemLabelHeaders = {
+  'ch-measure-label': 'M:',
+  'ch-beat-label': 'B:',
+  'ch-chord-position-label': 'CP:',
+};
+
+// Geometry of those rows, in SVG units: the first row's baseline below the system, the gap to
+// each row after it, how far a rect has to reach past the last baseline to clear its
+// descenders, and the right edge of the headers -- far enough right of the system start for
+// the longest of them ("CP:") to sit clear of the staff.
+ChScore.prototype._belowSystemLabelFirstRow = 800;
+ChScore.prototype._belowSystemLabelRowHeight = 450;
+ChScore.prototype._belowSystemLabelDescender = 200;
+ChScore.prototype._belowSystemLabelHeaderOffset = 700;
+
+// Font size for every label drawn below the system, and for the staff labels beside it
+ChScore.prototype._labelFontSize = 350;
+
+// Verovio counts spacingSystem and pageMarginBottom in its own units, which the SVG scales
+// differently, so the same row height is a different number of each
+ChScore.prototype._verovioSpacingUnit = 90;
+ChScore.prototype._verovioMarginUnit = 25;
 
 ChScore.prototype._keySignatures = {
   major: {
@@ -11115,9 +11228,17 @@ ChScore.prototype._parseTemplatePosition = function (text, { qstamps = null, spa
     const chordPosition = Number.parseInt(trimmed);
     return Number.isInteger(chordPosition) ? chordPosition : null;
   }
-  const [measureNumber, beat] = trimmed.split('@');
+  const [measureNumber, beat] = this._splitMeasureBeat(trimmed);
   return this._measureBeatToChordPosition(
-    measureNumber, Number.parseFloat(beat), { qstamps: qstamps, spans: spans });
+    measureNumber, beat, { qstamps: qstamps, spans: spans });
+}
+
+// A `<measureNumber>@<beat>` position split into its two halves, with the measure number left
+// as written: `4b` names the far half of a split bar. _parseTemplatePosition then resolves the
+// pair against the score, folding a split bar back into the bar it continues.
+ChScore.prototype._splitMeasureBeat = function (text) {
+  const [measureNumber, beat] = String(text ?? '').trim().split('@');
+  return [measureNumber || null, Number.parseFloat(beat)];
 }
 
 // The same position written back out. A position with no measure behind it falls back to its

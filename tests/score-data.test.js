@@ -69,6 +69,56 @@ describe('scoreData — structural invariants', () => {
       }
     });
 
+    it('should write the normalized measure numbers onto measure@n', () => {
+      const numbers = score._scoreData.measures.map(measure => measure.measureNumber);
+      // A continuation ("7b") is where the engraved @n and the counted one part company
+      expect(numbers.some(number => /[a-z]$/.test(number))).toBe(true);
+      for (const document of [score._scoreData.meiParsed, score._scoreData.meiParsedComplete]) {
+        expect(Array.from(document.querySelectorAll('measure'))
+          .map(measure => measure.getAttribute('n'))).toEqual(numbers);
+      }
+      // And on the serialized copy later documents are rebuilt from
+      expect(Array.from(new DOMParser()
+        .parseFromString(score._scoreData.meiStringComplete, 'text/xml')
+        .querySelectorAll('measure')).map(measure => measure.getAttribute('n'))).toEqual(numbers);
+    });
+
+    it('should keep measure@n on the numbers when the MEI is rebuilt', () => {
+      const numbers = score._scoreData.measures.map(measure => measure.measureNumber);
+      score._updateMei();
+      expect(Array.from(score._scoreData.meiParsed.querySelectorAll('measure'))
+        .map(measure => measure.getAttribute('n'))).toEqual(numbers);
+    });
+
+    it('should number an expanded score by the same rule', () => {
+      const numbersIn = (document) => Array.from(document.querySelectorAll('measure'))
+        .map(measure => measure.getAttribute('n'));
+      const unexpanded = numbersIn(score._scoreData.meiParsed);
+      score.setOptions({ expandScore: 'intro' });
+      const expanded = numbersIn(score._scoreData.meiParsed);
+      try {
+        // The introduction is measures of the song played ahead of it, so the document has
+        // more measures than the score does -- numbered by the same rule, not 1..N
+        expect(expanded.length).toBeGreaterThan(unexpanded.length);
+        expect(expanded[0]).toBe('0'); // The pickup stays the pickup
+        expect(expanded.filter(number => /[a-z]$/.test(number)).length).toBeGreaterThan(0);
+        // 0 for the pickup, then 1, 2, 3 ... with nothing skipped or repeated
+        const bars = expanded.filter(number => !/[a-z]$/.test(number)).map(Number);
+        expect(bars).toEqual(bars.map((_, index) => index));
+        // A continuation continues the bar before it
+        expanded.forEach((number, index) => {
+          const letter = number.match(/[a-z]+$/)?.[0];
+          if (letter) expect(expanded[index - 1]).toBe(letter === 'b'
+            ? number.slice(0, -1)
+            : number.slice(0, -1) + String.fromCharCode(letter.charCodeAt(0) - 1));
+        });
+      } finally {
+        score.setOptions({ expandScore: false });
+      }
+      // And numbering the song on its own is unchanged by having been expanded
+      expect(numbersIn(score._scoreData.meiParsed)).toEqual(unexpanded);
+    });
+
     it('exactly one measure should be first and one last', () => {
       const firsts = score._scoreData.measures.filter(m => m.isFirstMeasure);
       const lasts = score._scoreData.measures.filter(m => m.isLastMeasure);

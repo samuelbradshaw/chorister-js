@@ -2832,6 +2832,10 @@ describe('_extractPianoIntroduction', () => {
       _getInlineVerseNumbers: () => verseNumbers,
       _getIntroBrackets: ChScore.prototype._getIntroBrackets,
       _createMeiElement: ChScore.prototype._createMeiElement,
+      _renumberMeasures: ChScore.prototype._renumberMeasures,
+      _setMeiId: ChScore.prototype._setMeiId,
+      _measureNumbersFor: ChScore.prototype._measureNumbersFor,
+      _measureType: ChScore.prototype._measureType,
     };
     return ChScore.prototype._extractPianoIntroduction.call(ctx, meiParsed);
   }
@@ -2928,12 +2932,12 @@ describe('_extractPianoIntroduction', () => {
       }
     });
 
-    it('intro measures should be renumbered starting from 1', () => {
-      const intro = mei.querySelector('section[type="introduction"]');
-      const measures = Array.from(intro.querySelectorAll('measure'));
-      for (let i = 0; i < measures.length; i++) {
-        expect(measures[i].getAttribute('n')).toBe(String(i + 1));
-      }
+    it('should renumber every measure the way the score data counts them', () => {
+      // Full measures throughout and no pickup, so the count opens at 1 and runs straight
+      // through the introduction into the song
+      const measures = Array.from(mei.querySelectorAll('measure'));
+      expect(measures.map(measure => measure.getAttribute('n')))
+        .toEqual(measures.map((_, index) => String(index + 1)));
     });
 
     it('original measures should be renumbered after intro measures', () => {
@@ -3083,6 +3087,58 @@ describe('_extractPianoIntroduction', () => {
     const notes = intro.querySelectorAll('note');
     // Should have the notes from beats 3 and 4
     expect(notes.length).toBe(2);
+  });
+
+  // ── Partial measures ──
+  it('should mark only the clipped measures of a range as partial', () => {
+    // A bracket running from beat 3 of measure 1 to beat 3 of measure 3: both ends are
+    // clipped, and measure 2 between them is played whole
+    const fullMeasure = (n, prefix, brackets) => ({
+      n: n,
+      notes: [{ dur: 4, id: `${prefix}1` }, { dur: 4, id: `${prefix}2` },
+        { dur: 4, id: `${prefix}3` }, { dur: 4, id: `${prefix}4` }],
+      ...(brackets ? { brackets: brackets } : {}),
+    });
+    const mei = buildMEI({
+      measures: [
+        fullMeasure('1', 'a', [{ type: 'start', tstamp: 3, cp: 2 }]),
+        fullMeasure('2', 'b'),
+        fullMeasure('3', 'c', [{ type: 'end', tstamp: 3, cp: 10 }]),
+      ],
+    });
+    callExtract(mei);
+    const introMeasures = Array.from(
+      mei.querySelector('section[type="introduction"]').querySelectorAll('measure'));
+    expect(introMeasures.length).toBe(3);
+    expect(introMeasures.map(measure => measure.getAttribute('metcon')))
+      .toEqual(['false', null, 'false']);
+  });
+
+  it('should not mark a whole measure partial because one staff rests through it', () => {
+    // The upper staff rests through the bar and the one below plays it out; the resting
+    // staff comes first, and says nothing about how long the bar is
+    const mei = buildMEI({
+      measures: [
+        { n: '1', notes: [{ dur: 4, id: 'a1' }, { dur: 4, id: 'a2' }, { dur: 4, id: 'a3' }, { dur: 4, id: 'a4' }],
+          brackets: [{ type: 'start', tstamp: 1, cp: 0 }, { type: 'end', tstamp: 5, cp: 4 }] },
+      ],
+    });
+    const layer = mei.querySelector('measure staff layer');
+    const playingStaff = layer.closest('staff');
+    const restingStaff = playingStaff.cloneNode(false);
+    playingStaff.setAttribute('n', '2');
+    restingStaff.setAttribute('n', '1');
+    const restingLayer = mei.createElementNS(layer.namespaceURI, 'layer');
+    restingLayer.setAttribute('n', '1');
+    restingLayer.appendChild(mei.createElementNS(layer.namespaceURI, 'mRest'));
+    restingStaff.appendChild(restingLayer);
+    playingStaff.parentNode.insertBefore(restingStaff, playingStaff);
+
+    callExtract(mei);
+    const introMeasures = Array.from(
+      mei.querySelector('section[type="introduction"]').querySelectorAll('measure'));
+    expect(introMeasures.length).toBe(1);
+    expect(introMeasures[0].getAttribute('metcon')).toBe(null);
   });
 
   // ── Multiple bracket ranges ──

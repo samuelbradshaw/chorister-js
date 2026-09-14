@@ -711,7 +711,9 @@ Additionally, the score container has a `style` attribute with the CSS [custom p
 
 #### Background and foreground shapes
 
-Chorister.js supports adding labels and shapes to the foreground or background in the SVG output, using the `drawBackgroundShapes` and `drawForegroundShapes` options. These can be used for hover effects, highlighting what’s currently playing, or labeling parts of the score. They are identified by their class names: `ch-staff-label`, `ch-chord-position-label`, `ch-lyric-line-label`, `ch-system-rect`, `ch-measure-rect`, `ch-staff-rect`, `ch-chord-position-line`, `ch-chord-position-rect`, `ch-note-circle`, `ch-lyric-rect`.
+Chorister.js supports adding labels and shapes to the foreground or background in the SVG output, using the `drawBackgroundShapes` and `drawForegroundShapes` options. These can be used for hover effects, highlighting what’s currently playing, or labeling parts of the score. They are identified by their class names: `ch-staff-label`, `ch-measure-label`, `ch-beat-label`, `ch-chord-position-label`, `ch-lyric-line-label`, `ch-system-rect`, `ch-measure-rect`, `ch-staff-rect`, `ch-chord-position-line`, `ch-chord-position-rect`, `ch-note-circle`, `ch-lyric-rect`.
+
+`ch-measure-label`, `ch-beat-label`, and `ch-chord-position-label` are drawn below the system, stacking in that order when more than one of them is shown. Each row also gets a header at the start of every system (`M:`, `B:`, `CP:`), drawn in the blank space under the clef and time signature, carrying its row's class name plus `ch-row-header` — so a row's header appears and disappears with the row. To select only the labels themselves, exclude the headers: `.ch-chord-position-label:not(.ch-row-header)`.
 
 ## <a name="license"></a>License
 
