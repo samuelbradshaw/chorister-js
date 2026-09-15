@@ -58,8 +58,10 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
       expect(score._scoreData.staffNumbers).toEqual([1, 2]);
     });
 
-    it('should have 16 measures', () => {
-      expect(score._scoreData.measures.length).toBe(16);
+    it('should have 15 measures, written in 16 sub-measures', () => {
+      // One measure is engraved in two <measure> elements
+      expect(score._scoreData.measures.length).toBe(15);
+      expect(Object.keys(score._scoreData.subMeasuresById).length).toBe(16);
     });
 
     it('should be in A♭ major (4 flats)', () => {
@@ -103,7 +105,6 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
 
     it('last measure should have end barline', () => {
       const lastMeasure = score._scoreData.measures[score._scoreData.measures.length - 1];
-      expect(lastMeasure.isLastMeasure).toBe(true);
       expect(lastMeasure.rightBarLine).toBe('end');
     });
 
@@ -201,7 +202,7 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
     });
 
     it('last measure should be a partial-pickdown', () => {
-      const m = score._scoreData.measures[15];
+      const m = score._scoreData.measures.at(-1);
       expect(m.measureType).toBe('partial-pickdown');
       expect(m.durationQ).toBe(2);
       expect(m.rightBarLine).toBe('end');
@@ -209,12 +210,12 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
 
     it('pickup + pickdown durations should equal one full measure (3 beats)', () => {
       const pickup = score._scoreData.measures[0].durationQ;
-      const pickdown = score._scoreData.measures[15].durationQ;
+      const pickdown = score._scoreData.measures.at(-1).durationQ;
       expect(pickup + pickdown).toBe(3);
     });
 
     it('most middle measures should be full measures in 3/4', () => {
-      const fullMeasures = score._scoreData.measures.slice(1, 15).filter(
+      const fullMeasures = score._scoreData.measures.slice(1, -1).filter(
         m => m.measureType === 'full'
       );
       // Some measures may be partial-start/partial-end due to invisible barlines

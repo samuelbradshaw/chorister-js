@@ -905,39 +905,34 @@ describe('_updateSvg() — SVG post-processing', () => {
     }
   });
 
-  it('should draw a measure label for every measure, including partial measures', () => {
+  it('should draw one measure label per measure, where the measure opens', () => {
     score.setOptions({
       drawForegroundShapes: ['ch-measure-label'],
     });
     const svg = score._container.querySelector('svg');
     const labels = svg.querySelectorAll('.ch-shapes-foreground .ch-measure-label:not(.ch-row-header)');
-    expect(labels.length).toBe(score._scoreData.measures.length);
+    // A measure written in more than one sub-measure is labelled once, on the one that opens
+    // it -- so there are fewer labels than <measure> elements, and no number appears twice
+    const measures = score._scoreData.measures;
+    expect(measures.length).toBeLessThan(Object.keys(score._scoreData.subMeasuresById).length);
+    expect(labels.length).toBe(measures.length);
     const measureNumbers = Array.from(labels).map(label => label.getAttribute('data-ch-measure-number'));
-    expect(measureNumbers).toEqual(score._scoreData.measures.map(measure => measure.measureNumber));
+    expect(measureNumbers).toEqual(measures.map(measure => measure.measureNumber));
+    expect(new Set(measureNumbers).size).toBe(measureNumbers.length);
   });
 
-  it('should set measure numbers bold, but bracket continuations of a split bar in plain text', () => {
+  it('should set every measure label bold and plain', () => {
     score.setOptions({
       drawForegroundShapes: ['ch-measure-label'],
     });
     const svg = score._container.querySelector('svg');
     const labels = Array.from(
       svg.querySelectorAll('.ch-shapes-foreground .ch-measure-label:not(.ch-row-header)'));
-    const isContinuation = (label) => /[a-z]$/.test(label.getAttribute('data-ch-measure-number'));
-    // The fixture carries both kinds (it splits bar 7), so neither branch goes unchecked
-    expect(labels.filter(isContinuation).length).toBeGreaterThan(0);
-    expect(labels.filter(label => !isContinuation(label)).length).toBeGreaterThan(0);
+    expect(labels.length).toBeGreaterThan(0);
     for (const label of labels) {
-      const measureNumber = label.getAttribute('data-ch-measure-number');
-      if (isContinuation(label)) {
-        expect(label.textContent.trim()).toBe(`(${measureNumber})`);
-        expect(label.getAttribute('font-weight')).toBe(null);
-        expect(label.getAttribute('font-style')).toBe(null);
-      } else {
-        expect(label.textContent.trim()).toBe(measureNumber);
-        expect(label.getAttribute('font-weight')).toBe('bold');
-        expect(label.getAttribute('font-style')).toBe(null);
-      }
+      expect(label.textContent.trim()).toBe(label.getAttribute('data-ch-measure-number'));
+      expect(label.getAttribute('font-weight')).toBe('bold');
+      expect(label.getAttribute('font-style')).toBe(null);
     }
   });
 
@@ -950,7 +945,8 @@ describe('_updateSvg() — SVG post-processing', () => {
     expect(svg.querySelectorAll('.measure').length)
       .toBeGreaterThan(score._scoreData.measures.length);
     expect(labels.length).toBeGreaterThan(score._scoreData.measures.length);
-    const numbers = new Set(score._scoreData.measures.map(measure => measure.measureNumber));
+    const numbers = new Set(score._scoreData.measures.map(measure =>
+      measure.measureNumber));
     for (const label of labels) {
       expect(numbers).toContain(label.getAttribute('data-ch-measure-number'));
     }
@@ -986,16 +982,16 @@ describe('_updateSvg() — SVG post-processing', () => {
       drawForegroundShapes: ['ch-measure-label', 'ch-chord-position-label'],
     });
     const svg = score._container.querySelector('svg');
-    const measureIdOf = (label) => label.getAttribute('data-related').split(' ')[1];
-    const firstCpXByMeasureId = {};
+    const subMeasureIdOf = (label) => label.getAttribute('data-related').split(' ')[1];
+    const firstCpXBySubMeasureId = {};
     for (const cpLabel of svg.querySelectorAll('.ch-chord-position-label:not(.ch-row-header)')) {
-      const measureId = measureIdOf(cpLabel);
-      if (!(measureId in firstCpXByMeasureId)) firstCpXByMeasureId[measureId] = cpLabel.getAttribute('x');
+      const subMeasureId = subMeasureIdOf(cpLabel);
+      if (!(subMeasureId in firstCpXBySubMeasureId)) firstCpXBySubMeasureId[subMeasureId] = cpLabel.getAttribute('x');
     }
     const measureLabels = svg.querySelectorAll('.ch-measure-label:not(.ch-row-header)');
     expect(measureLabels.length).toBeGreaterThan(0);
     for (const measureLabel of measureLabels) {
-      expect(measureLabel.getAttribute('x')).toBe(firstCpXByMeasureId[measureIdOf(measureLabel)]);
+      expect(measureLabel.getAttribute('x')).toBe(firstCpXBySubMeasureId[subMeasureIdOf(measureLabel)]);
     }
   });
 

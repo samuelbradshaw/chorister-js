@@ -8,8 +8,8 @@
  * - template -> object: hand the derived template back in and the objects rebuild identically
  *
  * Each is also rebuilt from the measure+beat form of its own template, since the two forms
- * have to name the same places -- a beat runs on through a bar written in two pieces, which
- * the split bars in HGW and IIW exercise.
+ * have to name the same places -- a beat runs on through a measure written in more than one
+ * sub-measure, which the split measures in HGW and IIW exercise.
  *
  * Covers three shapes: SATB on two staves (HGW), melody over accompaniment with a pre-built
  * parts and sections set (IIW), and melody with chords (TLL).
@@ -98,11 +98,13 @@ describe('parts and sections round-trip through their templates', { timeout: 600
           numChordPositions: score._scoreData.numChordPositions,
           partsTemplateMeasureBeat: score._scoreData.templates.partsTemplateMb,
           sectionsTemplateMeasureBeat: score._scoreData.templates.sectionsTemplateMb,
-          splitBars: [...score._measureRuns().byNumber]
-            .filter(([, pieces]) => pieces.length > 1)
-            .map(([barNumber, pieces]) => ({
-              barNumber: barNumber,
-              beatsInFirstPiece: pieces[0].durationQ / (4 / pieces[0].timeSignature[1]),
+          splitMeasures: score._scoreData.measures
+            .filter(measure => measure.subMeasureIds.length > 1)
+            .map(measure => ({
+              measureNumber: measure.measureNumber,
+              beatsInFirstSubMeasure:
+                score._scoreData.subMeasuresById[measure.subMeasureIds[0]].durationQ
+                  / (4 / measure.timeSignature[1]),
             })),
         };
         rebuiltFromPartsTemplate = await load(content, { partsTemplate: derived.partsTemplate });
@@ -231,23 +233,24 @@ describe('parts and sections round-trip through their templates', { timeout: 600
         expect(range.end).toBe(score._scoreData.numChordPositions);
       });
 
-      it('should write measure numbers without a split bar\'s letter', () => {
-        // A bar written in two pieces is still one bar, so `14b@2` is written `14@4` and
-        // nothing a caller stores has to know the engraving split it
+      it('should write measure numbers without a sub-measure letter', () => {
+        // A measure written in more than one sub-measure is still one measure, so it is
+        // written `14@4` and nothing a caller stores has to know the engraving split it
         expect(derived.partsTemplateMeasureBeat + derived.sectionsTemplateMeasureBeat
           + (derived.lyricLinesTemplate ?? '')).not.toMatch(/\d[a-z]@/);
       });
 
-      it('should carry a beat past the end of a split bar into its continuation', async () => {
-        if (derived.splitBars.length === 0) return;
+      it('should carry a beat past the end of a sub-measure into the next', async () => {
+        if (derived.splitMeasures.length === 0) return;
         const score = await load(content);
-        for (const { barNumber, beatsInFirstPiece } of derived.splitBars) {
-          // The first beat of the far half, addressed both ways
-          const carried = score._measureBeatToChordPosition(barNumber, beatsInFirstPiece + 1);
-          const written = score._measureBeatToChordPosition(`${barNumber}b`, 1);
-          expect(carried).toBe(written);
-          // ...and it really is past the first piece, not clamped back into it
-          expect(carried).toBeGreaterThan(score._measureBeatToChordPosition(barNumber, 1));
+        for (const { measureNumber, beatsInFirstSubMeasure } of derived.splitMeasures) {
+          // A measure written in more than one sub-measure is addressed only by the measure's
+          // own number: the beat counts from its start and runs on into the next sub-measure
+          const carried = score._measureBeatToChordPosition(
+            measureNumber, beatsInFirstSubMeasure + 1);
+          expect(carried).toBeGreaterThan(score._measureBeatToChordPosition(measureNumber, 1));
+          // A sub-measure has no spelling of its own, so a lettered number addresses nothing
+          expect(score._measureBeatToChordPosition(`${measureNumber}b`, 1)).toBeNull();
         }
       });
 

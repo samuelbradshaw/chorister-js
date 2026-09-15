@@ -29,7 +29,7 @@ function layerWith(startQ, ...items) {
   const doc = new DOMParser().parseFromString(
     '<measure xml:id="m1"><staff><layer/></staff></measure>', 'text/xml');
   const layer = doc.querySelector('layer');
-  score._scoreData = { measuresById: { m1: { startQ: startQ } } };
+  score._scoreData = { subMeasuresById: { m1: { startQ: startQ } } };
   let target = null;
   for (const item of items) {
     const isSpace = String(item).startsWith('s');

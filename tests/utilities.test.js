@@ -920,8 +920,8 @@ describe('_normalizeChordSets()', () => {
   function buildMEI(harms) {
     let xml = '<mei xmlns="http://www.music-encoding.org/ns/mei"><music><body><mdiv><score><section>';
     for (const harm of harms) {
-      const measureId = harm.measureId || 'measure-1';
-      xml += `<measure xml:id="${measureId}">`;
+      const subMeasureId = harm.subMeasureId || 'measure-1';
+      xml += `<measure xml:id="${subMeasureId}">`;
       const cpAttr = harm.cp != null ? ` ch-chord-position="${harm.cp}"` : '';
       const tstamp = harm.tstamp != null ? ` tstamp="${harm.tstamp}"` : '';
       xml += `<harm${cpAttr}${tstamp}>${harm.text}</harm>`;
@@ -975,8 +975,8 @@ describe('_normalizeChordSets()', () => {
   // ── chordInfoList ──
   it('should populate chordInfoList with one entry per <harm> element', () => {
     const sd = callNormalize(buildMEI([
-      { text: 'C', cp: 0, tstamp: '1', measureId: 'm1' },
-      { text: 'G', cp: 1, tstamp: '3', measureId: 'm1' },
+      { text: 'C', cp: 0, tstamp: '1', subMeasureId: 'm1' },
+      { text: 'G', cp: 1, tstamp: '3', subMeasureId: 'm1' },
     ]));
     expect(sd.chordSets[0].chordInfoList.length).toBe(2);
   });
@@ -989,9 +989,9 @@ describe('_normalizeChordSets()', () => {
     expect(info.svgSymbolId).toBeNull();
   });
 
-  it('chordInfo should include measureId from closest <measure>', () => {
-    const sd = callNormalize(buildMEI([{ text: 'D', cp: 0, tstamp: '1', measureId: 'meas-42' }]));
-    expect(sd.chordSets[0].chordInfoList[0].measureId).toBe('meas-42');
+  it('chordInfo should include subMeasureId from closest <measure>', () => {
+    const sd = callNormalize(buildMEI([{ text: 'D', cp: 0, tstamp: '1', subMeasureId: 'meas-42' }]));
+    expect(sd.chordSets[0].chordInfoList[0].subMeasureId).toBe('meas-42');
   });
 
   it('chordInfo should include tstamp attribute', () => {
@@ -2748,11 +2748,27 @@ describe('_mergePickupStanzas()', () => {
   beforeAll(() => {
     document.body.innerHTML = '<div id="score-container"></div>';
     score = new ChScore('#score-container');
-    // Ten chord positions to a measure, so a fragment inside one measure and one
-    // spanning several are both spelled by choosing chord positions.
+    // Ten chord positions to a sub-measure, so a fragment inside one measure and one spanning
+    // several are both spelled by choosing chord positions. One measure -- the one m15 opens
+    // -- is written in two sub-measures, m15 and m16, so a fragment crossing that seam is
+    // still inside one measure.
+    const subMeasureCount = 30;
+    const splitAt = 15;
+    const measureOf = (index) => (index <= splitAt ? index : index - 1);
     score._scoreData = {
       staffNumbers: [1, 2],
-      chordPositions: Array.from({ length: 300 }, (_, cp) => ({ measureId: `m${Math.floor(cp / 10)}` })),
+      chordPositions: Array.from({ length: 300 },
+        (_, cp) => ({ measureIndex: measureOf(Math.floor(cp / 10)) })),
+      subMeasuresById: Object.fromEntries(Array.from({ length: subMeasureCount }, (_, index) => [
+        `m${index}`,
+        { subMeasureId: `m${index}`, measureIndex: measureOf(index),
+          subMeasureIndex: index === splitAt + 1 ? 1 : 0 },
+      ])),
+      measures: Array.from({ length: subMeasureCount - 1 }, (_, index) => ({
+        measureNumber: String(index + 1),
+        subMeasureIds: index === splitAt
+          ? [`m${splitAt}`, `m${splitAt + 1}`] : [`m${index <= splitAt ? index : index + 1}`],
+      })),
     };
   });
 
@@ -2836,6 +2852,19 @@ describe('_mergePickupStanzas()', () => {
 
     expect(merged.length).toBe(1);
     expect(merged[0].lyricsAnnotated).toBe('I’m trying to love my neighbor;');
+  });
+
+  it('should merge a pickup that crosses a seam inside one measure', () => {
+    // The fragment runs from m15 into m16, which are one measure written in two. It is still
+    // an anacrusis -- how the engraving split the measure must not hide that.
+    const pickup = stanza('1.2', null, 'I’m', 158, { end: 162, ecpEnd: 162 });
+    const verse2 = stanza('1.2', null, 'trying to love my neighbor;', 23,
+      { end: 103, ecp: 162, ecpEnd: 232 });
+
+    expect(score._measureOf('m15')).toBe(score._measureOf('m16'));
+    expect(score._scoreData.chordPositions[158].measureIndex)
+      .toBe(score._scoreData.chordPositions[161].measureIndex);
+    expect(score._mergePickupStanzas([pickup, verse2]).length).toBe(1);
   });
 
   it('should leave an unlabelled fragment that spans more than one measure', () => {

@@ -1825,7 +1825,8 @@ describe('_getPointData()', () => {
   it('should return an object with expected point data properties', () => {
     const pointData = score._getPointData(0, 0);
     expect(pointData).toHaveProperty('systemId');
-    expect(pointData).toHaveProperty('measureId');
+    expect(pointData).toHaveProperty('subMeasureId');
+    expect(pointData).toHaveProperty('measureNumber');
     expect(pointData).toHaveProperty('noteIds');
     expect(pointData).toHaveProperty('partIds');
     expect(pointData).toHaveProperty('lyricId');
@@ -1839,7 +1840,7 @@ describe('_getPointData()', () => {
   it('should return null values when click is outside SVG', () => {
     const pointData = score._getPointData(-100, -100);
     expect(pointData.systemId).toBeNull();
-    expect(pointData.measureId).toBeNull();
+    expect(pointData.subMeasureId).toBeNull();
     expect(pointData.chordPosition).toBeNull();
   });
 
@@ -1935,7 +1936,8 @@ describe('ch:hover — detail properties', () => {
 
     expect(detail).toHaveProperty('pointData');
     expect(detail.pointData).toHaveProperty('systemId');
-    expect(detail.pointData).toHaveProperty('measureId');
+    expect(detail.pointData).toHaveProperty('subMeasureId');
+    expect(detail.pointData).toHaveProperty('measureNumber');
     expect(detail.pointData).toHaveProperty('noteIds');
     expect(detail.pointData).toHaveProperty('partIds');
     expect(detail.pointData).toHaveProperty('lyricId');
@@ -1966,7 +1968,8 @@ describe('ch:hover — detail properties', () => {
 
     expect(detail).toHaveProperty('pointData');
     expect(detail.pointData).toHaveProperty('systemId');
-    expect(detail.pointData).toHaveProperty('measureId');
+    expect(detail.pointData).toHaveProperty('subMeasureId');
+    expect(detail.pointData).toHaveProperty('measureNumber');
     expect(detail.pointData).toHaveProperty('noteIds');
     expect(detail.pointData).toHaveProperty('partIds');
     expect(detail.pointData).toHaveProperty('lyricId');
@@ -2834,8 +2837,9 @@ describe('_extractPianoIntroduction', () => {
       _createMeiElement: ChScore.prototype._createMeiElement,
       _renumberMeasures: ChScore.prototype._renumberMeasures,
       _setMeiId: ChScore.prototype._setMeiId,
-      _measureNumbersFor: ChScore.prototype._measureNumbersFor,
-      _measureType: ChScore.prototype._measureType,
+      _measuresFrom: ChScore.prototype._measuresFrom,
+      _continuesMeasure: ChScore.prototype._continuesMeasure,
+      _measureTypeOf: ChScore.prototype._measureTypeOf,
     };
     return ChScore.prototype._extractPianoIntroduction.call(ctx, meiParsed);
   }

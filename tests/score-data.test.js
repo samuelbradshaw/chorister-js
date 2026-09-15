@@ -37,28 +37,35 @@ describe('scoreData — structural invariants', () => {
 
   // ── measures ──
   describe('scoreData.measures', () => {
-    it('measuresById should match measures length', () => {
-      expect(Object.keys(score._scoreData.measuresById).length).toBe(
-        score._scoreData.measures.length
-      );
+    it('should have one sub-measure per <measure>, and fewer measures than that', () => {
+      const subMeasureIds = Object.keys(score._scoreData.subMeasuresById);
+      expect(subMeasureIds.length).toBe(
+        score._scoreData.meiParsed.querySelectorAll('measure').length);
+      // This fixture writes one measure in two sub-measures
+      expect(score._scoreData.measures.length).toBeLessThan(subMeasureIds.length);
+      // And every sub-measure belongs to exactly one measure
+      expect(score._scoreData.measures.flatMap(measure => measure.subMeasureIds))
+        .toEqual(subMeasureIds);
     });
 
     it('each measure should have all expected properties', () => {
       const expectedKeys = [
-        'durationQ', 'endQ', 'firstChordPosition', 'isFirstMeasure',
-        'isLastMeasure', 'measureId', 'measureType', 'rightBarLine',
-        'startQ', 'timeSignature',
+        'durationQ', 'endQ', 'firstChordPosition', 'measureNumber', 'measureType',
+        'rightBarLine', 'startQ', 'timeSignature', 'subMeasureIds',
       ];
       for (const m of score._scoreData.measures) {
-        for (const key of expectedKeys) {
-          expect(m).toHaveProperty(key);
-        }
+        for (const key of expectedKeys) expect(m).toHaveProperty(key);
       }
     });
 
-    it('measuresById should map every measureId correctly', () => {
-      for (const m of score._scoreData.measures) {
-        expect(score._scoreData.measuresById[m.measureId]).toBe(m);
+    it('each sub-measure should point back at the measure it belongs to', () => {
+      for (const subMeasure of Object.values(score._scoreData.subMeasuresById)) {
+        expect(score._scoreData.subMeasuresById[subMeasure.subMeasureId]).toBe(subMeasure);
+        const measure = score._scoreData.measures[subMeasure.measureIndex];
+        expect(measure.subMeasureIds[subMeasure.subMeasureIndex]).toBe(subMeasure.subMeasureId);
+        // A measure spans the sub-measures it is written in
+        expect(subMeasure.startQ).toBeGreaterThanOrEqual(measure.startQ);
+        expect(subMeasure.endQ).toBeLessThanOrEqual(measure.endQ);
       }
     });
 
@@ -70,9 +77,14 @@ describe('scoreData — structural invariants', () => {
     });
 
     it('should write the normalized measure numbers onto measure@n', () => {
-      const numbers = score._scoreData.measures.map(measure => measure.measureNumber);
-      // A continuation ("7b") is where the engraved @n and the counted one part company
-      expect(numbers.some(number => /[a-z]$/.test(number))).toBe(true);
+      // @n carries the measure's own number. A measure written in more than one sub-measure
+      // repeats it, since the number belongs to the measure rather than to the element.
+      // Every <measure> carries the number of the measure it is written in, so a measure
+      // written in two sub-measures puts its number on both
+      const numbers = Object.values(score._scoreData.subMeasuresById).map(subMeasure =>
+        score._scoreData.measures[subMeasure.measureIndex].measureNumber);
+      expect(Object.values(score._scoreData.subMeasuresById).some(sub => sub.subMeasureIndex > 0)).toBe(true);
+      expect(new Set(numbers).size).toBeLessThan(numbers.length);
       for (const document of [score._scoreData.meiParsed, score._scoreData.meiParsedComplete]) {
         expect(Array.from(document.querySelectorAll('measure'))
           .map(measure => measure.getAttribute('n'))).toEqual(numbers);
@@ -84,7 +96,10 @@ describe('scoreData — structural invariants', () => {
     });
 
     it('should keep measure@n on the numbers when the MEI is rebuilt', () => {
-      const numbers = score._scoreData.measures.map(measure => measure.measureNumber);
+      // @n carries the measure's own number. A measure written in more than one sub-measure
+      // repeats it, since the number belongs to the measure rather than to the element.
+      const numbers = Object.values(score._scoreData.subMeasuresById).map(subMeasure =>
+        score._scoreData.measures[subMeasure.measureIndex].measureNumber);
       score._updateMei();
       expect(Array.from(score._scoreData.meiParsed.querySelectorAll('measure'))
         .map(measure => measure.getAttribute('n'))).toEqual(numbers);
@@ -101,17 +116,18 @@ describe('scoreData — structural invariants', () => {
         // more measures than the score does -- numbered by the same rule, not 1..N
         expect(expanded.length).toBeGreaterThan(unexpanded.length);
         expect(expanded[0]).toBe('0'); // The pickup stays the pickup
-        expect(expanded.filter(number => /[a-z]$/.test(number)).length).toBeGreaterThan(0);
-        // 0 for the pickup, then 1, 2, 3 ... with nothing skipped or repeated
-        const bars = expanded.filter(number => !/[a-z]$/.test(number)).map(Number);
-        expect(bars).toEqual(bars.map((_, index) => index));
-        // A continuation continues the bar before it
+        // @n is never lettered: the number belongs to the measure, not to the element
+        expect(expanded.every(number => /^\d+$/.test(number))).toBe(true);
+        // 0 for the pickup, then 1, 2, 3 ... with nothing skipped, and a measure written in
+        // more than one sub-measure repeating its number rather than taking another
+        const opened = [...new Set(expanded)].map(Number);
+        expect(opened).toEqual(opened.map((_, index) => index));
         expanded.forEach((number, index) => {
-          const letter = number.match(/[a-z]+$/)?.[0];
-          if (letter) expect(expanded[index - 1]).toBe(letter === 'b'
-            ? number.slice(0, -1)
-            : number.slice(0, -1) + String.fromCharCode(letter.charCodeAt(0) - 1));
+          if (index > 0) {
+            expect(Number(number) - Number(expanded[index - 1])).toBeLessThanOrEqual(1);
+          }
         });
+        expect(expanded.length).toBeGreaterThan(opened.length); // Some measure does repeat
       } finally {
         score.setOptions({ expandScore: false });
       }
@@ -120,10 +136,10 @@ describe('scoreData — structural invariants', () => {
     });
 
     it('exactly one measure should be first and one last', () => {
-      const firsts = score._scoreData.measures.filter(m => m.isFirstMeasure);
-      const lasts = score._scoreData.measures.filter(m => m.isLastMeasure);
-      expect(firsts.length).toBe(1);
-      expect(lasts.length).toBe(1);
+      // Position says which is which; the records carry no flag for it
+      const measures = score._scoreData.measures;
+      expect(measures[0].startQ).toBe(0);
+      expect(measures.at(-1).endQ).toBe(Math.max(...measures.map(m => m.endQ)));
     });
   });
 
@@ -211,7 +227,7 @@ describe('scoreData — structural invariants', () => {
     it('each CP should have all expected properties', () => {
       const expectedKeys = [
         'chordPosition', 'durationQ', 'endQ', 'expandedChordPositions',
-        'isAudible', 'isDownbeat', 'isSingleLine', 'measureId',
+        'isAudible', 'isDownbeat', 'isSingleLine', 'measureIndex',
         'melodyNote', 'midiDuration', 'midiEndTime', 'midiNotesByPitch',
         'midiQpm', 'midiStartTime', 'notesAndRests', 'startQ',
       ];
@@ -228,9 +244,9 @@ describe('scoreData — structural invariants', () => {
       }
     });
 
-    it('every CP measureId should exist in measuresById', () => {
+    it('every CP measureIndex should name a measure', () => {
       for (const cp of score._scoreData.chordPositions) {
-        expect(score._scoreData.measuresById[cp.measureId]).toBeDefined();
+        expect(score._scoreData.measures[cp.measureIndex]).toBeDefined();
       }
     });
 

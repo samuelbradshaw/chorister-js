@@ -56,19 +56,26 @@ function fakeScore(count, { perMeasure = 4, rightBarLine = 'single', marks = nul
   const score = Object.create(ChScore.prototype);
   const chordPositions = [];
   const measures = [];
-  const measuresById = {};
+  const subMeasuresById = {};
   for (let cp = 0; cp < count; cp++) {
     const measureIndex = Math.floor(cp / perMeasure);
-    const measureId = `m${measureIndex}`;
-    if (!measuresById[measureId]) {
-      measuresById[measureId] = {
-        measureId: measureId, measureType: 'full',
+    const subMeasureId = `m${measureIndex}`;
+    if (!subMeasuresById[subMeasureId]) {
+      // One sub-measure per measure: nothing here is written in more than one <measure>
+      subMeasuresById[subMeasureId] = {
+        subMeasureId: subMeasureId, measureIndex: measureIndex, subMeasureIndex: 0,
         rightBarLine: rightBarLine, startQ: measureIndex * perMeasure,
+        durationQ: perMeasure, timeSignature: [perMeasure, 4],
       };
-      measures.push(measuresById[measureId]);
+      measures.push({
+        measureNumber: String(measureIndex + 1), measureType: 'full',
+        rightBarLine: rightBarLine, timeSignature: [perMeasure, 4],
+        startQ: measureIndex * perMeasure, endQ: (measureIndex + 1) * perMeasure,
+        durationQ: perMeasure, firstChordPosition: cp, subMeasureIds: [subMeasureId],
+      });
     }
     chordPositions.push({
-      chordPosition: cp, startQ: cp, durationQ: 1, measureId: measureId,
+      chordPosition: cp, startQ: cp, durationQ: 1, measureIndex: measureIndex,
       isAudible: true, isDownbeat: cp % perMeasure === 0,
       notesAndRests: [{ isRest: false, isMelody: true, durationQ: 1 }],
     });
@@ -77,7 +84,7 @@ function fakeScore(count, { perMeasure = 4, rightBarLine = 'single', marks = nul
     chordPositions: chordPositions,
     audibleChordPositions: chordPositions.map(cp => cp.chordPosition),
     measures: measures,
-    measuresById: measuresById,
+    subMeasuresById: subMeasuresById,
     staffNumbers: [1],
     meiParsed: marks ? fakeMei(marks) : null,
     scoreMetadata: null,

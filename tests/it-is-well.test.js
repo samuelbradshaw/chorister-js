@@ -60,8 +60,10 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
       expect(score._scoreData.staffNumbers).toEqual([1, 2, 3]);
     });
 
-    it('should have 24 measures', () => {
-      expect(score._scoreData.measures.length).toBe(24);
+    it('should have 22 measures, written in 24 sub-measures', () => {
+      // Two measures are engraved in two <measure> elements each
+      expect(score._scoreData.measures.length).toBe(22);
+      expect(Object.keys(score._scoreData.subMeasuresById).length).toBe(24);
     });
 
     it('should be in C major', () => {
@@ -302,7 +304,6 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
     it('first measure should be a partial-pickup', () => {
       const m = score._scoreData.measures[0];
       expect(m.measureType).toBe('partial-pickup');
-      expect(m.isFirstMeasure).toBe(true);
     });
 
     it('first measure should be in 4/4 time', () => {
@@ -312,7 +313,6 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
 
     it('last measure should have end barline', () => {
       const lastMeasure = score._scoreData.measures[score._scoreData.measures.length - 1];
-      expect(lastMeasure.isLastMeasure).toBe(true);
       expect(lastMeasure.rightBarLine).toBe('end');
     });
   });

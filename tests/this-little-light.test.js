@@ -89,13 +89,11 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
     it('first measure should be a partial-pickup measure', () => {
       const m = score._scoreData.measures[0];
       expect(m.measureType).toBe('partial-pickup');
-      expect(m.isFirstMeasure).toBe(true);
       expect(m.durationQ).toBe(2);
     });
 
     it('last measure should have end barline', () => {
       const lastMeasure = score._scoreData.measures[score._scoreData.measures.length - 1];
-      expect(lastMeasure.isLastMeasure).toBe(true);
       expect(lastMeasure.rightBarLine).toBe('end');
     });
 

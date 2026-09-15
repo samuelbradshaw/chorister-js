@@ -438,8 +438,10 @@ template names one:
 - **`Cp`** – a chord position (`12`). Exact, and the cheaper read against the score it came
   from.
 - **`Mb`** – a measure number and beat (`4@1`, `12@3.5`). The beat counts from 1 within the
-  time signature, and runs on through a bar written in two pieces, so a bar split across a
-  section end stays one bar (`1@4`, never `1b@2`). This is the form that survives a different
+  time signature, and runs on through a measure written in more than one `<measure>` element,
+  so a measure split across a section end stays one measure — written and read as `1@4`, since
+  a `<measure>` that only continues another is never addressed on its own. This is the
+  form that survives a different
   engraving of the same song – a translation set to the same music, for instance.
 
 So `sectionsTemplate: 'V(0-32)'` and `sectionsTemplate: 'V(0-9@1)'` say the same thing about a
