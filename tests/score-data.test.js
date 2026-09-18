@@ -38,14 +38,16 @@ describe('scoreData — structural invariants', () => {
   // ── measures ──
   describe('scoreData.measures', () => {
     it('should have one sub-measure per <measure>, and fewer measures than that', () => {
-      const subMeasureIds = Object.keys(score._scoreData.subMeasuresById);
-      expect(subMeasureIds.length).toBe(
-        score._scoreData.meiParsed.querySelectorAll('measure').length);
-      // This fixture writes one measure in two sub-measures
-      expect(score._scoreData.measures.length).toBeLessThan(subMeasureIds.length);
+      // In document order, which is the order measures[].subMeasureIds is in. The index is
+      // not: a measure split for wrapping adds its pieces to the end of it.
+      const documentIds = Array.from(score._scoreData.meiParsed.querySelectorAll('measure'))
+        .map(element => element.getAttribute('xml:id'));
+      expect(Object.keys(score._scoreData.subMeasuresById).length).toBe(documentIds.length);
+      // This fixture writes one measure in two sub-measures, and splitting writes more
+      expect(score._scoreData.measures.length).toBeLessThan(documentIds.length);
       // And every sub-measure belongs to exactly one measure
       expect(score._scoreData.measures.flatMap(measure => measure.subMeasureIds))
-        .toEqual(subMeasureIds);
+        .toEqual(documentIds);
     });
 
     it('each measure should have all expected properties', () => {
@@ -55,6 +57,17 @@ describe('scoreData — structural invariants', () => {
       ];
       for (const m of score._scoreData.measures) {
         for (const key of expectedKeys) expect(m).toHaveProperty(key);
+      }
+    });
+
+    it('should give every sub-measure the time signature of the measure it belongs to', () => {
+      // A measure only joins sub-measures written in its own meter, and a piece split off one
+      // keeps it, so either record answers for the other
+      for (const measure of score._scoreData.measures) {
+        for (const subMeasureId of measure.subMeasureIds) {
+          expect(score._scoreData.subMeasuresById[subMeasureId].timeSignature)
+            .toEqual(measure.timeSignature);
+        }
       }
     });
 
@@ -81,8 +94,8 @@ describe('scoreData — structural invariants', () => {
       // repeats it, since the number belongs to the measure rather than to the element.
       // Every <measure> carries the number of the measure it is written in, so a measure
       // written in two sub-measures puts its number on both
-      const numbers = Object.values(score._scoreData.subMeasuresById).map(subMeasure =>
-        score._scoreData.measures[subMeasure.measureIndex].measureNumber);
+      const numbers = score._scoreData.measures.flatMap(measure =>
+        measure.subMeasureIds.map(() => measure.measureNumber));
       expect(Object.values(score._scoreData.subMeasuresById).some(sub => sub.subMeasureIndex > 0)).toBe(true);
       expect(new Set(numbers).size).toBeLessThan(numbers.length);
       for (const document of [score._scoreData.meiParsed, score._scoreData.meiParsedComplete]) {
@@ -98,8 +111,8 @@ describe('scoreData — structural invariants', () => {
     it('should keep measure@n on the numbers when the MEI is rebuilt', () => {
       // @n carries the measure's own number. A measure written in more than one sub-measure
       // repeats it, since the number belongs to the measure rather than to the element.
-      const numbers = Object.values(score._scoreData.subMeasuresById).map(subMeasure =>
-        score._scoreData.measures[subMeasure.measureIndex].measureNumber);
+      const numbers = score._scoreData.measures.flatMap(measure =>
+        measure.subMeasureIds.map(() => measure.measureNumber));
       score._updateMei();
       expect(Array.from(score._scoreData.meiParsed.querySelectorAll('measure'))
         .map(measure => measure.getAttribute('n'))).toEqual(numbers);

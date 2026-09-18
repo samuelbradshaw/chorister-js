@@ -1115,11 +1115,10 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
     }
   }
 
-  // A grace *rest* is not an ornament but an engraver's invisible spacer, and Verovio times it
-  // from its <type> where a grace note takes no time at all -- which runs a 3/4 measure to 4.5
-  // quarters. An over-full measure counts as complete (see _measureTypeOf), so two engravings of
-  // one song then disagree on every measure number after it -- and measure numbers are what a
-  // stored template transfers by. Dropped: they are invisible and sound nothing.
+  // A grace *rest* is an engraver's invisible spacer, but Verovio times it from its <type>, which
+  // can run a 3/4 measure to 4.5 quarters -- and an over-full measure shifts every measure number
+  // after it, the numbers a stored template transfers by (see _measuresFrom). Dropped: they are
+  // invisible and sound nothing.
   if (hasGrace) {
     for (const note of parsed.querySelectorAll('note')) {
       if (!note.querySelector('grace') || !note.querySelector('rest')) continue;
@@ -1966,8 +1965,9 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   // This walk visits every scoreDef and staffDef in document order, so it also enables
   // collapsing empty staves ("True to the Faith", 1985 Hymns) and collects the staff numbers
   const staffNumbers = [];
-  let timeSignature = [0, 0];
-  for (const element of this._scoreData.meiParsed.querySelectorAll('scoreDef, staffDef, meterSig, measure')) {
+  const inForce = { timeSignature: [0, 0], keySignatureId: null };
+  const definitions = 'scoreDef, staffDef, keySig, meterSig, measure';
+  for (const element of this._scoreData.meiParsed.querySelectorAll(definitions)) {
     if (element.matches('scoreDef')) element.setAttribute('optimize', 'true');
     else if (element.matches('staffDef')) staffNumbers.push(Number.parseInt(element.getAttribute('n')));
     if (element.matches('measure')) {
@@ -1976,7 +1976,10 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
         subMeasureId: subMeasureId,
         measureIndex: null, // Added later
         subMeasureIndex: null, // Added later
-        timeSignature: [...timeSignature],
+        timeSignature: [...inForce.timeSignature],
+        keySignatureId: inForce.keySignatureId, // As in keySignatureInfo; null where none is named
+        // As drawn now: _updateMei keeps it in step with each rebuild. The measure's own, in
+        // _scoreData.measures, stays the one the score writes.
         rightBarLine: element.getAttribute('right') ?? 'single',
         startQ: null, // Added later
         endQ: null, // Added later
@@ -1984,9 +1987,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
         firstChordPosition: null,
       }
     } else {
-      // Time signature change
-      timeSignature[0] = Number.parseInt(element.getAttribute('count') ?? element.getAttribute('meter.count') ?? timeSignature[0]);
-      timeSignature[1] = Number.parseInt(element.getAttribute('unit') ?? element.getAttribute('meter.unit') ?? timeSignature[1]);
+      this._applyMeiDefinition(element, inForce);
     }
   }
   this._scoreData.staffNumbers = staffNumbers;
@@ -2001,7 +2002,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   }
   const chordPositionIndex = this._indexChordPositions(vrvTimemap);
   this._scoreData.numChordPositions = chordPositionIndex.qstamps.length - 1;
-  this._finalizeMeasures(elementsById);
+  this._finalizeMeasures(elementsById, chordPositionIndex.qstamps);
 
   this._scoreData.trebleClefStaffNumbersSelector = Array.from(this._scoreData.meiParsed.querySelectorAll('clef[shape="G"]'))
     .map(cf => `[n="${Number.parseInt(cf.closest('staffDef, staff').getAttribute('n'))}"]`).join(',');
@@ -2292,21 +2293,20 @@ ChScore.prototype._annotateDirections = function (elementsById, chordPositionQst
 ChScore.prototype._resolveKeySignatures = function () {
   const keySignatureElement = this._scoreData.meiParsed.querySelector('keySig');
   const scoreDefElement = this._scoreData.meiParsed.querySelector('scoreDef');
-  const meiSig = keySignatureElement?.getAttribute('sig') ?? scoreDefElement?.getAttribute('key.sig') ?? null;
-  const meiPname = keySignatureElement?.getAttribute('pname') ?? scoreDefElement?.getAttribute('key.pname') ?? null;
-  const meiAccid = keySignatureElement?.getAttribute('accid') ?? scoreDefElement?.getAttribute('key.accid') ?? null;
-  const meiPnameAccid = meiPname ? (meiPname + (['f', 's'].includes(meiAccid) ? meiAccid : '')) : null;
   const tonality = keySignatureElement?.getAttribute('mode') ?? scoreDefElement?.getAttribute('key.mode') ?? 'major';
   const keySignatures = this._getKeySignatures(tonality);
-  const defaultKeySignatureEntry = Object.entries(keySignatures).find(ks => (ks[1].meiSig === meiSig || ks[1].meiPnameAccid === meiPnameAccid));
-  if (!defaultKeySignatureEntry) {
-    console.error(`Error: Unrecognized key signature (sig: ${meiSig}, pname: ${meiPnameAccid}, mode: ${tonality}).`);
+  // The key the score opens in: its first keySig, or the scoreDef's own attributes
+  const keyElement = keySignatureElement ?? scoreDefElement;
+  const defaultKeySignatureId = keyElement ? this._keySignatureIdOf(keyElement, tonality) : null;
+  const defaultKeySignatureInfo = keySignatures?.[defaultKeySignatureId] ?? null;
+  if (!defaultKeySignatureId) {
+    const sig = keyElement?.getAttribute('sig') ?? keyElement?.getAttribute('key.sig');
+    console.error(`Error: Unrecognized key signature (sig: ${sig}, mode: ${tonality}).`);
   }
   this._scoreData.keySignatures = this._getKeySignatureIds(tonality);
-  const [defaultKeySignatureId, defaultKeySignatureInfo] = defaultKeySignatureEntry ?? [null, null];
 
   // Get nearby key signatures
-  const nearbyKeySignatureIds = defaultKeySignatureEntry ? Object.keys(keySignatures) : [];
+  const nearbyKeySignatureIds = defaultKeySignatureId ? Object.keys(keySignatures) : [];
   const midpointIndex = (nearbyKeySignatureIds.length - 1) / 2;
   const keyIndex = nearbyKeySignatureIds.indexOf(defaultKeySignatureId);
   if (keyIndex < midpointIndex) {
@@ -2332,7 +2332,7 @@ ChScore.prototype._resolveKeySignatures = function () {
       ...keySignatureInfo,
     });
   }
-  this._scoreData.keySignatureInfo = defaultKeySignatureEntry ? {
+  this._scoreData.keySignatureInfo = defaultKeySignatureId ? {
     keySignatureId: defaultKeySignatureId,
     nearbyKeySignatures: nearbyKeySignatures,
     ...defaultKeySignatureInfo,
@@ -2705,14 +2705,56 @@ ChScore.prototype._measureOf = function (subMeasureId) {
   return this._scoreData.measures?.[subMeasure?.measureIndex];
 }
 
-// The measures a run of sub-measures makes up, in order and numbered, plus where each
-// sub-measure sits in them. A measure is sometimes written in more than one <measure>, so this
-// is the one place that decides which of them belong together (see _continuesMeasure).
+// What a scoreDef, staffDef, keySig or meterSig puts in force from where it is written on,
+// applied to `inForce` ({ timeSignature: [count, unit], keySignatureId }). The records and the
+// expanded document are both read with this, so they agree on what is in force where.
+ChScore.prototype._applyMeiDefinition = function (element, inForce) {
+  inForce.keySignatureId = this._keySignatureIdOf(element) ?? inForce.keySignatureId;
+  if (element.matches('keySig')) return;
+  inForce.timeSignature = [
+    Number.parseInt(element.getAttribute('count') ?? element.getAttribute('meter.count')
+      ?? inForce.timeSignature[0]),
+    Number.parseInt(element.getAttribute('unit') ?? element.getAttribute('meter.unit')
+      ?? inForce.timeSignature[1]),
+  ];
+}
+
+// Record a <measure> a rebuild created -- a copy an expansion made of one of the score's -- so
+// the rebuilt document can be read the same way the score is. It stands for the same music, so
+// it keeps the source's place; `span` is where a range clipped it (its own startQ, endQ,
+// durationQ and firstChordPosition). Its barline is settled with the rest in _updateMei.
+ChScore.prototype._addRebuiltSubMeasure = function (element, sourceId, span = null) {
+  const source = this._scoreData.subMeasuresById[sourceId];
+  const subMeasureId = element.getAttribute('xml:id');
+  if (!source || !subMeasureId) return;
+  this._scoreData.subMeasuresById[subMeasureId] = { ...source, ...span, subMeasureId };
+}
+
+// The measures a run of sub-measures makes up, in order and numbered. A measure is sometimes
+// written in more than one <measure> -- a section can close part-way through a measure and the
+// next pick the rest up ("All Things Bright and Beautiful", where the chorus ends three beats
+// in) -- so this is the one place that decides which of them belong together.
 ChScore.prototype._measuresFrom = function (subMeasures) {
   const measures = [];
   subMeasures.forEach((subMeasure, index) => {
-    const continues = measures.length > 0
-      && this._continuesMeasure(subMeasure, subMeasures[index + 1]);
+    // Grouping is settled before anything is split, so the sub-measure after this one is a
+    // whole measure of the score, never a piece of one
+    const previous = measures.at(-1);
+    const [count, unit] = subMeasure.timeSignature;
+    const completeDurationQ = count * (4 / unit);
+    const nextDurationQ = subMeasures[index + 1]?.durationQ;
+    const continues = previous != null
+      // Only a measure still short of its meter, and in that meter: one already full is
+      // complete, and the end of a 6/8 section and a 4/4 pickup after it are two measures
+      && previous.timeSignature[0] === count && previous.timeSignature[1] === unit
+      && previous.durationQ < completeDurationQ
+      // An over-full sub-measure continues nothing; _optimizeMusicXml repairs those it can
+      && subMeasure.durationQ < completeDurationQ
+      // The score's last sub-measure is the pickdown, which closes a measure of its own
+      && nextDurationQ != null
+      && subMeasure.rightBarLine !== 'invis'
+      // A short sub-measure that pairs with the measure after it is that one's near half
+      && nextDurationQ + subMeasure.durationQ !== completeDurationQ;
     if (continues) {
       const measure = measures.at(-1);
       measure.subMeasureIds.push(subMeasure.subMeasureId);
@@ -2725,7 +2767,7 @@ ChScore.prototype._measuresFrom = function (subMeasures) {
         measureNumber: null, // Settled below, once every measure is known
         measureType: null,
         timeSignature: [...subMeasure.timeSignature],
-        rightBarLine: subMeasure.rightBarLine, // The one the last sub-measure ends with
+        rightBarLine: subMeasure.rightBarLine, // As the score writes it, where its last sub-measure ends
         startQ: subMeasure.startQ,
         endQ: subMeasure.endQ,
         durationQ: subMeasure.durationQ,
@@ -2735,26 +2777,70 @@ ChScore.prototype._measuresFrom = function (subMeasures) {
     }
   });
 
-  // A pickup is 0 and every measure after it takes the next number. The engraved @n is no use
-  // for deriving this: scores here suppress measure numbering, writing "0", "X1", "X2".
+  // Each measure is full, or short of its meter: a pickup leading into a section or a pickdown
+  // closing one. The first only leads in and the last only closes; one between closes a section
+  // where a barline that means something, or a change of meter, follows it. Only a pickup the
+  // score opens on is 0 -- the engraved @n is no use: scores here write "0", "X1", "X2".
   let counter = 0;
   measures.forEach((measure, index) => {
-    measure.measureType = this._measureTypeOf(measure, index, measures.length);
-    measure.measureNumber = measure.measureType === 'partial-pickup' ? '0' : String(++counter);
+    const [count, unit] = measure.timeSignature;
+    const next = measures[index + 1];
+    const endsSection = !next
+      || ['dbl', 'dbldashed', 'dbldotted', 'dblheavy', 'heavy', 'end', 'rptstart', 'rptend',
+        'rptboth'].includes(measure.rightBarLine)
+      || next.timeSignature[0] !== count || next.timeSignature[1] !== unit;
+    if (measure.durationQ >= count * (4 / unit)) measure.measureType = 'full';
+    else if (index > 0 && endsSection) measure.measureType = 'partial-pickdown';
+    else measure.measureType = 'partial-pickup';
+    measure.measureNumber = index === 0 && measure.measureType === 'partial-pickup'
+      ? '0' : String(++counter);
   });
   return measures;
 }
 
-// Builds _scoreData.measures, which is settled only after the walk above: whether a sub-measure
-// continues the one before it is told from the sub-measure after it, whose duration isn't known
-// until the walk has passed it. Writes each sub-measure's place in its measure back onto it,
-// and the measure's number onto every <measure> it is written in, so @n agrees with the data.
-ChScore.prototype._finalizeMeasures = function (elementsById) {
+// Builds _scoreData.measures -- settled only after the walk above, since whether a sub-measure
+// continues a measure depends on the one after it -- and writes each sub-measure's place, and its
+// measure's number as @n, back onto it. `qstamps` places the pieces a split leaves behind,
+// which have no timemap of their own.
+ChScore.prototype._finalizeMeasures = function (elementsById, qstamps) {
   // Taken in document order rather than from the index, which keeps the order records were
   // added in. Anything asking after this walks measures[].subMeasureIds instead.
-  const subMeasures = Array.from(this._scoreData.meiParsed.querySelectorAll('measure'))
+  const measureElements = Array.from(this._scoreData.meiParsed.querySelectorAll('measure'));
+  const subMeasures = measureElements
     .map(element => this._scoreData.subMeasuresById[element.getAttribute('xml:id')]);
   const measures = this._measuresFrom(subMeasures);
+  // Split what can be split, now that the grouping is settled: the pieces join the measure
+  // they were cut from, so nothing has to work out again which <measure> elements go together.
+  // A measure's own span is untouched -- the pieces only divide it.
+  const incoming = this._incomingSpans(measureElements, elementsById);
+  // A span's @tstamp2 counts <measure> elements, which a split adds to, and its beat from the
+  // start of one a split may have divided -- so where each one ends is noted before anything
+  // moves, and written back once everything has
+  const tstamp2Ends = [];
+  measureElements.forEach((element, index) => {
+    for (const spanner of element.querySelectorAll(':scope > [tstamp2]')) {
+      const [, measuresOn, beat] = spanner.getAttribute('tstamp2').match(CH_TSTAMP2) ?? [];
+      const endElement = measureElements[index + Number(measuresOn)];
+      if (endElement) tstamp2Ends.push({ spanner, endElement, endBeat: Number.parseFloat(beat) });
+    }
+  });
+  const splits = new Map();
+  for (const measure of measures) {
+    const split = this._splitMeasure(measure, elementsById, qstamps, incoming);
+    if (split) splits.set(split.element, split);
+  }
+  if (splits.size > 0) {
+    const orderOf = new Map(Array.from(this._scoreData.meiParsed.querySelectorAll('measure'))
+      .map((element, index) => [element, index]));
+    for (const { spanner, endElement, endBeat } of tstamp2Ends) {
+      // An end past the split point is in the piece now, counted from the piece's start
+      const split = splits.get(endElement);
+      const [element, beat] = split && endBeat > split.tstamp
+        ? [split.piece, chRoundTstamp(endBeat - split.tstamp + 1)] : [endElement, endBeat];
+      const measuresOn = orderOf.get(element) - orderOf.get(spanner.closest('measure'));
+      spanner.setAttribute('tstamp2', `${measuresOn}m+${beat}`);
+    }
+  }
   measures.forEach((measure, measureIndex) => {
     measure.subMeasureIds.forEach((subMeasureId, subMeasureIndex) => {
       Object.assign(this._scoreData.subMeasuresById[subMeasureId],
@@ -2765,63 +2851,408 @@ ChScore.prototype._finalizeMeasures = function (elementsById) {
   this._scoreData.measures = measures;
 }
 
-// Whether a sub-measure continues the measure before it rather than opening one of its own.
-// A measure can be written in more than one <measure>: a section can close part-way through a
-// measure and the next pick the rest up over a final barline ("All Things Bright and
-// Beautiful", where the chorus ends three beats in), whether or not the barline between them
-// is drawn. A short sub-measure that pairs with the one after it is the near half, not the far.
-ChScore.prototype._continuesMeasure = function (subMeasure, nextSubMeasure) {
-  const completeDurationQ = subMeasure.timeSignature[0] * (4 / subMeasure.timeSignature[1]);
-  // Over-full counts as complete: a sub-measure longer than its measure continues nothing.
-  // _optimizeMusicXml repairs the engravings that reach it.
-  if (subMeasure.durationQ >= completeDurationQ) return false;
-  // The score's last sub-measure closes a measure of its own -- the pickdown, which completes
-  // the pickup rather than continuing the measure before it
-  if (!nextSubMeasure) return false;
-  if (subMeasure.rightBarLine === 'invis') return false;
-  return nextSubMeasure.durationQ + subMeasure.durationQ !== completeDurationQ;
+// Split a measure of more than four chord positions once, as near its middle as it splits
+// cleanly -- one of more than six may cross a slur, tie, hairpin or word to get there -- and
+// record the new piece. The measure keeps its number, span and first chord position. Returns
+// the split made ({ element, piece, tstamp }), or nothing.
+ChScore.prototype._splitMeasure = function (measure, elementsById, qstamps, incoming) {
+  if (measure.startQ == null) return;
+  const chordPositionCount = this._bisectLeft(qstamps, measure.endQ)
+    - this._bisectLeft(qstamps, measure.startQ);
+  if (chordPositionCount <= 4) return;
+
+  // The point nearest the middle, among any of its sub-measures' points, as a qstamp, so it can
+  // be picked however the measure happens to be written
+  const middleQ = measure.startQ + (measure.durationQ / 2);
+  const nearestToMiddle = (relaxed) => {
+    let nearest = null;
+    measure.subMeasureIds.forEach((subMeasureId, index) => {
+      const subMeasure = this._scoreData.subMeasuresById[subMeasureId];
+      const element = elementsById.get(subMeasureId);
+      // A sub-measure that sounds nothing has no span to divide and nothing to divide at
+      if (!element || subMeasure.startQ == null) return;
+      // The meter the record was built with, which follows a change written anywhere before
+      // it; [0, 0] where the score names none
+      const meter = subMeasure.timeSignature[1] ? subMeasure.timeSignature : [4, 4];
+      const tstamps = this._measureSplitTstamps(
+        element, meter, incoming.get(element) ?? [], relaxed);
+      for (const tstamp of tstamps) {
+        const qstamp = this._tstampToQstamp(tstamp, subMeasure.startQ, subMeasure.endQ, meter[1]);
+        if (!nearest || Math.abs(qstamp - middleQ) < Math.abs(nearest.qstamp - middleQ)) {
+          nearest = { index, subMeasure, element, meter, tstamp, qstamp };
+        }
+      }
+    });
+    return nearest;
+  };
+  const inMiddleHalf = (point) => Math.abs(point.qstamp - middleQ) <= measure.durationQ / 4;
+  let best = nearestToMiddle(false);
+  if ((!best || !inMiddleHalf(best)) && chordPositionCount > 6) {
+    const relaxed = nearestToMiddle(true);
+    if (relaxed && inMiddleHalf(relaxed)) best = relaxed;
+  }
+  if (!best) return;
+
+  const { index, subMeasure, element, meter, tstamp, qstamp } = best;
+  const piece = this._splitSubMeasure(element, tstamp, meter, elementsById);
+  // Everything the sub-measure's record holds, but for what the cut changes. A key can change
+  // part-way through a measure, so the piece opens in whatever the first piece leaves in force.
+  const inForce = { keySignatureId: subMeasure.keySignatureId };
+  for (const keySig of element.querySelectorAll('keySig')) this._applyMeiDefinition(keySig, inForce);
+  const record = {
+    ...subMeasure,
+    subMeasureId: piece.getAttribute('xml:id'),
+    measureIndex: null, // Both settled by the walk in _finalizeMeasures
+    subMeasureIndex: null,
+    keySignatureId: inForce.keySignatureId,
+    rightBarLine: piece.getAttribute('right') ?? 'single',
+    // The sub-measure this was cut from, which is what tells a piece cut for wrapping from a
+    // sub-measure the engraver wrote
+    splitFrom: subMeasure.subMeasureId,
+    // The span is worked out from where the sub-measure was cut rather than asked of Verovio
+    // again: a second timemap would mean loading the document into it a second time, which is
+    // the slowest thing this code does
+    startQ: qstamp,
+    durationQ: subMeasure.endQ - qstamp,
+    firstChordPosition: this._bisectLeft(qstamps, qstamp),
+  };
+  // The sub-measure keeps its id and its first chord position, and now ends where the piece
+  // begins
+  subMeasure.endQ = qstamp;
+  subMeasure.durationQ = qstamp - subMeasure.startQ;
+  subMeasure.rightBarLine = 'invis';
+  this._scoreData.subMeasuresById[record.subMeasureId] = record;
+  elementsById.set(record.subMeasureId, piece);
+  measure.subMeasureIds.splice(index + 1, 0, record.subMeasureId);
+  return { element: element, piece: piece, tstamp: tstamp };
 }
 
-// Number every measure in a document the way _finalizeMeasures numbers the score's own, for a
-// document rebuilt to the point that its measures no longer answer to the score data -- an
-// expanded score. `measureDurationQ` reads a sub-measure's length off the notation, since a
-// document still being assembled has no timemap.
-ChScore.prototype._renumberMeasures = function (meiParsed, measureDurationQ) {
-  const subMeasures = [];
-  // Same walk the score data is built from, so a meter change carries forward
-  const timeSignature = [4, 4];
-  for (const element of meiParsed.querySelectorAll('scoreDef, staffDef, meterSig, measure')) {
-    if (element.matches('measure')) {
-      subMeasures.push({
-        // _measuresFrom treats the id opaquely, so the element itself serves as one here
-        subMeasureId: element,
-        durationQ: measureDurationQ(element, timeSignature),
-        timeSignature: [...timeSignature],
-        rightBarLine: element.getAttribute('right') ?? 'single',
-      });
-    } else {
-      timeSignature[0] = Number.parseInt(element.getAttribute('count')
-        ?? element.getAttribute('meter.count') ?? timeSignature[0]);
-      timeSignature[1] = Number.parseInt(element.getAttribute('unit')
-        ?? element.getAttribute('meter.unit') ?? timeSignature[1]);
+// What reaches into each of `measureElements` from an earlier one. A spanner (@endid or
+// @tstamp2: a slur, tie, hairpin...) is written in the <measure> it starts in, so one ending
+// further on is only seen from there. Each gets the spans reaching it: the event one ends on
+// (`endEvent`), or the tstamp it is open until (`openUntil`; Infinity where it passes over).
+ChScore.prototype._incomingSpans = function (measureElements, elementsById) {
+  const indexOf = new Map(measureElements.map((element, index) => [element, index]));
+  const incoming = new Map();
+  const reach = (element, span) => {
+    if (!incoming.has(element)) incoming.set(element, []);
+    incoming.get(element).push(span);
+  };
+  const passOver = (fromIndex, toIndex, spanner) => {
+    for (let index = fromIndex + 1; index < toIndex; index++) {
+      reach(measureElements[index], { spanner: spanner, openUntil: Infinity });
+    }
+  };
+  for (const [startIndex, measure] of measureElements.entries()) {
+    for (const spanner of measure.querySelectorAll(':scope > [endid], :scope > [tstamp2]')) {
+      const endEvent = elementsById.get(spanner.getAttribute('endid')?.substring(1));
+      const endMeasure = endEvent?.closest('measure');
+      if (endMeasure && endMeasure !== measure && indexOf.has(endMeasure)) {
+        passOver(startIndex, indexOf.get(endMeasure), spanner);
+        reach(endMeasure, { spanner: spanner, endEvent: endEvent });
+      }
+      // `<n>m+<beat>`: the span ends on that beat of the <measure> n on from this one
+      const [, measuresOn, beat] =
+        spanner.getAttribute('tstamp2')?.match(CH_TSTAMP2) ?? [];
+      const target = measureElements[startIndex + Number(measuresOn)];
+      if (Number(measuresOn) > 0 && target) {
+        passOver(startIndex, startIndex + Number(measuresOn), spanner);
+        reach(target, { spanner: spanner, openUntil: Number.parseFloat(beat) });
+      }
     }
   }
-  if (subMeasures.length === 0) return;
-  for (const measure of this._measuresFrom(subMeasures)) {
-    for (const element of measure.subMeasureIds) element.setAttribute('n', measure.measureNumber);
-  }
+  return incoming;
 }
 
-// What kind of measure this is: a pickup where the score opens short of a full measure, a
-// pickdown where it closes short of one, and full otherwise. Which sub-measure of it you are
-// on is subMeasureIndex; this is about the measure.
-ChScore.prototype._measureTypeOf = function (measure, index, count) {
-  const completeDurationQ = measure.timeSignature[0] * (4 / measure.timeSignature[1]);
-  if (measure.durationQ >= completeDurationQ) return 'full';
-  if (index === 0) return 'partial-pickup';
-  if (index === count - 1) return 'partial-pickdown';
-  return 'full';
+// A position in a measure built up from durations, rounded so the same beat reached two ways
+// is the same number: a triplet's thirds are not exact in floating point, so 2 + ⅓ + ⅓ + ⅓ and
+// 2 + 1 differ in the last place. Rounded where a position is used, never as it accumulates --
+// rounding each third on the way compounds, and three of them no longer make one.
+const chRoundTstamp = (tstamp) => Math.round(tstamp * 1e6) / 1e6;
+
+// A @tstamp2: `<n>m+<beat>`, the beat of the <measure> n on from the one a span starts in
+const CH_TSTAMP2 = /^(\d+)m\+([\d.]+)$/;
+
+// Events a sub-measure is split between. mRest and mSpace stand for a whole measure, so they
+// are re-cut to the piece they land in rather than moved into it.
+const CH_SPLITTABLE_EVENTS = ['note', 'chord', 'rest', 'space', 'mRest', 'mSpace'];
+
+// Where a barline can go inside a sub-measure, as tstamps from 1 -- more places for Verovio to
+// wrap. Safe where every voice starts something, no beam, tuplet or spanner is open, and every
+// lyric line starts a word; `relaxed` lets a slur, tie, hairpin or word be crossed too.
+// `incoming` is what reaches in from an earlier <measure> (see _incomingSpans).
+ChScore.prototype._measureSplitTstamps = function (measure, meter, incoming = [], relaxed = false) {
+  // Slurs and ties are joined by @endid, which Verovio follows across a barline on its own; a
+  // hairpin's @tstamp2 is rewritten once the splitting is done (see _finalizeMeasures)
+  const isCrossable = (spanner) => relaxed && spanner.matches('slur, tie, hairpin');
+  const [count, tstampUnit] = meter;
+
+  // Walk each layer, recording where its events start, what is open across each of them, and
+  // the syllables they carry. A beam or tuplet is open between its first and last event.
+  const onsetsByLayer = [];
+  const tstampById = new Map();
+  const spanned = new Set(); // Tstamps a beam, tuplet or spanner is open across
+  const sylTstampsByLine = new Map(); // Lyric line -> the tstamps it puts a syllable at
+  const wordContinues = new Map(); // Lyric line -> tstamps whose syllable runs into the next
+  const wordContinued = new Map(); // Lyric line -> tstamps whose syllable carries a word on
+  for (const layer of measure.querySelectorAll('staff > layer')) {
+    const onsets = new Map(); // Tstamp -> the event starting there
+    let tstamp = 1;
+    const walk = (container) => {
+      const containerStart = tstamp;
+      for (const element of container.children) {
+        if (element.matches('beam, tuplet')) {
+          walk(element);
+          continue;
+        }
+        if (!CH_SPLITTABLE_EVENTS.includes(element.tagName)) continue;
+        const at = chRoundTstamp(tstamp);
+        onsets.set(at, element);
+        tstampById.set(element, at);
+        // A spanner can be attached to one note of a chord, which starts when the chord does
+        for (const note of element.querySelectorAll('note')) tstampById.set(note, at);
+        for (const syl of element.querySelectorAll('verse > syl')) {
+          const line = syl.closest('verse').getAttribute('n');
+          if (!sylTstampsByLine.has(line)) {
+            sylTstampsByLine.set(line, new Set());
+            wordContinues.set(line, new Set());
+            wordContinued.set(line, new Set());
+          }
+          sylTstampsByLine.get(line).add(at);
+          // @wordpos says where in its word a syllable falls: initial and medial both have
+          // another syllable still to come, and medial and terminal one before them -- which
+          // may be in an earlier <measure>
+          const wordpos = syl.getAttribute('wordpos');
+          if (['i', 'm'].includes(wordpos)) wordContinues.get(line).add(at);
+          if (['m', 't'].includes(wordpos)) wordContinued.get(line).add(at);
+        }
+        tstamp += element.matches('mRest, mSpace')
+          ? count : this._meiDurationTstamps(element, tstampUnit);
+      }
+      if (container.matches('beam, tuplet')) {
+        for (const inner of onsets.keys()) {
+          if (inner > chRoundTstamp(containerStart) && inner < chRoundTstamp(tstamp)) {
+            spanned.add(inner);
+          }
+        }
+      }
+    };
+    walk(layer);
+    onsetsByLayer.push({
+      onsets: onsets,
+      end: chRoundTstamp(tstamp),
+      // A voice resting the whole measure can be cut anywhere
+      isWholeRest: [...onsets.values()].some(event => event.matches('mRest, mSpace')),
+    });
+  }
+
+  // A spanner is open from where it starts to where it ends: after its start event or @tstamp,
+  // and up to and including its end event, or up to its @tstamp2. One that ends in a later
+  // <measure> reaches past this one, so everything after its start is spoken for.
+  const onsets = [...new Set(onsetsByLayer.flatMap(layer => [...layer.onsets.keys()]))];
+  const eventTstamp = (event) =>
+    tstampById.get(event) ?? tstampById.get(event?.closest(CH_SPLITTABLE_EVENTS.join()));
+  const block = (isOpen) => { for (const onset of onsets) if (isOpen(onset)) spanned.add(onset); };
+  for (const spanner of measure.querySelectorAll(':scope > [endid], :scope > [tstamp2]')) {
+    if (isCrossable(spanner)) continue;
+    const eventOf = (reference) => reference
+      && measure.querySelector(`[*|id="${reference.substring(1)}"]`);
+    const start = Number.parseFloat(spanner.getAttribute('tstamp'))
+      || eventTstamp(eventOf(spanner.getAttribute('startid')));
+    if (!start) continue;
+    const [, measuresOn, beat] =
+      spanner.getAttribute('tstamp2')?.match(CH_TSTAMP2) ?? [];
+    const endTstamp = spanner.hasAttribute('endid')
+      ? eventTstamp(eventOf(spanner.getAttribute('endid'))) : null;
+    if (endTstamp != null) block(onset => onset > start && onset <= endTstamp);
+    else if (measuresOn === '0') block(onset => onset > start && onset < Number.parseFloat(beat));
+    else block(onset => onset > start);
+  }
+  // What reaches in from an earlier <measure> is open from the start up to where it ends here
+  for (const span of incoming) {
+    if (isCrossable(span.spanner)) continue;
+    const end = span.endEvent ? eventTstamp(span.endEvent) : null;
+    if (span.endEvent) block(onset => end == null || onset <= end);
+    else block(onset => onset < span.openUntil);
+  }
+
+  const splitTstamps = [];
+  for (const candidate of onsets.sort((a, b) => a - b)) {
+    if (candidate <= 1 || candidate >= 1 + count || spanned.has(candidate)) continue;
+    // Every voice has to break here too: one still sounding would have to be cut and tied
+    const everyLayerBreaks = onsetsByLayer.every(layer =>
+      layer.onsets.has(candidate) || layer.end <= candidate || layer.isWholeRest);
+    if (!everyLayerBreaks) continue;
+    // Every lyric line has to start a new word here -- read from the syllable here, which
+    // knows about a word begun in an earlier <measure>, and from the one before it
+    const everyLineStartsAWord = relaxed || [...sylTstampsByLine].every(([line, tstamps]) => {
+      if (!tstamps.has(candidate) || wordContinued.get(line).has(candidate)) return false;
+      const previous = Math.max(...[...tstamps].filter(tstamp => tstamp < candidate), -1);
+      return previous < 0 || !wordContinues.get(line).has(previous);
+    });
+    if (everyLineStartsAWord) splitTstamps.push(candidate);
+  }
+  return splitTstamps;
 }
+
+// Split one <measure> in two at `splitTstamp`, returning the new second piece. The element
+// itself stays as the first piece, keeping its id and its left barline, and runs into the new
+// one invisibly; the records, not the document, say they are one measure.
+ChScore.prototype._splitSubMeasure = function (measure, splitTstamp, meter, elementsById) {
+  const meiParsed = this._scoreData.meiParsed;
+  const [count, tstampUnit] = meter;
+  // Anything at or past the split is the piece's -- an end marker too, written one tstamp past
+  // the last beat
+  const inPiece = (tstamp) => chRoundTstamp(tstamp) >= splitTstamp;
+  // How long a beam or tuplet runs, in tstamps
+  const containerTstamps = (container) => {
+    let tstamps = 0;
+    for (const element of container.children) {
+      if (element.matches('beam, tuplet')) tstamps += containerTstamps(element);
+      else if (CH_SPLITTABLE_EVENTS.includes(element.tagName)) {
+        tstamps += this._meiDurationTstamps(element, tstampUnit);
+      }
+    }
+    return tstamps;
+  };
+  const pieceId = (element) => `${element.getAttribute('xml:id')}-split1`;
+
+  const piece = this._createMeiElement(meiParsed, 'measure');
+  this._setMeiId(piece, pieceId(measure));
+  measure.parentNode.insertBefore(piece, measure.nextSibling);
+
+  // Deal the contents of every layer out to the side of the split each event falls on. Nothing
+  // straddles a split -- that is what made it a split -- so events move whole, and a beam or
+  // tuplet moves with its first event.
+  for (const staff of Array.from(measure.querySelectorAll(':scope > staff'))) {
+    const staffPiece = this._createMeiElement(meiParsed, 'staff');
+    staffPiece.setAttribute('n', staff.getAttribute('n'));
+    this._setMeiId(staffPiece, pieceId(staff));
+    piece.appendChild(staffPiece);
+    for (const layer of Array.from(staff.querySelectorAll(':scope > layer'))) {
+      const layerPiece = this._createMeiElement(meiParsed, 'layer');
+      layerPiece.setAttribute('n', layer.getAttribute('n') || '1');
+      this._setMeiId(layerPiece, pieceId(layer));
+      staffPiece.appendChild(layerPiece);
+      let tstamp = 1;
+      for (const element of Array.from(layer.children)) {
+        // A whole-measure rest stands for whatever the measure holds, so each side gets its
+        // own, cut to its own length, rather than the original moving to one of them
+        if (element.matches('mRest, mSpace')) {
+          const sides = [[layer, splitTstamp - 1], [layerPiece, 1 + count - splitTstamp]];
+          sides.forEach(([target, length], side) => {
+            const replacement = this._createMeiElement(
+              meiParsed, element.matches('mRest') ? 'rest' : 'space');
+            if (side === 0) {
+              for (const attribute of Array.from(element.attributes)) {
+                replacement.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
+              }
+            } else {
+              this._setMeiId(replacement, pieceId(element));
+            }
+            const { dur, dots } = this._meiDurationFor(length, tstampUnit);
+            replacement.setAttribute('dur', String(dur));
+            if (dots > 0) replacement.setAttribute('dots', String(dots));
+            target.appendChild(replacement);
+          });
+          element.remove();
+          tstamp += count;
+          continue;
+        }
+        if (inPiece(tstamp)) layerPiece.appendChild(element);
+        if (element.matches('beam, tuplet')) {
+          tstamp += containerTstamps(element);
+        } else if (CH_SPLITTABLE_EVENTS.includes(element.tagName)) {
+          tstamp += this._meiDurationTstamps(element, tstampUnit);
+        }
+      }
+    }
+  }
+
+  // Notation attached to the measure goes with the moment it is attached to, its @tstamp
+  // counted from the piece's own start. @tstamp2 is left to _finalizeMeasures, which rewrites
+  // every one once all the splitting is done.
+  for (const element of Array.from(measure.children)) {
+    if (element.matches('staff')) continue;
+    const startId = element.getAttribute('startid')?.substring(1);
+    const tstamp = Number.parseFloat(element.getAttribute('tstamp'));
+    const moves = startId
+      ? elementsById.get(startId)?.closest('measure') === piece
+      : Number.isFinite(tstamp) && inPiece(tstamp);
+    if (!moves) continue;
+    if (Number.isFinite(tstamp)) {
+      element.setAttribute('tstamp', String(chRoundTstamp(tstamp - splitTstamp + 1)));
+    }
+    piece.appendChild(element);
+  }
+
+  // The measure's right barline moves to the piece, which now ends it. @metcon is left alone:
+  // it marks a measure the engraver or a range cut short, which a split piece is not.
+  const rightBarLine = measure.getAttribute('right');
+  measure.setAttribute('right', 'invis');
+  if (rightBarLine) piece.setAttribute('right', rightBarLine);
+  return piece;
+}
+
+// Number every <measure> in the finished document the way _finalizeMeasures numbers the
+// score's own -- an introduction and the passes an expansion made included -- and draw the
+// barline between each two: double where one pass gives way to the next, hidden between two
+// pieces of one measure.
+ChScore.prototype._renumberMeasures = function (meiParsed) {
+  // Which pass through the song a <measure> is in: the introduction, or one playthrough of an
+  // expanded score -- the same for every <measure> of a score that is not expanded
+  const passOf = (element) => (element.closest('section[type="introduction"]')
+    ? 'introduction' : element.closest('[ch-iteration]')?.getAttribute('ch-iteration') ?? '');
+
+  // Every <measure> here has a record, so which belong together is read off the records: two in
+  // a row are one measure where they are consecutive pieces of one of the score's. A copy whose
+  // source doesn't follow the one before it -- a range boundary -- opens a measure.
+  const measures = [];
+  let before = null;
+  for (const element of meiParsed.querySelectorAll('measure')) {
+    const subMeasure = this._scoreData.subMeasuresById[element.getAttribute('xml:id')];
+    if (!subMeasure) return;
+    const previous = measures.at(-1);
+    const continues = previous != null
+      && subMeasure.subMeasureIndex === previous.subMeasureIndex + 1
+      && subMeasure.measureIndex === previous.measureIndex;
+    // The barline before this <measure>: a double where one pass gives way to the next, and
+    // none between two pieces of one measure -- unless the one written there already says more,
+    // a repeat or a final bar. A pass change wins where a measure runs on across one.
+    const written = before?.getAttribute('right') ?? null;
+    if (before && passOf(before) !== passOf(element) && !element.hasAttribute('left')) {
+      if ([null, 'single', 'invis'].includes(written)) before.setAttribute('right', 'dbl');
+    } else if (continues && [null, 'single'].includes(written)) {
+      before.setAttribute('right', 'invis');
+    }
+    before = element;
+    if (continues) {
+      previous.durationQ += subMeasure.durationQ;
+      previous.subMeasureIndex = subMeasure.subMeasureIndex;
+      previous.elements.push(element);
+    } else {
+      measures.push({
+        timeSignature: [...subMeasure.timeSignature],
+        durationQ: subMeasure.durationQ,
+        measureIndex: subMeasure.measureIndex,
+        subMeasureIndex: subMeasure.subMeasureIndex,
+        elements: [element],
+      });
+    }
+  }
+  if (measures.length === 0) return;
+
+  // The same rule the score's own measures are numbered by: a pickup the document opens on --
+  // a first measure short of its meter -- is 0, and every measure after it takes the next number
+  let counter = 0;
+  measures.forEach((measure, index) => {
+    const [count, unit] = measure.timeSignature;
+    const opensOnPickup = index === 0 && measure.durationQ < count * (4 / unit);
+    const measureNumber = opensOnPickup ? '0' : String(++counter);
+    for (const element of measure.elements) element.setAttribute('n', measureNumber);
+  });
+}
+
 
 // The parts sounding on a staff at a chord position, as a list of lists indexed by staff
 // part index, plus whichever of them carry the tune. `cache` is supplied by the caller and
@@ -3141,6 +3572,18 @@ ChScore.prototype._lateMelodyLyricTargets = function (melodyByChordPosition, mel
 // Clean up and add metadata to MEI document based on rendering options
 ChScore.prototype._updateMei = function () {
   this._scoreData.meiParsed = this._scoreData.meiParsedComplete.cloneNode(true);
+  // The copies the last rebuild recorded went with it. What the score itself is written in
+  // stays -- measures[].subMeasureIds names exactly those -- drawn as the score writes it, not
+  // as the last rebuild did: a repeat sign an introduction adds belongs to that rebuild alone.
+  const ownSubMeasureIds = new Set(
+    this._scoreData.measures.flatMap(measure => measure.subMeasureIds));
+  for (const subMeasureId of Object.keys(this._scoreData.subMeasuresById)) {
+    if (!ownSubMeasureIds.has(subMeasureId)) delete this._scoreData.subMeasuresById[subMeasureId];
+  }
+  for (const element of this._scoreData.meiParsedComplete.querySelectorAll('measure')) {
+    const subMeasure = this._scoreData.subMeasuresById[element.getAttribute('xml:id')];
+    if (subMeasure) subMeasure.rightBarLine = element.getAttribute('right') ?? 'single';
+  }
 
   // Set chord set visibility
   // Add attributes to chord symbols: @ch-superscript
@@ -3351,7 +3794,12 @@ ChScore.prototype._updateMei = function () {
         sectionIdCounter[sectionId] += 1;
         for (const element of sectionsById[sectionId]) {
           const newElement = element.cloneNode(true);
-          this._suffixIds(newElement, `-rend${sectionIdCounter[sectionId]}`);
+          const suffix = `-rend${sectionIdCounter[sectionId]}`;
+          const copies = Array.from(newElement.querySelectorAll('measure'));
+          const sourceIds = copies.map(measure => measure.getAttribute('xml:id'));
+          this._suffixIds(newElement, suffix);
+          // An exact copy, so each measure stands for the sub-measure it was cloned from
+          copies.forEach((measure, index) => this._addRebuiltSubMeasure(measure, sourceIds[index]));
           if (newElement.matches('section, ending')) {
             newElement.setAttribute('ch-iteration', iterationNumber);
           }
@@ -3756,6 +4204,64 @@ ChScore.prototype._updateMei = function () {
     }
   }
 
+  // An expansion places measures where the score did not -- a verse played again after the
+  // song modulated, an introduction drawn from after a change of meter -- so wherever the key or
+  // meter in force is not the one a <measure> is written in, a <scoreDef> puts it back
+  const inForce = { timeSignature: [0, 0], keySignatureId: null };
+  const definitions = 'scoreDef, staffDef, keySig, meterSig, measure';
+  for (const element of this._scoreData.meiParsed.querySelectorAll(definitions)) {
+    if (!element.matches('measure')) {
+      this._applyMeiDefinition(element, inForce);
+      continue;
+    }
+    const subMeasure = this._scoreData.subMeasuresById[element.getAttribute('xml:id')];
+    if (!subMeasure) continue;
+    const [count, unit] = subMeasure.timeSignature;
+    const keyChanged = subMeasure.keySignatureId != null
+      && subMeasure.keySignatureId !== inForce.keySignatureId;
+    const meterChanged = unit
+      && (count !== inForce.timeSignature[0] || unit !== inForce.timeSignature[1]);
+    if (!keyChanged && !meterChanged) continue;
+    const scoreDef = this._createMeiElement(this._scoreData.meiParsed, 'scoreDef');
+    scoreDef.setAttribute('optimize', 'true');
+    if (keyChanged) {
+      const key = Object.values(this._keySignatures)
+        .find(keys => keys[subMeasure.keySignatureId])[subMeasure.keySignatureId];
+      const keySig = this._createMeiElement(this._scoreData.meiParsed, 'keySig');
+      keySig.setAttribute('sig', key.meiSig);
+      keySig.setAttribute('mode', key.tonality);
+      scoreDef.appendChild(keySig);
+    }
+    if (meterChanged) {
+      const meterSig = this._createMeiElement(this._scoreData.meiParsed, 'meterSig');
+      meterSig.setAttribute('count', String(count));
+      meterSig.setAttribute('unit', String(unit));
+      scoreDef.appendChild(meterSig);
+    }
+    element.parentNode.insertBefore(scoreDef, element);
+    for (const definition of scoreDef.children) this._applyMeiDefinition(definition, inForce);
+  }
+
+  // Number the document now it is whole -- the introduction, the passes an expansion made,
+  // and the song they are drawn from -- the way the score data counts measures, so @n reads
+  // the same however the score is expanded, and settle the barlines between its measures
+  this._renumberMeasures(this._scoreData.meiParsed);
+
+  // The records follow the document as drawn: each <measure> with the barline settled above,
+  // and none kept for a copy this rebuild made and then dropped, as a hidden section's is
+  const drawnSubMeasureIds = new Set();
+  for (const element of this._scoreData.meiParsed.querySelectorAll('measure')) {
+    const subMeasureId = element.getAttribute('xml:id');
+    drawnSubMeasureIds.add(subMeasureId);
+    const subMeasure = this._scoreData.subMeasuresById[subMeasureId];
+    if (subMeasure) subMeasure.rightBarLine = element.getAttribute('right') ?? 'single';
+  }
+  for (const subMeasureId of Object.keys(this._scoreData.subMeasuresById)) {
+    if (!ownSubMeasureIds.has(subMeasureId) && !drawnSubMeasureIds.has(subMeasureId)) {
+      delete this._scoreData.subMeasuresById[subMeasureId];
+    }
+  }
+
   // Save changes
   this._scoreData.meiString = (new XMLSerializer()).serializeToString(this._scoreData.meiParsed);
   this._vrvToolkit.loadData(this._scoreData.meiString);
@@ -4094,10 +4600,8 @@ ChScore.prototype._updateSvg = function (svg) {
       // Draw measure labels, over the measure's first chord position so that the three rows
       // below the system line up with each other
       const measureLabelClassName = 'ch-measure-label';
-      // An expanded score plays a measure more than once, and the copies are the original id
-      // suffixed with the pass they belong to, so the number comes from the element it copies
-      const labelSubMeasure = this._scoreData.subMeasuresById[measure.id]
-        ?? this._scoreData.subMeasuresById[measure.id.split('-rend')[0]];
+      // An expanded score's copies each have a record, pointing at the measure they copy
+      const labelSubMeasure = this._scoreData.subMeasuresById[measure.id];
       // Only where a measure opens: the sub-measures it runs on into are the same measure,
       // and labelling each of them would print one number several times
       if (labelSubMeasure?.subMeasureIndex === 0) {
@@ -4539,6 +5043,49 @@ ChScore.prototype._drawScore = function () {
   }
 }
 
+// How long an event sounds, in tstamps -- units of the meter's denominator, so a full measure
+// is `count` of them whatever the meter: in 4/4 a tstamp is a quarter note, in 3/2 a half note.
+ChScore.prototype._meiDurationTstamps = function (element, tstampUnit = 4) {
+  // A grace note is written with a @dur but takes no time: it borrows from the note it leads to
+  if (element.hasAttribute('grace')) return 0;
+  const dur = Number.parseFloat(element.getAttribute('dur') || '4');
+  const dots = Number.parseInt(element.getAttribute('dots') || '0');
+  let durTstamps = tstampUnit / dur;
+  for (let dot = 0; dot < dots; dot++) durTstamps += durTstamps / 2;
+  return durTstamps * this._meiTupletRatio(element);
+}
+
+// How much of its written length an event inside a tuplet sounds for: a triplet fits three
+// eighths into the time of two, so each sounds for 2/3 of one. Nested tuplets multiply.
+ChScore.prototype._meiTupletRatio = function (element) {
+  let ratio = 1;
+  for (let ancestor = element.parentElement;
+    ancestor && !ancestor.matches('layer'); ancestor = ancestor.parentElement) {
+    if (!ancestor.matches('tuplet')) continue;
+    const num = Number.parseInt(ancestor.getAttribute('num'));
+    const numbase = Number.parseInt(ancestor.getAttribute('numbase'));
+    if (num && numbase) ratio *= numbase / num;
+  }
+  return ratio;
+}
+
+// The inverse: a length in tstamps as MEI writes one, @dur with @dots. A length no single
+// note can spell comes back as the nearest one that can.
+ChScore.prototype._meiDurationFor = function (tstamps, tstampUnit = 4) {
+  const validDurs = [1, 2, 4, 8, 16, 32, 64];
+  for (const validDur of validDurs) {
+    const plainDur = tstampUnit / validDur;
+    if (Math.abs((tstamps / 1.5) - plainDur) < 0.01) return { dur: validDur, dots: 1 };
+    if (Math.abs((tstamps / 1.75) - plainDur) < 0.01) return { dur: validDur, dots: 2 };
+  }
+  const meiDur = tstampUnit / tstamps;
+  let nearest = validDurs[0];
+  for (const validDur of validDurs) {
+    if (Math.abs(meiDur - validDur) < Math.abs(meiDur - nearest)) nearest = validDur;
+  }
+  return { dur: nearest, dots: 0 };
+}
+
 // This function created with help from AI (Claude)
 ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
   const MUSICAL_ELEMENTS = ['note', 'rest', 'chord', 'space'];
@@ -4571,48 +5118,13 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
     }
   };
 
-  const calculateDuration = (elem, tstampUnit = 4) => {
-    const dur = Number.parseFloat(elem.getAttribute('dur') || '4');
-    const dots = Number.parseInt(elem.getAttribute('dots') || '0');
-    let durTstamps = tstampUnit / dur;
-    for (let i = 0; i < dots; i++) durTstamps += durTstamps / 2;
-    return durTstamps;
-  };
-
-  // The meter a sub-measure is written in, as [count, unit], from its own meterSig or the
-  // opening one. The unit is also the tstamp unit -- a quarter note in 4/4, a half note in
-  // 3/2 -- so a full sub-measure is `count` tstamps in any meter.
-  const openingMeterSig = meiParsed.querySelector('scoreDef meterSig');
+  // The meter a sub-measure is written in, as [count, unit], from its record -- which follows a
+  // change written anywhere before it, not only one inside it -- and 4/4 where the score names
+  // none. The unit is also the tstamp unit: a quarter note in 4/4, a half note in 3/2.
   const getMeter = (measure) => {
-    const meterSig = measure.querySelector('meterSig') ?? openingMeterSig;
-    return [
-      Number.parseInt(meterSig?.getAttribute('count') || '4'),
-      Number.parseInt(meterSig?.getAttribute('unit') || '4'),
-    ];
-  };
-
-  const convertTstampsToDur = (tstamps, tstampUnit = 4) => {
-    // tstampUnit tells us what note value = 1 tstamp
-    // In 3/2 time: tstampUnit = 2 (half note = 1 tstamp)
-    // In 4/4 time: tstampUnit = 4 (quarter note = 1 tstamp)
-    const validDurs = [1, 2, 4, 8, 16, 32, 64];
-    for (const validDur of validDurs) {
-      const plainDur = tstampUnit / validDur;
-      if (Math.abs((tstamps / 1.5) - plainDur) < 0.01) return { dur: validDur, dots: 1 };
-      if (Math.abs((tstamps / 1.75) - plainDur) < 0.01) return { dur: validDur, dots: 2 };
-    }
-    // Otherwise find nearest plain duration
-    const meiDur = tstampUnit / tstamps;
-    let nearest = validDurs[0];
-    let minDiff = Math.abs(meiDur - nearest);
-    for (const validDur of validDurs) {
-      const diff = Math.abs(meiDur - validDur);
-      if (diff < minDiff) {
-        minDiff = diff;
-        nearest = validDur;
-      }
-    }
-    return { dur: nearest, dots: 0 };
+    const timeSignature =
+      this._scoreData.subMeasuresById[measure.getAttribute('xml:id')]?.timeSignature;
+    return timeSignature?.[1] ? timeSignature : [4, 4];
   };
 
   const clipElement = (elem, currentTstamp, elemEnd, startTstamp, endTstamp, idMap, tstampUnit) => {
@@ -4628,7 +5140,8 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
         newDur = endTstamp - currentTstamp;
       }
 
-      const result = convertTstampsToDur(newDur, tstampUnit);
+      // Written back as the tuplet writes it: the clipped length is what it sounds for
+      const result = this._meiDurationFor(newDur / this._meiTupletRatio(elem), tstampUnit);
       newElem.setAttribute('dur', String(result.dur));
       if (result.dots > 0) {
         newElem.setAttribute('dots', String(result.dots));
@@ -4662,11 +5175,12 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
           }
           containerTstamp = result.endTstamp;
         } else if (MUSICAL_ELEMENTS.includes(child.tagName)) {
-          const durTstamps = calculateDuration(child, tstampUnit);
+          const durTstamps = this._meiDurationTstamps(child, tstampUnit);
           const elemEnd = containerTstamp + durTstamps;
+          const [from, to] = [chRoundTstamp(containerTstamp), chRoundTstamp(elemEnd)];
 
-          if (containerTstamp < endTstamp && elemEnd > startTstamp) {
-            children.push(clipElement(child, containerTstamp, elemEnd, startTstamp, endTstamp, idMap, tstampUnit));
+          if (from < endTstamp && to > startTstamp) {
+            children.push(clipElement(child, from, to, startTstamp, endTstamp, idMap, tstampUnit));
           }
 
           containerTstamp = elemEnd;
@@ -4709,18 +5223,21 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       }
 
       if (!MUSICAL_ELEMENTS.includes(elem.tagName)) {
-        if (startTstamp <= currentTstamp && currentTstamp < endTstamp) {
+        const at = chRoundTstamp(currentTstamp);
+        if (startTstamp <= at && at < endTstamp) {
           newLayer.appendChild(elem.cloneNode(true));
           hasContent = true;
         }
         return 0;
       }
 
-      const durTstamps = calculateDuration(elem, tstampUnit);
+      const durTstamps = this._meiDurationTstamps(elem, tstampUnit);
       const elemEnd = currentTstamp + durTstamps;
+      const [from, to] = [chRoundTstamp(currentTstamp), chRoundTstamp(elemEnd)];
 
-      if (currentTstamp < endTstamp && elemEnd > startTstamp) {
-        newLayer.appendChild(clipElement(elem, currentTstamp, elemEnd, startTstamp, endTstamp, idMap, tstampUnit));
+      if (from < endTstamp && to > startTstamp) {
+        newLayer.appendChild(
+          clipElement(elem, from, to, startTstamp, endTstamp, idMap, tstampUnit));
         hasContent = true;
       }
 
@@ -4752,18 +5269,16 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
     }
   };
 
-  // How long a sub-measure is as written, in tstamps, so a full one is `count` in any meter.
-  // Asked of the sub-measure rather than one staff: the longest any staff runs, since a rest
-  // says nothing about its length, and a whole-measure rest fills whatever the meter asks for.
-  // `meter` is for callers tracking it across the document, which a meter change needs. Only
-  // for sub-measures as the score wrote them: a clipped copy keeps its resting staff's mRest.
-  const getSubMeasureDuration = (measure, meter = null) => {
-    const [count, tstampUnit] = meter ?? getMeter(measure);
+  // How long a sub-measure is as written, in tstamps: the longest any staff runs, since a rest
+  // says nothing, and a whole-measure rest fills the meter. Only for sub-measures as written: a
+  // clipped copy keeps its resting staff's mRest.
+  const getSubMeasureDuration = (measure) => {
+    const [count, tstampUnit] = getMeter(measure);
     const tstampsIn = (container) => {
       let tstamps = 0;
       for (const element of container.children) {
         if (MUSICAL_ELEMENTS.includes(element.tagName)) {
-          tstamps += calculateDuration(element, tstampUnit);
+          tstamps += this._meiDurationTstamps(element, tstampUnit);
         } else if (element.matches('beam, tuplet')) {
           tstamps += tstampsIn(element);
         }
@@ -4775,10 +5290,12 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       const layer = staff.querySelector('layer');
       if (!layer) continue;
       if (layer.querySelector(':scope > mRest, :scope > mSpace')) return count;
-      longestTstamps = Math.max(longestTstamps, tstampsIn(layer));
+      longestTstamps = Math.max(longestTstamps, chRoundTstamp(tstampsIn(layer)));
     }
     return longestTstamps;
   };
+
+  const usedCopyIds = new Set();
 
   // `start` and `end` are [subMeasureId, tstamp] pairs. By id rather than by @n, which names the
   // measure and so cannot tell one sub-measure of it from another.
@@ -4794,6 +5311,14 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
     return selected.map((measure, i) => {
       const newM = this._createMeiElement(meiParsed, 'measure');
       newM.setAttribute('n', measure.getAttribute('n'));
+      // Its own id, so it has a record of its own (see _addRebuiltSubMeasure). Two ranges can
+      // copy the same sub-measure -- one ending part-way through it, the next picking it up.
+      let copyId = `${measure.getAttribute('xml:id')}-intro`;
+      for (let copy = 2; usedCopyIds.has(copyId); copy++) {
+        copyId = `${measure.getAttribute('xml:id')}-intro${copy}`;
+      }
+      usedCopyIds.add(copyId);
+      this._setMeiId(newM, copyId);
 
       const mStart = i === 0 ? startTstamp : null;
       const mEnd = i === selected.length - 1 ? endTstamp : null;
@@ -4848,6 +5373,25 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
         || (mEnd != null && mEnd <= getMeter(measure)[0])) {
         newM.setAttribute('metcon', 'false');
       }
+      // The range clips the sub-measures at its edges, so the copy's own span is worked out
+      // here, in the score's time, rather than measured off the notation again later
+      let span = null;
+      if (mStart != null || mEnd != null) {
+        const quartersPerTstamp = 4 / tstampUnit;
+        const fromTstamp = mStart ?? 1;
+        const toTstamp = Math.min(mEnd ?? Infinity, getSubMeasureDuration(measure) + 1);
+        span = { durationQ: (toTstamp - fromTstamp) * quartersPerTstamp };
+        const sourceStartQ =
+          this._scoreData.subMeasuresById[measure.getAttribute('xml:id')]?.startQ;
+        if (sourceStartQ != null) {
+          span.startQ = this._tstampToQstamp(fromTstamp, sourceStartQ, Infinity, tstampUnit);
+          span.endQ = span.startQ + span.durationQ;
+          const qstamps = this._chordPositionQstamps();
+          const first = this._bisectLeft(qstamps, span.startQ);
+          span.firstChordPosition = qstamps[first] < span.endQ ? first : null;
+        }
+      }
+      this._addRebuiltSubMeasure(newM, measure.getAttribute('xml:id'), span);
 
       return newM;
     });
@@ -4942,24 +5486,6 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
     newSectionSubMeasures[0]?.append(tempo);
   }
 
-  // Handle barline between intro section and main section
-  const lastIntroSubMeasure = newSectionSubMeasures.at(-1);
-  const firstMainSubMeasure = originalSubMeasures[0];
-
-  if (lastIntroSubMeasure && firstMainSubMeasure) {
-    const lastIntroIsPartial = lastIntroSubMeasure.getAttribute('metcon') === 'false';
-    const firstMainIsPartial = firstMainSubMeasure.getAttribute('metcon') === 'false';
-    const firstMainHasNoLeftBarline = !firstMainSubMeasure.getAttribute('left');
-
-    if (lastIntroIsPartial && firstMainIsPartial && firstMainHasNoLeftBarline) {
-      lastIntroSubMeasure.setAttribute('right', 'invis');
-    }
-  }
-
-  // Number the whole document -- the introduction and the song it runs into -- the way the
-  // score data counts measures, so @n reads the same whether or not the score is expanded
-  this._renumberMeasures(meiParsed, (measure, timeSignature) =>
-    getSubMeasureDuration(measure, timeSignature) * (4 / timeSignature[1]));
 
   return meiParsed;
 }
@@ -5193,17 +5719,27 @@ ChScore.prototype._normalizeTempos = function (tempoElements) {
 
 // Every key the score is written in, as slugs ("e-flat-major"), in printed order
 ChScore.prototype._getKeySignatureIds = function (tonality = 'major') {
-  const keySignatures = Object.entries(this._getKeySignatures(tonality));
   const keySignatureIds = [];
   for (const element of this._scoreData.meiParsed.querySelectorAll('keySig, scoreDef[key\\.sig], staffDef[key\\.sig]')) {
-    const meiSig = element.getAttribute('sig') ?? element.getAttribute('key.sig');
-    const meiPname = element.getAttribute('pname') ?? element.getAttribute('key.pname');
-    const meiAccid = element.getAttribute('accid') ?? element.getAttribute('key.accid');
-    const meiPnameAccid = meiPname ? (meiPname + (['f', 's'].includes(meiAccid) ? meiAccid : '')) : null;
-    const entry = keySignatures.find(ks => (ks[1].meiSig === meiSig || ks[1].meiPnameAccid === meiPnameAccid));
-    if (entry && entry[0] !== keySignatureIds.at(-1)) keySignatureIds.push(entry[0]);
+    const keySignatureId = this._keySignatureIdOf(element, tonality);
+    if (keySignatureId && keySignatureId !== keySignatureIds.at(-1)) keySignatureIds.push(keySignatureId);
   }
   return keySignatureIds;
+}
+
+// The key an element names -- a keySig, or a scoreDef or staffDef carrying one as attributes --
+// as its slug ("e-flat-major"), or null where it names none the table knows. The tonality is
+// the element's own @mode unless the caller settles it.
+ChScore.prototype._keySignatureIdOf = function (element, tonality = null) {
+  const meiSig = element.getAttribute('sig') ?? element.getAttribute('key.sig');
+  const meiPname = element.getAttribute('pname') ?? element.getAttribute('key.pname');
+  if (meiSig == null && meiPname == null) return null;
+  const meiAccid = element.getAttribute('accid') ?? element.getAttribute('key.accid');
+  const meiPnameAccid = meiPname ? (meiPname + (['f', 's'].includes(meiAccid) ? meiAccid : '')) : null;
+  const mode = tonality ?? element.getAttribute('mode') ?? element.getAttribute('key.mode') ?? 'major';
+  const entry = Object.entries(this._getKeySignatures(mode) ?? {})
+    .find(([, info]) => info.meiSig === meiSig || info.meiPnameAccid === meiPnameAccid);
+  return entry?.[0] ?? null;
 }
 
 
@@ -5522,7 +6058,8 @@ ChScore.prototype._sungChordPositions = function (subMeasureData, chordPositionI
   const selector = `staff[n="${staffNumber}"]${inLayer} :is(note, chord):has(syl:not(:empty))`;
   const chordPositions = [];
   for (let smi = startSubMeasure; smi < endSubMeasure && chordPositions.length < limit; smi++) {
-    for (const element of subMeasureData.subMeasures[smi].querySelectorAll(selector)) {
+    for (const element of subMeasureData.subMeasures[smi].flatMap(
+      measureElement => Array.from(measureElement.querySelectorAll(selector)))) {
       // A verse hangs off the chord as readily as off a note, and only notes are indexed
       const note = element.matches('chord') ? element.querySelector('note') : element;
       const chordPosition = chordPositionIndex.byElementId[note?.getAttribute('xml:id')];
@@ -5536,17 +6073,23 @@ ChScore.prototype._sungChordPositions = function (subMeasureData, chordPositionI
 // each measure. Read straight from the engraving: @ch-melody is assigned from the template
 // this is helping to derive, so it can't be leaned on here.
 ChScore.prototype._singingLayersBySubMeasure = function (subMeasureData, staffNumber) {
-  return subMeasureData.subMeasures.map(measureElement => {
-    const layersWithNotes = [];
-    const layersWithSyllables = [];
-    const staff = measureElement.querySelector(`staff[n="${staffNumber}"]`);
-    for (const layer of staff?.querySelectorAll('layer') ?? []) {
-      const layerNumber = Number.parseInt(layer.getAttribute('n'));
-      if (Number.isNaN(layerNumber) || !layer.querySelector('note')) continue;
-      layersWithNotes.push(layerNumber);
-      if (layer.querySelector('syl:not(:empty)')) layersWithSyllables.push(layerNumber);
+  return subMeasureData.subMeasures.map(measureElements => {
+    // Unioned across the measure: a layer that only sings in its second sub-measure is still
+    // singing in the measure
+    const layersWithNotes = new Set();
+    const layersWithSyllables = new Set();
+    for (const measureElement of measureElements) {
+      const staff = measureElement.querySelector(`staff[n="${staffNumber}"]`);
+      for (const layer of staff?.querySelectorAll('layer') ?? []) {
+        const layerNumber = Number.parseInt(layer.getAttribute('n'));
+        if (Number.isNaN(layerNumber) || !layer.querySelector('note')) continue;
+        layersWithNotes.add(layerNumber);
+        if (layer.querySelector('syl:not(:empty)')) layersWithSyllables.add(layerNumber);
+      }
     }
-    return { layersWithNotes: layersWithNotes, layersWithSyllables: layersWithSyllables };
+    return {
+      layersWithNotes: [...layersWithNotes], layersWithSyllables: [...layersWithSyllables],
+    };
   });
 }
 
@@ -5592,10 +6135,18 @@ ChScore.prototype._mergeSegmentBoundaries = function (directionBoundaries, melod
 // changes voicing is read a section at a time, so _getStaffLayoutInfo totals these over
 // whatever range it's asked about rather than going back to the engraving each time.
 ChScore.prototype._getStaffSubMeasureData = function () {
-  // Indexed by sub-measure, not by measure: CH_MIN_SEGMENT_SUB_MEASURES and
-  // CH_UNSINGABLE_SUB_MEASURES are tuned against this unit, and re-basing them to measures makes
-  // the parts derivation for "It Is Well with My Soul" read two parts that aren't there.
-  const subMeasures = Array.from(this._scoreData.meiParsed.querySelectorAll('measure'));
+  // Indexed by sub-measure as engraved: CH_MIN_SEGMENT_SUB_MEASURES and CH_UNSINGABLE_SUB_MEASURES
+  // are tuned to it (counted by measure, "It Is Well with My Soul" reads two parts it hasn't).
+  // A split's pieces fold back into the <measure> they were cut from -- hence a list per entry.
+  const subMeasures = [];
+  for (const element of this._scoreData.meiParsed.querySelectorAll('measure')) {
+    const subMeasure = this._scoreData.subMeasuresById[element.getAttribute('xml:id')];
+    if (subMeasures.length > 0 && subMeasure?.splitFrom) {
+      subMeasures.at(-1).push(element);
+    } else {
+      subMeasures.push([element]);
+    }
+  }
   const staffDefs = Array.from(this._scoreData.meiParsed.querySelectorAll('staffDef'));
 
   const byStaff = staffDefs.map(staffDef => ({
@@ -5620,38 +6171,55 @@ ChScore.prototype._getStaffSubMeasureData = function () {
 
   for (let smi = 0; smi < subMeasures.length; smi++) {
     for (const staffData of byStaff) {
-      const staff = subMeasures[smi].querySelector(`staff[n="${staffData.staffNumber}"]`);
-      if (!staff) continue;
+      // A voice can enter, drop out or start singing at a sub-measure boundary, so the whole
+      // measure is read before any of it is judged
+      const staffElements = subMeasures[smi]
+        .map(element => element.querySelector(`staff[n="${staffData.staffNumber}"]`))
+        .filter(Boolean);
+      if (staffElements.length === 0) continue;
       const subMeasure = staffData.bySubMeasure[smi];
 
-      const layers = Array.from(staff.querySelectorAll('layer'));
-      this._countMeasureVoices(layers, subMeasure.voiceCounts);
-      if (staff.querySelector('verse')) subMeasure.hasLyricElement = true;
-      // Some staves number their only layer 2 (a stem-direction convention),
-      // so fall back to whichever layer comes first
-      const melodyLayer = staff.querySelector('layer[n="1"]') ?? staff.querySelector('layer');
-      if (!melodyLayer) continue;
-      const melodyNotes = melodyLayer.querySelectorAll('note');
-      subMeasure.melodyLayerNotes += melodyNotes.length;
-      for (const note of melodyNotes) {
-        if (note.parentElement?.matches('chord')) subMeasure.melodyLayerChordNotes += 1;
+      let syllablePositions = 0;
+      let lowerVoiceNotes = 0;
+      let secondVoiceEvents = 0;
+      let secondVoiceSings = false;
+      let mostLayers = 0;
+      for (const staff of staffElements) {
+        const layers = Array.from(staff.querySelectorAll('layer'));
+        this._countMeasureVoices(layers, subMeasure.voiceCounts);
+        mostLayers = Math.max(mostLayers, layers.length);
+        if (staff.querySelector('verse')) subMeasure.hasLyricElement = true;
+        // Some staves number their only layer 2 (a stem-direction convention),
+        // so fall back to whichever layer comes first
+        const melodyLayer = staff.querySelector('layer[n="1"]') ?? staff.querySelector('layer');
+        if (!melodyLayer) continue;
+        const melodyNotes = melodyLayer.querySelectorAll('note');
+        subMeasure.melodyLayerNotes += melodyNotes.length;
+        for (const note of melodyNotes) {
+          if (note.parentElement?.matches('chord')) subMeasure.melodyLayerChordNotes += 1;
+        }
+        const counts = this._countLowerVoiceNotes(melodyLayer, layers);
+        syllablePositions += counts.syllablePositions;
+        lowerVoiceNotes += counts.lowerVoiceNotes;
+        secondVoiceEvents += counts.secondVoiceEvents;
+        // The staff is only compared with the one above where its second voice
+        // is singing: silent for the measure, or written a rest, it's tacet
+        secondVoiceSings = secondVoiceSings
+          || (staff.querySelector('note') !== null && !counts.secondVoiceResting);
       }
-      const counts = this._countLowerVoiceNotes(melodyLayer, layers);
-      subMeasure.syllables += counts.syllablePositions;
-      subMeasure.secondVoice += counts.secondVoiceEvents;
-      // The staff is only compared with the one above where its second voice
-      // is singing: silent for the sub-measure, or written a rest, it's tacet
-      subMeasure.sounds = subMeasure.sounds
-        || (staff.querySelector('note') !== null && !counts.secondVoiceResting);
 
-      if (counts.syllablePositions > 0) {
+      subMeasure.syllables += syllablePositions;
+      subMeasure.secondVoice += secondVoiceEvents;
+      subMeasure.sounds = subMeasure.sounds || secondVoiceSings;
+      // Counted once for the measure, however many sub-measures it is written in
+      if (syllablePositions > 0) {
         subMeasure.sung += 1;
-        const short = counts.lowerVoiceNotes < counts.syllablePositions;
+        const short = lowerVoiceNotes < syllablePositions;
         if (short) subMeasure.shortOfTwoParts += 1;
         // Whether a staff is accompanied is only asked of one with a second
         // voice engraved as its own layer: a staff of plain single notes is
         // short everywhere, which says nothing about who is harmonizing it
-        if (short && layers.length > 1) subMeasure.lowerVoiceCantSing += 1;
+        if (short && mostLayers > 1) subMeasure.lowerVoiceCantSing += 1;
       }
     }
   }
@@ -5949,8 +6517,9 @@ ChScore.prototype._getPartsSegmentBoundaries = function (subMeasureData, wholeSt
     // Tempo and dynamic marks are elements of their own, so most of what is written over
     // a staff isn't a <dir>. Of what is, anything addressed to the singers is placed above
     // or below the staff — guitar chords carry no placement — and navigation is named.
-    const measureElement = subMeasureData.subMeasures[smi];
-    for (const dir of measureElement.querySelectorAll('dir[place]:not([type="coda"], [type="tocoda"], [type="segno"], [type="dalsegno"], [type="dacapo"], [type="fine"])')) {
+    const marks = subMeasureData.subMeasures[smi].flatMap(measureElement => Array.from(
+      measureElement.querySelectorAll('dir[place]:not([type="coda"], [type="tocoda"], [type="segno"], [type="dalsegno"], [type="dacapo"], [type="fine"])')));
+    for (const dir of marks) {
       const staff = dir.getAttribute('staff');
       if (staff && accompanimentStaves.has(staff)) continue;
       const text = dir.textContent.trim();
@@ -5958,7 +6527,8 @@ ChScore.prototype._getPartsSegmentBoundaries = function (subMeasureData, wholeSt
       if (CH_CHORD_SYMBOL.test(text) || CH_FALSE_POSITIVE.test(text)) continue;
 
       // Against the sub-measure it is written in, since a @tstamp counts from there
-      const chordPosition = indexedChordPosition(dir, measureElement.getAttribute('xml:id'));
+      const chordPosition = indexedChordPosition(
+        dir, dir.closest('measure').getAttribute('xml:id'));
       if (chordPosition === null) continue;
       boundaries.push({ atSubMeasure: smi, chordPosition: chordPosition });
       // One direction per measure is enough — the rest only mark the same place again
@@ -6204,15 +6774,7 @@ ChScore.prototype._wholeNotesOf = function (element) {
   const dur = Number.parseInt(element.getAttribute('dur'));
   if (!dur) return null;
   const dots = Number.parseInt(element.getAttribute('dots')) || 0;
-  let value = (1 / dur) * (2 - Math.pow(2, -dots));
-  for (let ancestor = element.parentElement;
-    ancestor && !ancestor.matches('layer'); ancestor = ancestor.parentElement) {
-    if (!ancestor.matches('tuplet')) continue;
-    const num = Number.parseInt(ancestor.getAttribute('num'));
-    const numbase = Number.parseInt(ancestor.getAttribute('numbase'));
-    if (num && numbase) value *= numbase / num;
-  }
-  return value;
+  return (1 / dur) * (2 - Math.pow(2, -dots)) * this._meiTupletRatio(element);
 }
 
 // The single rest worth that many whole notes, or null where no plain rest is (5/8 of a

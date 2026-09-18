@@ -119,6 +119,15 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
   });
 
   // ── Sections ──
+  // Every measure here is four chord positions or fewer, too short to be worth dividing for
+  // wrapping (see _splitMeasure) -- the splitting itself is covered on This Little Light
+  describe('Measure splitting for wrapping', () => {
+    it('should leave measures of four chord positions or fewer whole', () => {
+      expect(Object.values(score._scoreData.subMeasuresById)
+        .some(subMeasure => subMeasure.splitFrom)).toBe(false);
+    });
+  });
+
   describe('Sections', () => {
     it('should have 9 sections (intro + 4 verses + 4 choruses)', () => {
       expect(score._scoreData.sections.length).toBe(9);

@@ -55,13 +55,119 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   // ── Basic score structure ──
+  // Verovio only wraps a system between <measure> elements, so wide measures are divided
+  // where nothing has to be cut
+  describe('Measure splitting for wrapping', () => {
+    const splitPieces = () => Array.from(score._scoreData.meiParsed.querySelectorAll('measure'))
+      .filter(element =>
+        score._scoreData.subMeasuresById[element.getAttribute('xml:id')]?.splitFrom);
+
+    it('should split only where the score data says a measure continues', () => {
+      const marked = splitPieces().map(element => element.getAttribute('xml:id'));
+      const continuing = Object.values(score._scoreData.subMeasuresById)
+        .filter(subMeasure => subMeasure.splitFrom).map(sub => sub.subMeasureId);
+      expect(marked.length).toBeGreaterThan(0);
+      expect(new Set(continuing)).toEqual(new Set(marked));
+    });
+
+    it('should leave each piece inside the measure it was cut from', () => {
+      for (const piece of splitPieces()) {
+        // A system break can sit between two measures
+        let previous = piece.previousElementSibling;
+        while (previous && previous.tagName !== 'measure') previous = previous.previousElementSibling;
+        // The piece before it runs into it without a barline, and both carry the measure's
+        // own number -- the split is not a new measure. A mark can also sit on a sub-measure
+        // the engraver wrote, which reaches its measure over a drawn barline.
+        expect(previous.tagName).toBe('measure');
+        if (piece.getAttribute('xml:id').includes('-split')) {
+          expect(previous.getAttribute('right')).toBe('invis');
+        }
+        expect(piece.getAttribute('n')).toBe(previous.getAttribute('n'));
+        const subMeasure = score._scoreData.subMeasuresById[piece.getAttribute('xml:id')];
+        const measure = score._scoreData.measures[subMeasure.measureIndex];
+        expect(subMeasure.subMeasureIndex).toBeGreaterThan(0);
+        expect(subMeasure.startQ).toBeGreaterThan(measure.startQ);
+        expect(subMeasure.endQ).toBeLessThanOrEqual(measure.endQ);
+      }
+    });
+
+    it('should shorten the measure a piece was cut off, not just add the piece', () => {
+      // A split divides a measure's span rather than adding to it: the pieces still add up
+      for (const measure of score._scoreData.measures) {
+        const total = measure.subMeasureIds.reduce((sum, subMeasureId) =>
+          sum + score._scoreData.subMeasuresById[subMeasureId].durationQ, 0);
+        expect(total).toBeCloseTo(measure.durationQ, 6);
+      }
+    });
+
+    it('should never put a split inside a slur, tie or other spanner', () => {
+      // A spanner is written in the <measure> it starts in; no piece cut for wrapping may sit
+      // after that one and at or before the one holding its end
+      const measures = Array.from(score._scoreData.meiParsed.querySelectorAll('measure'));
+      const isPiece = (element) =>
+        Boolean(score._scoreData.subMeasuresById[element.getAttribute('xml:id')]?.splitFrom);
+      let checked = 0;
+      measures.forEach((measure, start) => {
+        for (const spanner of measure.querySelectorAll(':scope > [endid]')) {
+          const endId = spanner.getAttribute('endid').substring(1);
+          const end = measures.findIndex(element => element.querySelector(`[*|id="${endId}"]`));
+          if (end < 0) continue;
+          checked += 1;
+          expect(measures.slice(start + 1, end + 1).some(isPiece)).toBe(false);
+        }
+      });
+      expect(checked).toBeGreaterThan(0);
+    });
+
+    it('should split only measures of more than four chord positions, and each once', () => {
+      const chordPositions = score._scoreData.chordPositions;
+      for (const measure of score._scoreData.measures) {
+        const pieces = measure.subMeasureIds.filter(id => score._scoreData.subMeasuresById[id].splitFrom);
+        expect(pieces.length).toBeLessThanOrEqual(1);
+        if (pieces.length === 0) continue;
+        const inMeasure = chordPositions.filter(info =>
+          info.startQ >= measure.startQ && info.startQ < measure.endQ);
+        expect(inMeasure.length).toBeGreaterThan(4);
+      }
+    });
+
+    it('should give every sub-measure record the same fields, split pieces included', () => {
+      const expectedKeys = [
+        'durationQ', 'endQ', 'firstChordPosition', 'keySignatureId', 'measureIndex',
+        'rightBarLine', 'startQ', 'subMeasureId', 'subMeasureIndex', 'timeSignature',
+      ];
+      const records = Object.values(score._scoreData.subMeasuresById);
+      expect(records.some(record => record.splitFrom)).toBe(true);
+      for (const record of records) {
+        // splitFrom is what marks a piece cut for wrapping, so only those carry it
+        expect(Object.keys(record).filter(key => key !== 'splitFrom').sort()).toEqual(expectedKeys);
+        expect(record.keySignatureId).toBe(score._scoreData.keySignatureInfo.keySignatureId);
+      }
+    });
+
+    it('should never cut a word in half', () => {
+      // A syllable opening a piece has to open a word too: a medial or terminal one would be
+      // left hanging on the far side of a system break
+      for (const piece of splitPieces()) {
+        for (const staff of piece.querySelectorAll('staff')) {
+          const firstSyl = staff.querySelector('syl');
+          if (!firstSyl) continue;
+          expect(['m', 't']).not.toContain(firstSyl.getAttribute('wordpos'));
+        }
+      }
+    });
+
+  });
+
   describe('Basic score structure', () => {
     it('should have 2 staves', () => {
       expect(score._scoreData.staffNumbers).toEqual([1, 2]);
     });
 
-    it('should have 24 measures', () => {
+    it('should have 24 measures, written in 30 sub-measures', () => {
+      // Six measures long enough to be worth dividing are split once each for wrapping
       expect(score._scoreData.measures.length).toBe(24);
+      expect(Object.keys(score._scoreData.subMeasuresById).length).toBe(30);
     });
 
     it('should be in C major', () => {
@@ -385,9 +491,9 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
     beforeAll(() => { score.setOptions({ expandScore: 'full-score' }); });
     afterAll(() => { resetScoreState(score); });
 
-    it('should expand from 24 to exactly 37 measures', () => {
+    it('should expand from 30 to exactly 49 sub-measures', () => {
       const measures = score._scoreData.meiParsed.querySelectorAll('measure').length;
-      expect(measures).toBe(37);
+      expect(measures).toBe(49);
     });
 
     it('should create -rend suffixed section IDs', () => {
@@ -405,10 +511,10 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
       expect(rptEnds.length).toBe(0);
     });
 
-    it('should restore original 24 measures when expandScore is set back to false', () => {
+    it('should restore original 30 sub-measures when expandScore is set back to false', () => {
       score.setOptions({ expandScore: false });
       const measuresRestored = score._scoreData.meiParsed.querySelectorAll('measure').length;
-      expect(measuresRestored).toBe(24);
+      expect(measuresRestored).toBe(30);
       score.setOptions({ expandScore: 'full-score' });
     });
 
@@ -438,9 +544,9 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
         .toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']);
     });
 
-    it('measure count should remain 24 with expandScore intro (no change for TLL)', () => {
+    it('sub-measure count should remain 30 with expandScore intro (no change for TLL)', () => {
       const measures = score._scoreData.meiParsed.querySelectorAll('measure').length;
-      expect(measures).toBe(24);
+      expect(measures).toBe(30);
     });
   });
 

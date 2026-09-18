@@ -387,6 +387,17 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
     beforeAll(() => { score.setOptions({ expandScore: 'intro' }); });
     afterAll(() => { resetScoreState(score); });
 
+    it('should leave the repeat sign where the introduction gives way to the song', () => {
+      // A repeat sign already marks the change, so no double barline is added before it
+      const introMeasures = score._scoreData.meiParsed
+        .querySelectorAll('section[type="introduction"] measure');
+      const lastIntroMeasure = introMeasures[introMeasures.length - 1];
+      const firstSongMeasure = Array.from(score._scoreData.meiParsed.querySelectorAll('measure'))
+        .find(measure => !measure.closest('section[type="introduction"]'));
+      expect(firstSongMeasure.getAttribute('left')).toBe('rptstart');
+      expect(lastIntroMeasure.getAttribute('right')).not.toBe('dbl');
+    });
+
     it('should create an introduction section element', () => {
       const introSection = score._scoreData.meiParsed.querySelector('section[type="introduction"]');
       expect(introSection).not.toBeNull();
@@ -450,6 +461,51 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
     beforeAll(() => { score.setOptions({ expandScore: 'full-score' }); });
     afterAll(() => { resetScoreState(score); });
 
+    it('should keep each <measure>\'s record in line with it as drawn', () => {
+      // Barlines included -- the double bars the expansion adds among them -- and a clipped
+      // introduction copy's span its own
+      const records = score._scoreData.subMeasuresById;
+      const drawn = Array.from(score._scoreData.meiParsed.querySelectorAll('measure'));
+      for (const measure of drawn) {
+        const record = records[measure.getAttribute('xml:id')];
+        expect(record.rightBarLine).toBe(measure.getAttribute('right') ?? 'single');
+        if (record.startQ != null) expect(record.endQ - record.startQ).toBeCloseTo(record.durationQ, 6);
+      }
+      expect(drawn.filter(measure => records[measure.getAttribute('xml:id')].rightBarLine === 'dbl')
+        .length).toBe(4);
+    });
+
+    it('should drop the records of copies a hidden section takes out', () => {
+      const own = new Set(score._scoreData.measures.flatMap(measure => measure.subMeasureIds));
+      const copies = () => Object.keys(score._scoreData.subMeasuresById).filter(id => !own.has(id));
+      const before = copies().length;
+      const verse = score._scoreData.sections.find(section => section.type === 'verse');
+      score.setOptions({ hideSectionIds: [verse.sectionId] });
+      try {
+        const drawn = new Set(Array.from(score._scoreData.meiParsed.querySelectorAll('measure'))
+          .map(measure => measure.getAttribute('xml:id')));
+        expect(copies().length).toBeLessThan(before);
+        for (const id of copies()) expect(drawn.has(id)).toBe(true);
+      } finally {
+        score.setOptions({ hideSectionIds: [] });
+      }
+    });
+
+    it('should mark each change of pass with a double barline, and end on a final bar', () => {
+      // The introduction gives way to verse 1, and each verse to the next. Measure 14 closes
+      // each pass two beats in, and the next pass's pickup completes it.
+      const passOf = (measure) => (measure.closest('section[type="introduction"]')
+        ? 'introduction' : measure.closest('[ch-iteration]').getAttribute('ch-iteration'));
+      const measures = Array.from(score._scoreData.meiParsed.querySelectorAll('measure'));
+      const passEnds = measures.filter((measure, index) =>
+        measures[index + 1] && passOf(measure) !== passOf(measures[index + 1]));
+      expect(passEnds.length).toBe(4); // Introduction, then four verses
+      for (const measure of passEnds) expect(measure.getAttribute('right')).toBe('dbl');
+      expect(measures.at(-1).getAttribute('right')).toBe('end');
+      // And nowhere else
+      expect(measures.filter(measure => measure.getAttribute('right') === 'dbl').length).toBe(4);
+    });
+
     it('should expand from 16 to more measures', () => {
       const measuresAfter = score._scoreData.meiParsed.querySelectorAll('measure').length;
       expect(measuresAfter).toBeGreaterThan(16);
@@ -468,7 +524,7 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
       expect(introSection).not.toBeNull();
     });
 
-    it('should restore original 16 measures when expandScore is set back to false', () => {
+    it('should restore original 16 sub-measures when expandScore is set back to false', () => {
       score.setOptions({ expandScore: false });
       const measuresRestored = score._scoreData.meiParsed.querySelectorAll('measure').length;
       expect(measuresRestored).toBe(16);
@@ -790,5 +846,47 @@ describe('How Great — lyrics extraction from text file', { timeout: 30000 }, (
       expect(section.lyricsAnnotated).toBeDefined();
       expect(section.lyricsAnnotated).not.toBeNull();
     }
+  });
+});
+
+// A song that modulates part-way through, played again when expanded: each playthrough has to
+// start back in the key the song opens in, not the one the last one ended in
+describe('How Great the Wisdom and the Love — changing key part-way through', () => {
+  let modulating;
+
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function () {};
+    modulating = new ChScore('#score-container');
+    // From measure 8 on, C major instead of A-flat
+    await modulating.load('musicxml', {
+      scoreContent: sampleMusicXml.replace('<measure number="8">',
+        '<measure number="8"><attributes><key><fifths>0</fifths></key></attributes>'),
+    });
+    modulating.setOptions({ expandScore: 'full-score' });
+  });
+
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  it('should draw every measure in the key it is written in', () => {
+    const inForce = { timeSignature: [0, 0], keySignatureId: null };
+    const passStarts = [];
+    let pass = null;
+    for (const element of modulating._scoreData.meiParsed
+      .querySelectorAll('scoreDef, staffDef, keySig, meterSig, measure')) {
+      if (!element.matches('measure')) {
+        modulating._applyMeiDefinition(element, inForce);
+        continue;
+      }
+      const record = modulating._scoreData.subMeasuresById[element.getAttribute('xml:id')];
+      expect(inForce.keySignatureId).toBe(record.keySignatureId);
+      const elementPass = element.closest('[ch-iteration]')?.getAttribute('ch-iteration');
+      if (elementPass !== pass) passStarts.push(inForce.keySignatureId);
+      pass = elementPass;
+    }
+    // The introduction is drawn from measures 11-14, after the change, so it opens in C; each of
+    // the four verses opens back in A-flat
+    expect(passStarts).toEqual(
+      ['c-major', 'a-flat-major', 'a-flat-major', 'a-flat-major', 'a-flat-major']);
   });
 });

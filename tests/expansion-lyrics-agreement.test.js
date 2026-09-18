@@ -229,16 +229,24 @@ describe('Expansion keeps each part to its own words — two-part score', { time
   });
 
   it('should render the together pass with both parts words', () => {
-    // It is the two verses sung at once, so both sets of words are engraved on it -- which is
-    // exactly why it adds no stanza of its own. They interleave rather than following one
-    // another: the parts sing syllable against syllable, so the folded text alternates
-    // ("wesingasong" + "youhearourcall" + "ofpraisetoday" + ...).
+    // Both verses are engraved on the together pass, which is why it adds no stanza of its own.
+    // The parts sing syllable against syllable, so each part's words survive in the folded text
+    // as a subsequence, not a run -- how finely they interleave depends on the engraving (a split
+    // measure alternates them more often), so run lengths aren't asserted.
+    const isSubsequence = (needle, haystack) => {
+      let at = 0;
+      for (const character of needle) {
+        at = haystack.indexOf(character, at) + 1;
+        if (at === 0) return false;
+      }
+      return true;
+    };
     const together = score._scoreData.sections.find(section =>
       (section.chordPositionRanges?.[0]?.lyricLineIds?.length ?? 0) > 1);
     const text = actual.get(together.sectionId);
     expect(text).toBeDefined();
-    expect(text).toContain('wesingasong');
-    expect(text).toContain('youhearourcall');
+    expect(isSubsequence('wesingasongofpraisetoday', text)).toBe(true);
+    expect(isSubsequence('youhearourcallandknoweachname', text)).toBe(true);
   });
 
   it('should not leak the other part words into a section', () => {

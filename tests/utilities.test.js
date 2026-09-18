@@ -3351,3 +3351,352 @@ describe('_walkSungChordPositions()', () => {
     expect(entries.map(entry => entry.chordPosition)).toEqual([0, 1]);
   });
 });
+
+// ============================================================
+// _measureSplitTstamps — where a <measure> may be divided for wrapping
+// ============================================================
+
+describe('_measureSplitTstamps()', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  // One 4/4 measure of four quarter-note chords, every one a candidate split point. `extra` is
+  // written into the measure after the staff; `syllables` puts a verse on each chord.
+  function measureWith(extra = '', syllables = null) {
+    const chords = [1, 2, 3, 4].map(beat => {
+      const verse = syllables?.[beat - 1]
+        ? `<verse n="1"><syl wordpos="${syllables[beat - 1]}">x</syl></verse>` : '';
+      return `<chord xml:id="c${beat}" dur="4"><note xml:id="n${beat}" pname="c" oct="4"/>`
+        + `<note pname="e" oct="4"/>${verse}</chord>`;
+    }).join('');
+    const mei = `<mei xmlns="http://www.music-encoding.org/ns/mei"><music><body><mdiv><score>`
+      + `<section><measure xml:id="m1"><staff n="1"><layer n="1">${chords}</layer></staff>`
+      + `${extra}</measure></section></score></mdiv></body></music></mei>`;
+    return new DOMParser().parseFromString(mei, 'text/xml').querySelector('measure');
+  }
+
+  it('should split at every beat where nothing objects', () => {
+    expect(score._measureSplitTstamps(measureWith(), [4, 4])).toEqual([2, 3, 4]);
+  });
+
+  it('should not split inside a slur attached to a note of a chord', () => {
+    const measure = measureWith('<slur xml:id="s1" startid="#n1" endid="#n3"/>');
+    expect(score._measureSplitTstamps(measure, [4, 4])).toEqual([4]);
+  });
+
+  it('should not split inside a hairpin written with @tstamp2', () => {
+    const measure = measureWith('<hairpin xml:id="h1" tstamp="1" tstamp2="0m+3" form="cres"/>');
+    // Open before beat 3, so a split on beat 3 is where it ends
+    expect(score._measureSplitTstamps(measure, [4, 4])).toEqual([3, 4]);
+  });
+
+  it('should not split after a spanner that ends in a later measure', () => {
+    const measure = measureWith('<hairpin xml:id="h1" tstamp="2" tstamp2="1m+2" form="cres"/>');
+    expect(score._measureSplitTstamps(measure, [4, 4])).toEqual([2]);
+  });
+
+  it('should not split before a spanner from an earlier measure ends', () => {
+    const measure = measureWith();
+    const hairpin = measure.ownerDocument.createElement('hairpin');
+    const endEvent = measure.querySelector('[*|id="n2"]');
+    expect(score._measureSplitTstamps(measure, [4, 4], [{ spanner: hairpin, endEvent }]))
+      .toEqual([3, 4]);
+    expect(score._measureSplitTstamps(measure, [4, 4], [{ spanner: hairpin, openUntil: Infinity }]))
+      .toEqual([]);
+  });
+
+  it('should cross a slur, a tie or a word only when relaxed', () => {
+    const slurred = measureWith('<slur xml:id="s1" startid="#n1" endid="#n4"/>');
+    expect(score._measureSplitTstamps(slurred, [4, 4], [], true)).toEqual([2, 3, 4]);
+    const tie = measureWith().ownerDocument.createElement('tie');
+    const endEvent = slurred.querySelector('[*|id="n3"]');
+    expect(score._measureSplitTstamps(slurred, [4, 4], [{ spanner: tie, endEvent }], true))
+      .toEqual([2, 3, 4]);
+    const inWord = measureWith('', ['i', 'm', 'm', 't']);
+    expect(score._measureSplitTstamps(inWord, [4, 4])).toEqual([]);
+    expect(score._measureSplitTstamps(inWord, [4, 4], [], true)).toEqual([2, 3, 4]);
+  });
+
+  it('should cross a hairpin only when relaxed', () => {
+    const measure = measureWith('<hairpin xml:id="h1" tstamp="1" tstamp2="0m+3" form="cres"/>');
+    expect(score._measureSplitTstamps(measure, [4, 4])).toEqual([3, 4]);
+    expect(score._measureSplitTstamps(measure, [4, 4], [], true)).toEqual([2, 3, 4]);
+  });
+
+  it('should never split inside a beam, even when relaxed', () => {
+    const measure = measureWith();
+    const layer = measure.querySelector('layer');
+    const beam = measure.ownerDocument.createElement('beam');
+    layer.insertBefore(beam, layer.firstElementChild);
+    // Beam the first two chords together
+    beam.append(measure.querySelector('[*|id="c1"]'), measure.querySelector('[*|id="c2"]'));
+    expect(score._measureSplitTstamps(measure, [4, 4], [], true)).toEqual([3, 4]);
+  });
+
+  it('should count a tuplet by the time it fills, not its written notes', () => {
+    // Beat 2 is an eighth-note triplet on the lower staff, three eighths in the time of two:
+    // it fills one beat, so beats 3 and 4 still line up with the quarters above it
+    const doc = new DOMParser().parseFromString(
+      '<mei xmlns="http://www.music-encoding.org/ns/mei"><measure xml:id="m1">'
+      + '<staff n="1"><layer n="1">'
+      + '<note dur="4"/><note dur="4"/><note dur="4"/><note dur="4"/></layer></staff>'
+      + '<staff n="2"><layer n="1"><note dur="4"/>'
+      + '<beam><tuplet num="3" numbase="2"><note dur="8"/><note dur="8"/><note dur="8"/></tuplet></beam>'
+      + '<note dur="4"/><note dur="4"/></layer></staff></measure></mei>', 'text/xml');
+    expect(score._measureSplitTstamps(doc.querySelector('measure'), [4, 4])).toEqual([2, 3, 4]);
+  });
+
+  it('should count a grace note as taking no time', () => {
+    const doc = measureWith().ownerDocument;
+    const grace = doc.createElement('note');
+    grace.setAttribute('grace', 'acc');
+    grace.setAttribute('dur', '8');
+    const measure = measureWith();
+    const secondChord = measure.querySelector('[*|id="c2"]');
+    secondChord.before(grace);
+    // Still on beats 2, 3 and 4 -- the grace note leads into beat 2 rather than filling time
+    expect(score._measureSplitTstamps(measure, [4, 4])).toEqual([2, 3, 4]);
+  });
+
+  it('should not split before a syllable that carries on a word from an earlier measure', () => {
+    // The word begins before this measure, so its last syllable on beat 3 has nothing here
+    // before it to say so -- only its own @wordpos does
+    const measure = measureWith('', [null, null, 't', 's']);
+    expect(score._measureSplitTstamps(measure, [4, 4])).toEqual([4]);
+  });
+});
+
+// ============================================================
+// _splitMeasure — which one point a measure is split at
+// ============================================================
+
+describe('_splitMeasure()', () => {
+  let score, split;
+
+  // One 4/4 measure written in one sub-measure, whose safe points are `safeTstamps` -- or,
+  // given a function, what it returns for a clean reading and a relaxed one
+  function splitWith(safeTstamps, qstamps) {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+    const meiParsed = new DOMParser().parseFromString(
+      '<mei xmlns="http://www.music-encoding.org/ns/mei"><measure xml:id="a"/></mei>', 'text/xml');
+    const element = meiParsed.querySelector('measure');
+    score._scoreData = {
+      meiParsed: meiParsed,
+      subMeasuresById: {
+        a: { subMeasureId: 'a', timeSignature: [4, 4], startQ: 0, endQ: 4, durationQ: 4 },
+      },
+    };
+    split = null;
+    score._measureSplitTstamps = (element, meter, incoming, relaxed) =>
+      (typeof safeTstamps === 'function' ? safeTstamps(relaxed) : safeTstamps);
+    score._splitSubMeasure = (measureElement, splitTstamp) => {
+      split = splitTstamp;
+      const piece = meiParsed.createElement('measure');
+      piece.setAttribute('xml:id', 'a-split1');
+      return piece;
+    };
+    const measure = { startQ: 0, endQ: 4, durationQ: 4, subMeasureIds: ['a'] };
+    score._splitMeasure(measure, new Map([['a', element]]), qstamps, new Map());
+    return measure;
+  }
+
+  it('should split once, at the safe point nearest the middle', () => {
+    // Beats 2, 2.5 and 4 are safe. The middle is beat 3: beat 2.5 is half a beat short of
+    // it, beats 2 and 4 a whole beat either side
+    const measure = splitWith([2, 2.5, 4], [0, 0.5, 1, 1.5, 2, 3, 4]);
+    expect(split).toBe(2.5);
+    expect(measure.subMeasureIds).toEqual(['a', 'a-split1']);
+    expect(score._scoreData.subMeasuresById['a-split1']).toMatchObject(
+      { splitFrom: 'a', startQ: 1.5, endQ: 4, durationQ: 2.5 });
+    expect(score._scoreData.subMeasuresById.a).toMatchObject({ endQ: 1.5, durationQ: 1.5 });
+  });
+
+  it('should leave a measure of four chord positions or fewer whole', () => {
+    const measure = splitWith([2, 3, 4], [0, 1, 2, 3, 4]);
+    expect(split).toBeNull();
+    expect(measure.subMeasureIds).toEqual(['a']);
+  });
+
+  it('should cross a slur, tie or word to split a long measure near its middle', () => {
+    // Seven chord positions; the only clean point is beat 4½, outside the middle half (beats
+    // 2 to 4), so the relaxed point on beat 3 -- the middle itself -- is taken instead
+    const qstamps = [0, 0.5, 1, 1.5, 2, 2.5, 3, 4];
+    const measure = splitWith((relaxed) => relaxed ? [2, 3, 4.5] : [4.5], qstamps);
+    expect(split).toBe(3);
+    expect(measure.subMeasureIds).toEqual(['a', 'a-split1']);
+  });
+
+  it('should keep to clean points in a measure of six chord positions or fewer', () => {
+    splitWith((relaxed) => relaxed ? [2, 3, 4.5] : [4.5], [0, 0.5, 1, 1.5, 2, 3, 4]);
+    expect(split).toBe(4.5);
+  });
+
+  it('should leave a measure whole when nothing in it is safe to split at', () => {
+    splitWith([], [0, 0.5, 1, 1.5, 2, 3, 4]);
+    expect(split).toBeNull();
+  });
+});
+
+// ============================================================
+// _finalizeMeasures — a hairpin's @tstamp2 kept on the same beat when a split crosses it
+// ============================================================
+
+describe('_finalizeMeasures() hairpin @tstamp2', () => {
+  // Two full 4/4 measures, m1 and m2, holding `hairpin`. `splitAt` names the measure to split
+  // and where, standing in for _splitMeasure so only the rewrite is under test.
+  function finalize(hairpin, splitAt) {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    const score = new ChScore('#score-container');
+    const meiParsed = new DOMParser().parseFromString(
+      '<mei xmlns="http://www.music-encoding.org/ns/mei"><section>'
+      + `<measure xml:id="m1">${hairpin}</measure><measure xml:id="m2"/>`
+      + '</section></mei>', 'text/xml');
+    const record = (id, startQ) => ({
+      subMeasureId: id, timeSignature: [4, 4], rightBarLine: 'single',
+      startQ: startQ, endQ: startQ + 4, durationQ: 4, firstChordPosition: null,
+    });
+    score._scoreData = {
+      meiParsed: meiParsed,
+      subMeasuresById: { m1: record('m1', 0), m2: record('m2', 4) },
+    };
+    const elementsById = new Map(Array.from(meiParsed.querySelectorAll('[*|id]'))
+      .map(element => [element.getAttribute('xml:id'), element]));
+    score._splitMeasure = (measure) => {
+      const id = measure.subMeasureIds[0];
+      if (id !== splitAt.id) return null;
+      const element = elementsById.get(id);
+      const piece = meiParsed.createElement('measure');
+      piece.setAttribute('xml:id', `${id}-split1`);
+      element.after(piece);
+      return { element: element, piece: piece, tstamp: splitAt.tstamp };
+    };
+    score._finalizeMeasures(elementsById, [0, 8]);
+    return meiParsed.querySelector('hairpin').getAttribute('tstamp2');
+  }
+
+  it('should move the end into the piece when the split falls inside the hairpin', () => {
+    // Beat 4 of m1 is beat 2 of the piece cut off m1 at beat 3
+    expect(finalize('<hairpin tstamp="1" tstamp2="0m+4"/>', { id: 'm1', tstamp: 3 }))
+      .toBe('1m+2');
+  });
+
+  it('should count the extra <measure> a split adds before the end', () => {
+    // m2 is now two <measure> elements on, and beat 3 of it is beat 2 of its piece
+    expect(finalize('<hairpin tstamp="1" tstamp2="1m+3"/>', { id: 'm2', tstamp: 2 }))
+      .toBe('2m+2');
+  });
+
+  it('should leave an end before the split point where it was', () => {
+    expect(finalize('<hairpin tstamp="1" tstamp2="1m+2"/>', { id: 'm2', tstamp: 3 }))
+      .toBe('1m+2');
+  });
+});
+
+// ============================================================
+// _renumberMeasures — barlines where the pieces of one measure meet
+// ============================================================
+
+describe('_renumberMeasures() barlines', () => {
+  // `pieces` lists [id, measureIndex, subMeasureIndex, @right] in document order
+  function renumber(pieces) {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    const score = new ChScore('#score-container');
+    const measures = pieces.map(([id, , , right]) =>
+      `<measure xml:id="${id}"${right ? ` right="${right}"` : ''}/>`).join('');
+    const meiParsed = new DOMParser().parseFromString(
+      `<mei xmlns="http://www.music-encoding.org/ns/mei"><section>${measures}</section></mei>`,
+      'text/xml');
+    score._scoreData = { subMeasuresById: Object.fromEntries(pieces.map(([id, mi, smi]) => [id, {
+      subMeasureId: id, measureIndex: mi, subMeasureIndex: smi,
+      timeSignature: [4, 4], durationQ: 2,
+    }])) };
+    score._renumberMeasures(meiParsed);
+    return Object.fromEntries(Array.from(meiParsed.querySelectorAll('measure'))
+      .map(element => [element.getAttribute('xml:id'), element.getAttribute('right')]));
+  }
+
+  it('should hide a plain barline between two pieces of one measure', () => {
+    const rights = renumber([['a', 0, 0, null], ['b', 0, 1, null], ['c', 1, 0, 'single'],
+      ['d', 1, 1, null]]);
+    expect(rights.a).toBe('invis');
+    expect(rights.c).toBe('invis');
+  });
+
+  it('should keep a barline that means something, and one between two measures', () => {
+    const rights = renumber([['a', 0, 0, 'rptend'], ['b', 0, 1, null], ['c', 1, 0, 'single'],
+      ['d', 2, 0, null]]);
+    expect(rights.a).toBe('rptend');
+    // b and c belong to different measures, as do c and d
+    expect(rights.b).toBeNull();
+    expect(rights.c).toBe('single');
+  });
+});
+
+// ============================================================
+// _measuresFrom — which sub-measures are written as one measure
+// ============================================================
+
+describe('_measuresFrom() grouping', () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  // Sub-measures as [durationQ, timeSignature, rightBarLine], one after another from the score's
+  // start; `details` returns each measure's type and number rather than its sub-measures
+  function group(subMeasures, details = false) {
+    let startQ = 0;
+    const records = subMeasures.map(([durationQ, timeSignature, rightBarLine], index) => {
+      const record = {
+        subMeasureId: `s${index}`, timeSignature: timeSignature,
+        rightBarLine: rightBarLine ?? 'single',
+        startQ: startQ, endQ: startQ + durationQ, durationQ: durationQ, firstChordPosition: index,
+      };
+      startQ += durationQ;
+      return record;
+    });
+    return score._measuresFrom(records).map(measure => (details
+      ? `${measure.measureNumber}:${measure.measureType}` : measure.subMeasureIds));
+  }
+
+  it('should join a measure written in two halves', () => {
+    // A 3/4 measure closing a section after two beats, picked up after it for its third
+    expect(group([[3, [3, 4]], [2, [3, 4]], [1, [3, 4]], [3, [3, 4]]]))
+      .toEqual([['s0'], ['s1', 's2'], ['s3']]);
+  });
+
+  it('should not add to a measure that is already full', () => {
+    // "Before Thee, Lord, I Bow My Head": a full 6/4 measure and three beats after it are two
+    // measures, not one of nine beats
+    expect(group([[6, [6, 4]], [6, [6, 4]], [3, [6, 4]], [6, [6, 4]]]))
+      .toEqual([['s0'], ['s1'], ['s2'], ['s3']]);
+  });
+
+  it('should not join sub-measures written in different meters', () => {
+    // "An Angel from on High": a 6/8 section ends short of its measure, and the 4/4 section
+    // after it opens on a one-beat pickup
+    expect(group([[3, [6, 8]], [2.5, [6, 8]], [1, [4, 4]], [4, [4, 4]]]))
+      .toEqual([['s0'], ['s1'], ['s2'], ['s3']]);
+  });
+
+  it('should tell a pickdown closing a section from a pickup opening the next', () => {
+    // "An Angel from on High": the 6/8 verse ends two and a half beats into a measure, at a
+    // double barline, and the 4/4 chorus opens on a one-beat pickup. Neither is a full measure,
+    // and only the score's own opening pickup is numbered 0.
+    expect(group([[3, [6, 8]], [2.5, [6, 8], 'dbl'], [1, [4, 4]], [4, [4, 4]]], true))
+      .toEqual(['1:full', '2:partial-pickdown', '3:partial-pickup', '4:full']);
+    // "Hum Your Favorite Hymn": a full measure closes a section, and the next opens on a pickup
+    // with nothing short before it to complete
+    expect(group([[1, [3, 4]], [3, [3, 4]], [3, [3, 4], 'dbl'], [1, [3, 4]], [3, [3, 4]],
+      [2, [3, 4]]], true))
+      .toEqual(['0:partial-pickup', '1:full', '2:full', '3:partial-pickup', '4:full',
+        '5:partial-pickdown']);
+  });
+});

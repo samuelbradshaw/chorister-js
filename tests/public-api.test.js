@@ -2826,21 +2826,38 @@ describe('_extractPianoIntroduction', () => {
    * @param {Document} meiParsed
    * @param {Object} [overrides] - override _scoreData or _getInlineVerseNumbers
    */
+  let ctxScoreData;
+
   function callExtract(meiParsed, overrides = {}) {
     const sections = overrides.sections || [{ type: 'verse', chordPositionRanges: [] }];
     const hasRepeatOrJump = overrides.hasRepeatOrJump ?? false;
     const verseNumbers = overrides.verseNumbers || [1, 2];
+    // The sub-measure records the score would have built, so the copies the extractor makes
+    // can be recorded against the measures they came from
+    const subMeasuresById = {};
+    Array.from(meiParsed.querySelectorAll('measure')).forEach((measure, index) => {
+      const subMeasureId = measure.getAttribute('xml:id');
+      subMeasuresById[subMeasureId] = {
+        subMeasureId: subMeasureId, measureIndex: index, subMeasureIndex: 0,
+        timeSignature: [4, 4], rightBarLine: measure.getAttribute('right') ?? 'single',
+        startQ: index * 4, endQ: (index + 1) * 4, durationQ: 4, firstChordPosition: null,
+      };
+    });
     const ctx = {
-      _scoreData: { meiParsed, features: { hasRepeatOrJump }, sections },
+      _scoreData: { meiParsed, features: { hasRepeatOrJump }, sections, subMeasuresById },
       _getInlineVerseNumbers: () => verseNumbers,
       _getIntroBrackets: ChScore.prototype._getIntroBrackets,
       _createMeiElement: ChScore.prototype._createMeiElement,
-      _renumberMeasures: ChScore.prototype._renumberMeasures,
       _setMeiId: ChScore.prototype._setMeiId,
-      _measuresFrom: ChScore.prototype._measuresFrom,
-      _continuesMeasure: ChScore.prototype._continuesMeasure,
-      _measureTypeOf: ChScore.prototype._measureTypeOf,
+      _meiDurationTstamps: ChScore.prototype._meiDurationTstamps,
+      _meiDurationFor: ChScore.prototype._meiDurationFor,
+      _meiTupletRatio: ChScore.prototype._meiTupletRatio,
+      _addRebuiltSubMeasure: ChScore.prototype._addRebuiltSubMeasure,
+      _chordPositionQstamps: ChScore.prototype._chordPositionQstamps,
+      _bisectLeft: ChScore.prototype._bisectLeft,
+      _tstampToQstamp: ChScore.prototype._tstampToQstamp,
     };
+    ctxScoreData = ctx._scoreData;
     return ChScore.prototype._extractPianoIntroduction.call(ctx, meiParsed);
   }
 
@@ -2936,20 +2953,18 @@ describe('_extractPianoIntroduction', () => {
       }
     });
 
-    it('should renumber every measure the way the score data counts them', () => {
-      // Full measures throughout and no pickup, so the count opens at 1 and runs straight
-      // through the introduction into the song
-      const measures = Array.from(mei.querySelectorAll('measure'));
-      expect(measures.map(measure => measure.getAttribute('n')))
-        .toEqual(measures.map((_, index) => String(index + 1)));
-    });
-
-    it('original measures should be renumbered after intro measures', () => {
+    it('should record every measure it copies', () => {
+      // Numbering the document is the rebuild's job, once the introduction and the passes an
+      // expansion made are all in place (see _renumberMeasures). What this owes it is a record
+      // per copy, so the rebuild can read the copies the way it reads the score's own.
       const intro = mei.querySelector('section[type="introduction"]');
-      const introMeasureCount = intro.querySelectorAll('measure').length;
-      const mainSection = mei.querySelector('section:not([type="introduction"])');
-      const mainMeasures = Array.from(mainSection.querySelectorAll('measure'));
-      expect(parseInt(mainMeasures[0].getAttribute('n'))).toBe(introMeasureCount + 1);
+      const introMeasures = Array.from(intro.querySelectorAll('measure'));
+      expect(introMeasures.length).toBeGreaterThan(0);
+      const ids = introMeasures.map(measure => measure.getAttribute('xml:id'));
+      // Each copy is its own <measure>, with a record of its own
+      expect(ids.every(Boolean)).toBe(true);
+      expect(new Set(ids).size).toBe(ids.length);
+      for (const id of ids) expect(ctxScoreData.subMeasuresById[id].subMeasureId).toBe(id);
     });
   });
 
