@@ -214,11 +214,13 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
       expect(secondaryChorusVerses.length).toBeGreaterThan(0);
     });
 
-    it('secondary chorus lyrics should be shifted to line 2 (improved appearance)', () => {
-      // Check that verses with both ch-chorus and ch-secondary have n=2
+    it('secondary chorus lyrics are numbered in order on their own staff', () => {
+      // They're on the descant staff, which carries no melody, so they're its first line --
+      // and @n agrees with the lyric line id, as it does for every line
       const secondaryChorusVerses = score._scoreData.meiParsed.querySelectorAll('verse[ch-secondary][ch-chorus]');
       for (const verse of secondaryChorusVerses) {
-        expect(verse.getAttribute('n')).toBe('2');
+        expect(verse.getAttribute('n')).toBe('1');
+        expect(verse.getAttribute('ch-lyric-line-id')).toBe(`${verse.closest('staff').getAttribute('n')}.1`);
       }
     });
   });

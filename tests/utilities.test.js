@@ -1945,7 +1945,8 @@ describe('an instruction that names the pass a lyric line is sung on', () => {
     // claimed-line fixture in extract-lyric-stanzas.test.js
     it('should line @n up with the pass', () => {
       const verses = [...new DOMParser().parseFromString(
-        '<m><verse n="1"><syl>one</syl></verse><verse n="2"><syl>two</syl></verse></m>',
+        '<m><verse n="1" ch-lyric-line-id="1.1"><syl>one</syl></verse>'
+          + '<verse n="2" ch-lyric-line-id="1.2"><syl>two</syl></verse></m>',
         'text/xml').querySelectorAll('verse')];
       expect(score._lyricElementSoundingAt(verses, 2, false)).toBe(1);
       expect(score._lyricElementSoundingAt(verses, 1, false)).toBe(0);
@@ -3010,7 +3011,7 @@ describe('_stackedVerseLines()', () => {
   /** One melody note per chord position, each carrying the lyric lines named for it. */
   function loadMei(linesPerChordPosition) {
     const notes = linesPerChordPosition.map((lines, cp) => {
-      const verses = lines.map(n => `<verse n="${n}"><syl>la</syl></verse>`).join('');
+      const verses = lines.map(n => `<verse n="${n}" ch-lyric-line-id="1.${n}"><syl>la</syl></verse>`).join('');
       return `<note ch-melody="" ch-chord-position="${cp}">${verses}</note>`;
     }).join('');
     score._scoreData = {
@@ -3139,7 +3140,7 @@ describe('_getInlineVerseNumbers()', () => {
     // verses: array of { n, labelText } or null for no-label verses
     const verseXml = verses.map(v => {
       const label = v.labelText != null ? `<label>${v.labelText}</label>` : '';
-      return `<verse n="${v.n}"><syl>la</syl>${label}</verse>`;
+      return `<verse n="${v.n}" ch-lyric-line-id="1.${v.n}"><syl>la</syl>${label}</verse>`;
     }).join('');
     return parser.parseFromString(
       `<mei><note>${verseXml}</note></mei>`,

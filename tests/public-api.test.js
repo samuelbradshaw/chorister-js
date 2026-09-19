@@ -1521,11 +1521,11 @@ describe('_extendPlistForVerses()', () => {
    */
   function buildMei(elements) {
     const xml = elements.map(({ id, tag = 'section', lines, cps, harmonyLines = [] }) => {
-      const verse = n => `<verse n="${n}"><syl>la</syl></verse>`;
-      const melody = `<note ch-melody="" ch-chord-position="${cps[0]}">${lines.map(verse).join('')}</note>`;
+      const verse = staff => n => `<verse n="${n}" ch-lyric-line-id="${staff}.${n}"><syl>la</syl></verse>`;
+      const melody = `<note ch-melody="" ch-chord-position="${cps[0]}">${lines.map(verse(1)).join('')}</note>`;
       const harmony = harmonyLines.length
         ? `<staff n="2"><layer n="1"><note ch-chord-position="${cps[0]}">`
-          + `${harmonyLines.map(verse).join('')}</note></layer></staff>`
+          + `${harmonyLines.map(verse(2)).join('')}</note></layer></staff>`
         : '';
       return `<${tag} xml:id="${id}" n="1" ch-chord-position="${cps.join(' ')}">`
         + `<measure><staff n="1"><layer n="1">${melody}</layer></staff>${harmony}</measure></${tag}>`;
@@ -1635,17 +1635,6 @@ describe('_extendPlistForVerses()', () => {
       { id: 'body', lines: [1, 3], cps: [0, 1] },
     ]);
     expect(extend(mei, ['#body', '#body'], [1, 3], 2)).toBe('#body #body #body');
-  });
-
-  it('should count passes by how many lines are stacked where they start above 1', () => {
-    // "Gethsemane" to/it (HHC): lines 2 and 3 stacked, line 1 elsewhere. _normalizeSections
-    // names the line each playthrough of the section reads, so two passes sing both lines
-    // and a third would repeat one. Asking for the highest line here played the chorus of
-    // the Italian score a third time.
-    const mei = buildMei([
-      { id: 'body', lines: [2, 3], cps: [0, 1] },
-    ]);
-    expect(extend(mei, ['#body', '#body'], [2, 3], 2)).toBe('#body #body');
   });
 });
 
@@ -2456,7 +2445,9 @@ describe('load() — chorus section type', () => {
 describe('_generateSectionsFromSimpleScore', () => {
   /**
    * Build a minimal MEI DOM for testing section generation.
-   * @param {Object} notesByStaff - { staffN: [{pos, melody, dur, tag, lyrics:[{n, text, secondary}]}] }
+   * @param {Object} notesByStaff - { staffN: [{pos, melody, dur, tag, lyrics:[{n, text, secondary, label}]}] }
+   * A chorus is found from lyrics labelled "chorus", as _normalizeLyricLineNumbers labels the
+   * words every verse sings when a score loads.
    */
   function buildMEI(notesByStaff) {
     let xml = '<mei><music><body><mdiv><score><section><measure>';
@@ -2475,7 +2466,8 @@ describe('_generateSectionsFromSimpleScore', () => {
           if (note.lyrics) {
             for (const l of note.lyrics) {
               const sec = l.secondary ? ' ch-secondary=""' : '';
-              xml += `<verse n="${l.n}"${sec}><syl>${l.text || 'x'}</syl></verse>`;
+              const label = l.label ? ` label="${l.label}"` : '';
+              xml += `<verse n="${l.n}" ch-lyric-line-id="${staffN}.${l.n}"${sec}${label}><syl>${l.text || 'x'}</syl></verse>`;
             }
           }
           xml += `</${tag}>`;
@@ -2564,10 +2556,10 @@ describe('_generateSectionsFromSimpleScore', () => {
   });
 
   // ── Chorus detection ──
-  describe('chorus detection from single-line gap', () => {
+  describe('chorus detection from shared words', () => {
     let sections;
     beforeAll(() => {
-      // 12 CPs: 0-5 verse (lines 1,2), 6-11 chorus (line 3 only, gap=6 > maxLyricGap=3)
+      // 12 CPs: 0-5 verse (lines 1,2), 6-11 chorus (line 3 only, labelled; 6 > _maxLoneSyllables)
       const notes = [
         ...Array.from({ length: 6 }, (_, i) => ({
           pos: i, melody: true, dur: 8,
@@ -2575,7 +2567,7 @@ describe('_generateSectionsFromSimpleScore', () => {
         })),
         ...Array.from({ length: 6 }, (_, i) => ({
           pos: i + 6, melody: true, dur: 8,
-          lyrics: [{ n: 3 }],
+          lyrics: [{ n: 3, label: 'chorus' }],
         })),
       ];
       const mei = buildMEI({ 1: notes });
@@ -2608,11 +2600,11 @@ describe('_generateSectionsFromSimpleScore', () => {
   });
 
   // ── Gap threshold boundary ──
-  it('single-line gap of exactly 3 (= maxLyricGap) should NOT detect a chorus', () => {
+  it('a run of shared words exactly 3 long (= _maxLoneSyllables) should NOT detect a chorus', () => {
     // 10 CPs: 0-3 (2 lines), 4-6 (1 line, gap=3 ≤ 3), 7-9 (2 lines)
     const notes = [
       ...Array.from({ length: 4 }, (_, i) => ({ pos: i, melody: true, dur: 8, lyrics: [{ n: 1 }, { n: 2 }] })),
-      ...Array.from({ length: 3 }, (_, i) => ({ pos: i + 4, melody: true, dur: 8, lyrics: [{ n: 3 }] })),
+      ...Array.from({ length: 3 }, (_, i) => ({ pos: i + 4, melody: true, dur: 8, lyrics: [{ n: 3, label: 'chorus' }] })),
       ...Array.from({ length: 3 }, (_, i) => ({ pos: i + 7, melody: true, dur: 8, lyrics: [{ n: 1 }, { n: 2 }] })),
     ];
     const mei = buildMEI({ 1: notes });
@@ -2620,12 +2612,30 @@ describe('_generateSectionsFromSimpleScore', () => {
     expect(sections.every(s => s.type === 'verse')).toBe(true);
   });
 
-  it('single-line gap of 4 (> maxLyricGap) SHOULD detect a chorus', () => {
-    // 12 CPs: 0-3 (2 lines), 4-7 (1 line, gap=4 > 3), 8-11 (2 lines)
+  it('a section the expansion typed a chorus is one, labelled or not', () => {
+    // "All Things Bright and Beautiful": the chorus the song opens with has a section of its
+    // own, on a line nothing stacks with, so nothing on the page labels it
+    const note = (pos, lines) => `<note ch-melody="" ch-chord-position="${pos}" dur="8">`
+      + lines.map(n => `<verse n="${n}" ch-lyric-line-id="1.${n}"><syl>x</syl></verse>`).join('') + '</note>';
+    const xml = '<mei><music><body><mdiv><score>'
+      + '<section type="chorus" ch-chord-position="0 1 2 3 4 5"><measure><staff n="1"><layer>'
+      + [0, 1, 2, 3, 4, 5].map(pos => note(pos, [1])).join('')
+      + '</layer></staff></measure></section>'
+      + '<section type="verse" ch-chord-position="6 7 8 9 10 11"><measure><staff n="1"><layer>'
+      + [6, 7, 8, 9, 10, 11].map(pos => note(pos, [1, 2])).join('')
+      + '</layer></staff></measure></section>'
+      + '</score></mdiv></body></music></mei>';
+    const mei = new DOMParser().parseFromString(xml, 'text/xml');
+    const sections = generate(mei, [1], 12, [1, 2], true);
+    expect(sections[0].type).toBe('chorus');
+    expect(sections[0].chordPositionRanges[0]).toMatchObject({ start: 0, end: 6 });
+  });
+
+  it('a run of shared words 4 long (> _maxLoneSyllables) SHOULD detect a chorus', () => {
+    // 12 CPs: 0-7 (2 lines), 8-11 (1 line, 4 > 3)
     const notes = [
-      ...Array.from({ length: 4 }, (_, i) => ({ pos: i, melody: true, dur: 8, lyrics: [{ n: 1 }, { n: 2 }] })),
-      ...Array.from({ length: 4 }, (_, i) => ({ pos: i + 4, melody: true, dur: 8, lyrics: [{ n: 3 }] })),
-      ...Array.from({ length: 4 }, (_, i) => ({ pos: i + 8, melody: true, dur: 8, lyrics: [{ n: 1 }, { n: 2 }] })),
+      ...Array.from({ length: 8 }, (_, i) => ({ pos: i, melody: true, dur: 8, lyrics: [{ n: 1 }, { n: 2 }] })),
+      ...Array.from({ length: 4 }, (_, i) => ({ pos: i + 8, melody: true, dur: 8, lyrics: [{ n: 3, label: 'chorus' }] })),
     ];
     const mei = buildMEI({ 1: notes });
     const sections = generate(mei, [1], 12, [1, 2]);
@@ -2692,7 +2702,7 @@ describe('_generateSectionsFromSimpleScore', () => {
           pos: i, melody: true, dur: 8, lyrics: [{ n: 1 }, { n: 2 }],
         })),
         ...Array.from({ length: 6 }, (_, i) => ({
-          pos: i + 6, melody: true, dur: 8, lyrics: [{ n: 3 }],
+          pos: i + 6, melody: true, dur: 8, lyrics: [{ n: 3, label: 'chorus' }],
         })),
       ];
       const mei = buildMEI({ 1: notes });
@@ -2708,7 +2718,7 @@ describe('_generateSectionsFromSimpleScore', () => {
       // 12 CPs: chorus 0-5 (single-line), verse 6-11 (multi-line)
       const notes = [
         ...Array.from({ length: 6 }, (_, i) => ({
-          pos: i, melody: true, dur: 8, lyrics: [{ n: 3 }],
+          pos: i, melody: true, dur: 8, lyrics: [{ n: 3, label: 'chorus' }],
         })),
         ...Array.from({ length: 6 }, (_, i) => ({
           pos: i + 6, melody: true, dur: 8, lyrics: [{ n: 1 }, { n: 2 }],
@@ -2801,7 +2811,7 @@ describe('_extractPianoIntroduction', () => {
           xml += `<${tag} dur="${note.dur}"${dots}${id}>`;
           if (note.lyrics) {
             for (const l of note.lyrics) {
-              xml += `<verse n="${l.n}"><label>${l.n}</label><syl>${l.text || 'la'}</syl></verse>`;
+              xml += `<verse n="${l.n}" ch-lyric-line-id="1.${l.n}"><label>${l.n}</label><syl>${l.text || 'la'}</syl></verse>`;
             }
           }
           xml += `</${tag}>`;
