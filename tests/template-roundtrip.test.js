@@ -224,13 +224,45 @@ describe('parts and sections round-trip through their templates', { timeout: 600
         expect([range.start, range.end]).toEqual([0, score._scoreData.numChordPositions]);
       });
 
-      it('should pull a range bound outside the song back to its edge', async () => {
-        // A template written against a longer engraving of the same song names positions this
-        // one hasn't got, and everything downstream indexes chordPositions by them
+      it('should ignore a template naming a position outside the song', async () => {
+        // A template written against a longer engraving of the same song describes that one,
+        // not this, so the sections are derived as if no template had been given
         const beyond = derived.numChordPositions + 500;
-        const score = await load(content, { sectionsTemplate: `V(0-${beyond})` });
-        const [range] = score._scoreData.sections[0].chordPositionRanges;
-        expect(range.end).toBe(score._scoreData.numChordPositions);
+        for (const sectionsTemplate of [`V(0-${beyond})`, 'V(0@1-999@1)']) {
+          const score = await load(content, { sectionsTemplate });
+          expect(score._scoreData.templates.sectionsTemplateCp).toBe(derived.sectionsTemplate);
+        }
+      });
+
+      it('should read an empty parts template as none given', async () => {
+        const score = await load(content, { partsTemplate: '' });
+        expect(score._scoreData.templates.partsTemplateCp).toBe(derived.partsTemplate);
+      });
+
+      it('should ignore a parts or lyric lines template naming a measure outside the song', async () => {
+        const score = await load(content, {
+          partsTemplate: `999@1:${derived.partsTemplate}`, lyricLinesTemplate: '999@1',
+        });
+        expect(score._scoreData.templates.partsTemplateCp).toBe(derived.partsTemplate);
+        expect(score._parseLyricLinesTemplate('999@1')).toBeNull();
+      });
+
+      it('should move a measure+beat position partway through a word to where it starts', async () => {
+        const score = await load(content);
+        const index = score._templateSyllableIndex();
+        // A syllable continuing a word whose previous syllable on its line opens one
+        const found = [...index.byLine.entries()].flatMap(([lineId, positions]) =>
+          positions.slice(1).map((at, i) => ({ lineId, at, before: positions[i] })))
+          .find(({ at, before }) =>
+            (index.byChordPosition.get(at) ?? []).every(syllable => !syllable.opensWord)
+            && (index.byChordPosition.get(before) ?? []).every(syllable => syllable.opensWord));
+        if (!found) return;
+        const measureBeat = score._writeTemplatePosition(found.at, 'measure-beat');
+        const resolve = (text) => score._resolveTemplatePosition(text, score._scoreData.numChordPositions,
+          { syllableIndex: () => index, lyricLineIds: [found.lineId] });
+        expect(resolve(measureBeat)).toBe(found.before);
+        // A chord position is exact against its own score, so it stays where it is written
+        expect(resolve(String(found.at))).toBe(found.at);
       });
 
       it('should write measure numbers without a sub-measure letter', () => {

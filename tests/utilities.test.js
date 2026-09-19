@@ -2741,9 +2741,51 @@ describe('_hyphenPositionsTable() and _insertKnownHyphens()', () => {
 
 
 // ============================================================
-// _mergePickupStanzas
+// _continuesOverGap
 // ============================================================
-describe('_mergePickupStanzas()', () => {
+describe('_continuesOverGap()', () => {
+  // Verse 2 (line 1.2) sings at 0-4 and again from 6; what is sung at 5 is the question.
+  // Example: "I Know That My Savior Loves Me" (HHC), where verse 1 sings "The" and
+  // verse 2 holds a "—" under it.
+  function scoreWith(at5, { jumps = [] } = {}) {
+    const score = Object.create(ChScore.prototype);
+    score._scoreData = {};
+    score._templateSyllableIndex = () => ({
+      byChordPosition: new Map(at5 === null ? [] : [[5, at5]]),
+      jumps: new Set(jumps),
+    });
+    return score;
+  }
+  const other = { lineId: '1.1', isHold: false };
+
+  it('should carry a verse on where it holds a dash while another verse sings', () => {
+    const score = scoreWith([other, { lineId: '1.2', isHold: true }]);
+    expect(score._continuesOverGap(5, 6, ['1.2'])).toBe(true);
+  });
+
+  it('should not where the verse sings a word of its own there', () => {
+    const score = scoreWith([other, { lineId: '1.2', isHold: false }]);
+    expect(score._continuesOverGap(5, 6, ['1.2'])).toBe(false);
+  });
+
+  it('should not where nothing is sung at all', () => {
+    expect(scoreWith(null)._continuesOverGap(5, 6, ['1.2'])).toBe(false);
+  });
+
+  it('should not where a repeated section or ending starts', () => {
+    const score = scoreWith([other], { jumps: [6] });
+    expect(score._continuesOverGap(5, 6, ['1.2'])).toBe(false);
+  });
+
+  it('should not over more than a pickup', () => {
+    expect(scoreWith([other])._continuesOverGap(1, 6, ['1.2'])).toBe(false);
+  });
+});
+
+// ============================================================
+// _mergePickupRuns
+// ============================================================
+describe('_mergePickupRuns()', () => {
   let score;
 
   beforeAll(() => {
@@ -2774,55 +2816,85 @@ describe('_mergePickupStanzas()', () => {
   });
 
   /**
-   * A stanza as _getLyricsFromSyllables would have built it. `span` widens the one-chord
-   * -position stanza _newLyricStanza starts with: `end` is where it stops sounding
-   * (exclusive), `ecp`/`ecpEnd` where it lands in sung order.
+   * A run as _getLyricsFromSyllables hands it on, its words as one syllable. `span` widens
+   * the one chord position it starts on: `end` is where it stops sounding (exclusive),
+   * `ecp`/`ecpEnd` where it lands in sung order.
    */
-  function stanza(lyricLineId, marker, words, chordPosition, span = {}) {
-    const built = score._newLyricStanza(
-      lyricLineId, 'verse', marker, chordPosition, span.ecp ?? chordPosition);
-    built.lyricsAnnotated = words;
-    if (span.end != null) built.chordPositionRanges[0].end = span.end;
-    if (span.ecpEnd != null) built.expandedChordPositions[1] = span.ecpEnd;
-    return built;
+  function run(lyricLineId, label, words, chordPosition, span = {}) {
+    const ecp = span.ecp ?? chordPosition;
+    return {
+      lyricLineId, type: span.type ?? 'verse', label,
+      syllables: [{
+        label, text: words, startsSection: span.startsSection ?? false,
+        chordPositionRuns: [[chordPosition, span.end ?? chordPosition + 1]],
+        expandedChordPositions: [ecp, (span.ecpEnd ?? ecp + 1) - 1],
+      }],
+    };
   }
+  const words = (merged) => merged.syllables.map(syllable => syllable.text).join(' ');
+  const starts = (merged) => merged.syllables.map(syllable => syllable.chordPositionRuns[0][0]);
 
   it('should merge a pickup into the verse its label names', () => {
     // Example: "Were You There" (HHC). Verse 2's first syllables sit on a pickup
     // before the repeat, so playback reaches them at the end of verse 1's pass —
-    // a short stanza labelled "2." while sitting on lyric line 1.
-    const pickup = stanza('1.1', '2.', 'Were you', 40);
-    const verse2 = stanza('1.2', null, 'there when they crucified my Lord?', 0);
+    // a short run labelled "2." while sitting on lyric line 1.
+    const pickup = run('1.1', '2.', 'Were you', 40);
+    const verse2 = run('1.2', null, 'there when they crucified my Lord?', 0);
 
-    const merged = score._mergePickupStanzas([pickup, verse2]);
+    const merged = score._mergePickupRuns([pickup, verse2], new Set());
 
     expect(merged.length).toBe(1);
-    expect(merged[0].marker).toBe('2.');
+    expect(merged[0].syllables[0].label).toBe('2.');
     // The pickup's words belong to the verse it names, not a stanza of their own
-    expect(merged[0].lyricsAnnotated).toBe('Were you there when they crucified my Lord?');
+    expect(words(merged[0])).toBe('Were you there when they crucified my Lord?');
     // ...and it is sung first, so its chord positions come first
-    expect(merged[0].chordPositionRanges.map(range => range.start)).toEqual([40, 0]);
+    expect(starts(merged[0])).toEqual([40, 0]);
   });
 
-  it('should leave a stanza whose label matches its own lyric line', () => {
-    const verse1 = stanza('1.1', '1.', 'Were you there', 0);
-    const verse2 = stanza('1.2', null, 'Were you there', 40);
+  it('should mark where a pickup joins its verse, so no line breaks there', () => {
+    // Example: "I Know That My Savior Loves Me" (HHC, Spanish). Verse 2's "A-" sits in the
+    // first ending and the repeat carries it into "quí", which the words join into one
+    const pickup = run('1.1', '2.', 'A', 40);
+    const verse2 = run('1.2', null, 'quí estoy yo en un bello lugar,', 0);
+    const joins = new Set();
 
-    expect(score._mergePickupStanzas([verse1, verse2]).length).toBe(2);
+    score._mergePickupRuns([pickup, verse2], joins);
+
+    expect([...joins]).toEqual([verse2.syllables[0]]);
   });
 
-  it('should leave a pickup whose next stanza is already numbered', () => {
-    const pickup = stanza('1.1', '2.', 'Were you', 40);
-    const verse2 = stanza('1.2', '3.', 'there when they crucified', 0);
+  it('should merge a pickup into the verse section after it, where sections were given', () => {
+    // The same Spanish pickup, where a sections template puts it inside the chorus before
+    // the verse: it starts no section of its own, and the verse section starts after it
+    const pickup = run('1.1', '2.', 'A', 153, { type: 'chorus' });
+    const verse2 = run('1.2', null, 'quí estoy yo en un bello lugar,', 1,
+      { type: 'verse', startsSection: true });
 
-    expect(score._mergePickupStanzas([pickup, verse2]).length).toBe(2);
+    const merged = score._mergePickupRuns([pickup, verse2], new Set());
+
+    expect(merged.length).toBe(1);
+    expect(merged[0].type).toBe('verse');
+  });
+
+  it('should leave a run whose label matches its own lyric line', () => {
+    const verse1 = run('1.1', '1.', 'Were you there', 0);
+    const verse2 = run('1.2', null, 'Were you there', 40);
+
+    expect(score._mergePickupRuns([verse1, verse2], new Set()).length).toBe(2);
+  });
+
+  it('should leave a pickup whose next run is already numbered', () => {
+    const pickup = run('1.1', '2.', 'Were you', 40);
+    const verse2 = run('1.2', '3.', 'there when they crucified', 0);
+
+    expect(score._mergePickupRuns([pickup, verse2], new Set()).length).toBe(2);
   });
 
   it('should leave a pickup whose label names a different lyric line', () => {
-    const pickup = stanza('1.1', '4.', 'Were you', 40);
-    const verse2 = stanza('1.2', null, 'there when they crucified', 0);
+    const pickup = run('1.1', '4.', 'Were you', 40);
+    const verse2 = run('1.2', null, 'there when they crucified', 0);
 
-    expect(score._mergePickupStanzas([pickup, verse2]).length).toBe(2);
+    expect(score._mergePickupRuns([pickup, verse2], new Set()).length).toBe(2);
   });
 
   it('should merge a pickup whose label names the lyric line it already sits on', () => {
@@ -2830,63 +2902,63 @@ describe('_mergePickupStanzas()', () => {
     // than on the line the pickup is engraved over. The label says nothing on its own,
     // so the music does: one measure, sung immediately before a verse reached by
     // jumping back into the repeat.
-    const pickup = stanza('1.2', '2.', 'Because He', 142, { end: 145, ecpEnd: 145 });
-    const verse2 = stanza('1.2', null, 'died for me, I’ll live again.', 14,
+    const pickup = run('1.2', '2.', 'Because He', 142, { end: 145, ecpEnd: 145 });
+    const verse2 = run('1.2', null, 'died for me, I’ll live again.', 14,
       { end: 70, ecp: 145, ecpEnd: 201 });
 
-    const merged = score._mergePickupStanzas([pickup, verse2]);
+    const merged = score._mergePickupRuns([pickup, verse2], new Set());
 
     expect(merged.length).toBe(1);
-    expect(merged[0].marker).toBe('2.');
-    expect(merged[0].lyricsAnnotated).toBe('Because He died for me, I’ll live again.');
-    expect(merged[0].chordPositionRanges.map(range => range.start)).toEqual([142, 14]);
+    expect(merged[0].syllables[0].label).toBe('2.');
+    expect(words(merged[0])).toBe('Because He died for me, I’ll live again.');
+    expect(starts(merged[0])).toEqual([142, 14]);
   });
 
   it('should merge a pickup carrying no label at all', () => {
     // Example: "I'm Trying to Be like Jesus" (1989 CSB), which engraves the same shape
     // with no verse numbers printed anywhere.
-    const pickup = stanza('1.2', null, 'I’m', 151, { end: 152, ecpEnd: 152 });
-    const verse2 = stanza('1.2', null, 'trying to love my neighbor;', 23,
+    const pickup = run('1.2', null, 'I’m', 151, { end: 152, ecpEnd: 152 });
+    const verse2 = run('1.2', null, 'trying to love my neighbor;', 23,
       { end: 103, ecp: 152, ecpEnd: 232 });
 
-    const merged = score._mergePickupStanzas([pickup, verse2]);
+    const merged = score._mergePickupRuns([pickup, verse2], new Set());
 
     expect(merged.length).toBe(1);
-    expect(merged[0].lyricsAnnotated).toBe('I’m trying to love my neighbor;');
+    expect(words(merged[0])).toBe('I’m trying to love my neighbor;');
   });
 
   it('should merge a pickup that crosses a seam inside one measure', () => {
     // The fragment runs from m15 into m16, which are one measure written in two. It is still
     // an anacrusis -- how the engraving split the measure must not hide that.
-    const pickup = stanza('1.2', null, 'I’m', 158, { end: 162, ecpEnd: 162 });
-    const verse2 = stanza('1.2', null, 'trying to love my neighbor;', 23,
+    const pickup = run('1.2', null, 'I’m', 158, { end: 162, ecpEnd: 162 });
+    const verse2 = run('1.2', null, 'trying to love my neighbor;', 23,
       { end: 103, ecp: 162, ecpEnd: 232 });
 
     expect(score._measureOf('m15')).toBe(score._measureOf('m16'));
     expect(score._scoreData.chordPositions[158].measureIndex)
       .toBe(score._scoreData.chordPositions[161].measureIndex);
-    expect(score._mergePickupStanzas([pickup, verse2]).length).toBe(1);
+    expect(score._mergePickupRuns([pickup, verse2], new Set()).length).toBe(1);
   });
 
   it('should leave an unlabelled fragment that spans more than one measure', () => {
     // A whole passage sung again isn't an anacrusis, however the run came to be split.
     // Example: "Gethsemane" (HHC), whose refrain is typed as a verse and so looks like
     // a same-line fragment — 13 measures of one.
-    const fragment = stanza('1.1', null, 'Gethsemane! Jesus loves me,', 9,
+    const fragment = run('1.1', null, 'Gethsemane! Jesus loves me,', 9,
       { end: 139, ecpEnd: 139 });
-    const next = stanza('1.1', null, 'So He went willingly.', 49,
+    const next = run('1.1', null, 'So He went willingly.', 49,
       { end: 86, ecp: 139, ecpEnd: 279 });
 
-    expect(score._mergePickupStanzas([fragment, next]).length).toBe(2);
+    expect(score._mergePickupRuns([fragment, next], new Set()).length).toBe(2);
   });
 
   it('should leave a one-measure fragment that isn’t sung immediately before the next', () => {
-    const fragment = stanza('1.2', null, 'I’m', 151, { end: 152, ecpEnd: 152 });
+    const fragment = run('1.2', null, 'I’m', 151, { end: 152, ecpEnd: 152 });
     // Something else is sung in between, so this is no pickup into it
-    const later = stanza('1.2', null, 'trying to love my neighbor;', 23,
+    const later = run('1.2', null, 'trying to love my neighbor;', 23,
       { end: 103, ecp: 160, ecpEnd: 232 });
 
-    expect(score._mergePickupStanzas([fragment, later]).length).toBe(2);
+    expect(score._mergePickupRuns([fragment, later], new Set()).length).toBe(2);
   });
 });
 

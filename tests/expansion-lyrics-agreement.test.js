@@ -19,7 +19,7 @@
  * - How Great the Wisdom / It Is Well: no-repeat controls, external lyrics file
  * - For Health and Strength: a labelled pickup engraved inside a first ending, and the
  *   only fixture with no lyrics file, so the only one whose stanzas are derived from the
- *   engraved syllables and then reshaped by _mergePickupStanzas
+ *   engraved syllables and then reshaped by _mergePickupRuns
  * - Two-Part, with its own words handed back: the together pass _splitTwoPartFinalPass
  *   invents a section for, which nothing else here renders
  */
@@ -113,7 +113,7 @@ const songs = [
   },
   {
     // No lyricsText: this one is derived from the engraved syllables, which is the path
-    // _mergePickupStanzas runs on, and the only fixture here whose stanzas the merge
+    // _mergePickupRuns runs on, and the only fixture here whose stanzas the merge
     // reshapes. Expansion must agree with the reshaped sections, not just the words.
     name: 'For Health and Strength (labelled pickup inside a first ending)',
     inputData: { scoreContent: sampleMusicXmlFHS },
