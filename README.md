@@ -174,7 +174,8 @@ Input data is provided to Chorister.js when loading the score (see “Methods”
 - **lyricLinesTemplate** – Lyric lines template string: where the lyrics break into lines (more details below). Optional.
 - **chordSets** – Chord sets object (more details below). Optional.
 - **fermatas** – Fermatas object (more details below). Optional.
-- **lang** – Language code (e.g. `'en'`) selecting the hard-coded dictionary of known hyphenated words used when extracting lyrics from the score's own syllables. Optional, defaults to `'en'`. A score's own printed title/lyrics (if present) are also used and take priority over the hard-coded dictionary, regardless of `lang`.
+- **hyphenatedWords** – Array of hyphenated words for this score's language, e.g. `['pag-ibig', 'latter-day']` (more details below). Optional.
+- **lang** – Language code (e.g. `'en'`) selecting the built-in dictionary of known hyphenated words used when extracting lyrics from the score's own syllables. Built-in dictionaries exist for `en`, `es`, `fr` and `pt`; for any other language, supply `hyphenatedWords`. Optional, defaults to `'en'`. A score's own printed title/lyrics (if present) are also used and take priority, regardless of `lang`.
 
 `scoreUrl`, `midiUrl`, and `lyricsUrl` may be subject to [CORS restrictions](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS) depending on where the files are hosted.
 
@@ -191,6 +192,52 @@ With only a score (`scoreUrl` or `scoreContent`), Chorister.js should render cle
 - **Chord sets.** Guitar chords, ukulele chords, analytical marks, or similar text and/or images to be shown above the music system.
 
 - **Fermatas.** Information about each fermata in the score, for better MIDI playback.
+
+- **Hyphenated words.** A dictionary of words your language spells with a hyphen, for scores whose lyrics Chorister.js reads out of the engraving. See below.
+
+#### <a name="hyphenated-words"></a>Hyphenated words
+
+When lyrics are extracted from the score's own syllables, a hyphen that falls on a syllable
+boundary was never engraved — the engraver had no reason to print one, since the syllables were
+already being split. Tagalog `pag-ibig` is engraved `Pag` / `i` / `big` and rejoins as `pagibig`.
+Chorister.js puts such hyphens back from three sources, each beating the one after it:
+
+1. **The score's own printed title and stanza text.** Evidence about this song, so it always wins.
+   This needs no setup and is often enough on its own.
+2. **`hyphenatedWords`**, if you provide it — your dictionary for the score's language.
+3. **The built-in list** for `lang`. This covers four languages — `en`, `es`, `fr` and `pt`, the
+   same set spelled-out ordinals are recognized in — and within those, only a few hundred of the
+   commonest hyphenated words each. It is small by design: enough to be useful with nothing
+   handed in, and no substitute for a real dictionary. **Any other language restores hyphens only
+   from the score's own printed text unless you supply `hyphenatedWords`.**
+
+```js
+score.load('musicxml', {
+  scoreUrl: 'song.musicxml',
+  lang: 'tl',
+  hyphenatedWords: ['pag-ibig', 'mag-isa', 'nag-ampo'],
+});
+```
+
+A word is only restored where its hyphen lands on a syllable boundary, so an entry that happens to
+collide with an unrelated word cannot respell it. Entries are matched case-insensitively and the
+restored hyphen is an ordinary `-`; the word's own capitalization is left as the syllables spelled
+it, so Indonesian `dari-Nya` keeps its capital.
+
+**Building a dictionary.** Chorister.js does not ship one beyond the four built-in lists — a
+useful list is large, and the sources worth building it from carry their own licence terms. Two
+approaches that work:
+
+- **Harvest from lyrics you already have.** Every hyphenated word in a body of text in that
+  language is a candidate. This is cheap and stays close to the words you actually sing.
+- **Extract from a dictionary of the language**, such as Wiktionary. Drop any hyphenated word
+  whose joined spelling is *also* a word — otherwise restoring the hyphen would respell the
+  joined one (`sun-light` would claim every `sunlight`) — and drop words spelled out by syllable.
+
+Note that a dictionary is not a complete answer: much of what goes missing is morphology rather
+than vocabulary. Indonesian's `dari-Nya` and `berkat-Mu`, French's `dis-nous` and `sauve-moi`, and
+Cebuano's `nag-ampo` are inflected forms no dictionary lists, so a language with heavy clitic or
+affix hyphenation may need its own rules on top.
 
 #### Examples
 

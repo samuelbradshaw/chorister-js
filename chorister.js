@@ -289,7 +289,7 @@ ChScore.prototype.load = async function (format, {
     lyricsText = null, lyricLinesTemplate = null,
     parts = null, partsTemplate = null,
     sections = null, sectionsTemplate = null,
-    chordSets = null, fermatas = null
+    chordSets = null, fermatas = null, hyphenatedWords = null
   }, options = this._defaultOptions) {
   this._container.dataset.chStatus = 'preparing';
   if (!format || !(scoreUrl || scoreContent)) {
@@ -389,28 +389,16 @@ ChScore.prototype.load = async function (format, {
     partsById: null,
     sections: sections ?? [],
     sectionsById: null,
-    // Every template this score can be written down as, filled in by _reportTemplates once the
-    // parts, sections and lyric lines settle -- always all of them, however the score was
-    // arrived at. 'Cp' is chord positions, exact against this engraving; 'Mb' is measure and
-    // beat, which survives a different one. 'Input' is what the caller handed in, verbatim,
-    // or null.
     templates: null,
-    // The chord positions the lines came out broken at, filled in as the stanzas are built
-    // and written up as a template once they settle. Kept apart from lyricLinesTemplate
-    // above, which is the caller's: the stanzas are built more than once (a refrain is
-    // re-extracted with its line demoted), and reporting the first pass's answer into the
-    // caller's field would leave the second pass reading it back as instruction.
     lyricLineBreaks: null,
     chordSets: chordSets ?? [],
     chordSetsById: null,
     harmStaffNumber: '1',
     trebleClefStaffNumbersSelector: '',
     fermatas: fermatas ?? [],
+    hyphenatedWords: hyphenatedWords ?? [],
   };
 
-  // What the caller handed in, kept apart from what gets reported. They were one field each
-  // before, and a template read back out of the field it was reported into is a template
-  // read as instruction on the next pass -- which is a different thing (see _segmentRuns).
   this._suppliedTemplates = {
     parts: partsTemplate ?? null,
     sections: sectionsTemplate ?? null,
@@ -7158,7 +7146,8 @@ ChScore.prototype._sectionIdentity = function (type, number) {
 // left for the passes at the end of _normalizeSections to settle -- which is why no
 // generator below bothers to make them up.
 ChScore.prototype._newSection = function ({ type = 'unknown', marker = null,
-  placement = 'inline', chordPositionRanges = [], lyricsText = null, lyricsAnnotated = null }) {
+  placement = 'inline', chordPositionRanges = [], lyricsText = null, lyricsAnnotated = null,
+  lyricWords = null }) {
   return {
     sectionId: null,
     type: type,
@@ -7167,11 +7156,12 @@ ChScore.prototype._newSection = function ({ type = 'unknown', marker = null,
     placement: placement,
     pauseAfter: false,
     chordPositionRanges: chordPositionRanges,
-    // The section's words twice over: as plain text, and marked up with a span per syllable
-    // saying where it is sung. Comparing sections compares the plain one -- the same words
-    // sung on a later playthrough carry different chord positions in their markup.
     lyricsText: lyricsText,
     lyricsAnnotated: lyricsAnnotated,
+    // The same words as data -- where each one's syllables join, and the hyphens it
+    // already carries. Null where the words were handed in rather than read off the
+    // score's own syllables.
+    lyricWords: lyricWords,
   };
 }
 
@@ -7586,6 +7576,7 @@ ChScore.prototype._normalizeSections = function () {
           })),
           lyricsText: lyricStanza.lyricsText,
           lyricsAnnotated: lyricStanza.lyricsAnnotated,
+          lyricWords: lyricStanza.lyricWords ?? null,
         }));
         nameLyricElements(otherSections.at(-1), lyricStanza);
       }
@@ -7626,6 +7617,7 @@ ChScore.prototype._normalizeSections = function () {
     if (section?.type === lyricStanza.type && !section.lyricsAnnotated) {
       section.lyricsText = lyricStanza.lyricsText;
       section.lyricsAnnotated = lyricStanza.lyricsAnnotated;
+      section.lyricWords = lyricStanza.lyricWords ?? null;
       nameLyricElements(section, lyricStanza);
       if (foundByPosition) si = pi + 1;
     } else if (!section) {
@@ -10138,12 +10130,27 @@ ChScore.prototype._mergeSingleLineRuns = function (runs, phraseStarts) {
 
 // Build lyric stanzas from score syllables, when no lyrics are provided
 ChScore.prototype._getLyricsFromSyllables = function (syllables) {
-  // Build table of hyphenated words (combining hard-coded words, and words from the song title and lyrics below)
-  this._scoreData.hyphenPositions = this._hyphenPositionsTable(
-    this._hyphenatedWords[this._scoreData.scoreMetadata.lang] ?? [],
-    [this._scoreData.scoreMetadata.title,
-      ...this._stanzaTextBlocks().map(block => block.html)].filter(Boolean)
-  );
+  // Where this score's hyphenated words come from, least authoritative first: the hard-coded
+  // list is a guess about the language, the caller's list is a better one, and the score's own
+  // printed title and lyrics are evidence about this song. Spread in that order, so each beats
+  // the one before it. The hard-coded list is the same every time, so its table is built once
+  // per language and shared -- with an auto-built list of thousands of words, rebuilding it per
+  // score is the whole cost of hyphenation.
+  const lang = this._scoreData.scoreMetadata.lang;
+  if (!ChScore.prototype._builtInHyphenPositions.has(lang)) {
+    ChScore.prototype._builtInHyphenPositions.set(
+      lang, this._hyphenPositionsTable(this._hyphenatedWords[lang] ?? []));
+  }
+  const printed = this._hyphenPositionsTable([], [this._scoreData.scoreMetadata.title,
+    ...this._stanzaTextBlocks().map(block => block.html)].filter(Boolean));
+  this._scoreData.hyphenPositions = {
+    ...ChScore.prototype._builtInHyphenPositions.get(lang),
+    ...this._hyphenPositionsTable(this._scoreData.hyphenatedWords),
+    ...printed,
+  };
+  // Told apart here rather than inferred later: a reader deciding whether to trust a restored
+  // hyphen weighs printed evidence differently from a word list's guess.
+  this._scoreData.printedHyphenWords = new Set(Object.keys(printed));
 
   const provisionalRuns = this._syllableStanzaRuns(syllables);
   // Phrase starts come from the runs as engraved; both passes below read them to decide
@@ -10257,6 +10264,7 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   for (const { stanza, builder: words } of built) {
     stanza.lyricsText = this._applyFindReplace(words.text());
     stanza.lyricsAnnotated = this._applyFindReplace(words.annotatedText());
+    stanza.lyricWords = words.records();
   }
 
   let stanzas = built.map(entry => entry.stanza);
@@ -10281,6 +10289,7 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
         && refrainTexts.some(refrain => stanza.lyricsText?.startsWith(refrain))) {
         previous.lyricsText = `${previous.lyricsText}\n${stanza.lyricsText}`.trim();
         previous.lyricsAnnotated = `${previous.lyricsAnnotated}\n${stanza.lyricsAnnotated}`.trim();
+        previous.lyricWords = [...(previous.lyricWords ?? []), ...(stanza.lyricWords ?? [])];
         for (const range of stanza.chordPositionRanges) {
           this._addChordPositionRun(previous.chordPositionRanges, [range.start, range.end],
             range.lyricLineIds, range.staffNumbers);
@@ -11814,730 +11823,141 @@ ChScore.prototype._applyFindReplace = function (text) {
   return result;
 }
 
+// The clitic pronouns a language writes with a hyphen only when they are capitalized.
+// Indonesian and Malay hyphenate the possessive for deity ("Berkat-Mu", "Darah-Nya") and
+// join the ordinary one ("gembalaku", "jalannya"). The capital is the only difference,
+// which is why this is a rule and not a word list: _hyphenPositionsTable lowercases every
+// key it files, so "Dengan-Ku" and "denganku" would be one entry and one answer.
+ChScore.prototype._capitalizedClitics = {
+  id: ['Nya', 'Ku', 'Mu'],
+  ms: ['Nya', 'Ku', 'Mu'],
+};
+
+// Where a clitic starts, as an offset into the word, and whether it is capitalized --
+// null where the word ends in no clitic at all. The letter before it has to be one too:
+// "'Ku" is the elided pronoun standing alone, not a suffix.
+//
+// Both answers matter. A capitalized clitic takes a hyphen the engraving never printed,
+// and a lowercase one takes none -- so a word list saying otherwise has to be overruled,
+// since it filed both spellings under one lowercased key.
+ChScore.prototype._cliticAt = function (trimmed, leadingPunctuation) {
+  const clitics = this._capitalizedClitics[this._scoreData?.scoreMetadata?.lang];
+  if (!clitics) return null;
+  for (const clitic of clitics) {
+    for (const spelling of [clitic, clitic.toLowerCase()]) {
+      const at = trimmed.length - spelling.length;
+      if (at > 0 && trimmed.endsWith(spelling)
+          && this._patterns.letterOrNumber.test(trimmed[at - 1])) {
+        return { offset: at + leadingPunctuation, capitalized: spelling === clitic };
+      }
+    }
+  }
+  return null;
+}
+
 // Known words with hyphens for lookup when extracting lyrics ("latter-day"), by
-// language (see the `lang` input-data field in ChScore.prototype.load). A score's
-// own printed lyrics (see _parseAndAnnotateMei) cover words this hard-coded list
-// doesn't, in any language.
+// language (see the `lang` input-data field in ChScore.prototype.load). Four languages,
+// the same set _ordinalWords covers: enough to be useful with nothing handed in, without
+// the library carrying a dictionary for every language it can render. A caller with a
+// real dictionary passes it in through `hyphenatedWords`, which outranks this; a score's
+// own printed lyrics (see _parseAndAnnotateMei) outrank both.
+//
+// Generated from Wiktionary rather than collected by hand, then capped to the likeliest
+// words per language, so the lists stay small and say something about the language rather
+// than about whichever songs happened to be read.
 ChScore.prototype._hyphenatedWords = {
   en: [
-    'a-down', 'a-seeking', 'a-singing', 'a-sleeping', 'a-watching', 'abed-nego',
-    'adam-ondi-ahman', 'ah-so', 'all-atoning', 'all-cleansing', 'all-consuming',
-    'all-gracious', 'all-pervading', 'all-redeeming', 'all-searching', 'all-sufficient',
-    'angel-sent', 'baa-baa', 'battle-line', 'battle-worn', 'birthday-time',
-    'black-horse', 'blood-washed', 'blood-wash’d', 'brand-new', 'by-ways',
-    'careful-tended', 'chewk-ha-hahm-nee-dah', 'christ-child', 'co-operatives',
-    'coom-play-ahn-yos', 'dark-browed', 'day-a', 'day-dawn', 'day-star', 'death-beds',
-    'dew-distilling', 'dim-lit', 'ding-dong', 'dog-en', 'don-ken', 'd’à-côté',
-    'eagle-wings', 'earth-stains', 'easter-time', 'enoch-like', 'est-il',
-    'ever-blazing', 'ever-changing', 'ever-circling', 'ever-joyful', 'ever-living',
-    'ever-present', 'ever-sure', 'ever-tender', 'fac-simile', 'fah-now', 'faith-filled',
-    'far-called', 'far-flung', 'far-off', 'fay-lees', 'fie-lee-mawn', 'fire-side',
-    'firm-rooted', 'fish-nets', 'flower-time', 'fortunate-and', 'free-fall', 'free-men',
-    'frer-li-sher', 'get-the-work-done', 'gloom-wrapt', 'god-guarded', 'god-hating',
-    'gold-bought', 'grah-see-ahs', 'grah-too-lay-rare', 'grands-parents',
-    'guh-burts-tahk', 'habit-free', 'hand-me-downs', 'heart-songs', 'heart-strings',
-    'heaven-born', 'heaven-bound', 'heaven-lit', 'heaven-rescued', 'heaven-sent',
-    'heaven-wrought', 'heavy-laden', 'heav’n-born', 'heav’n-rescued', 'heav’n-wrought',
-    'heigh-dee-ho', 'high-de-ho', 'kahn-shah', 'lamp-lit', 'late-night', 'latter-day',
-    'latter-days', 'latter-kingdom', 'life-gate', 'life-giving', 'light-mindedness',
-    'long-awaited', 'long-expected', 'love-a', 'love-inspired', 'love-light',
-    'loved-ones', 'loving-watch', 'mah-loh', 'mah-noo-ee-yah', 'mammon-care',
-    'man-made', 'mare-see', 'modern-day', 'nail-prints', 'near-touching', 'needle-work',
-    'never-ending', 'never-fading', 'never-failing', 'night-caps', 'o-ooo',
-    'obedience-to', 'oh-meh-deh-toe', 'old-fashioned', 'one-tenth', 'peak-a-boo',
-    'peek-a-boo', 'pine-crowned', 'pit-ter', 'pitter-patter', 'prayer-time',
-    'pride-filled', 'purple-headed', 're-ascends', 're-echo', 're-echoes',
-    'restored-their', 'rock-a-bye', 'rock-sealed', 'safe-folded', 'sand-duned',
-    'sea-billows', 'self-control', 'self-denial', 'shade-trees', 'shee-mah-sue',
-    'snow-clad', 'snow-time', 'sobre-el', 'soft-spoken', 'sought-out', 'soul-cheering',
-    'soul-reviving', 'spirit-wings', 'star-spangled', 'stepping-stones', 'storm-tossed',
-    'stumbling-stone', 'sweet-toned', 'săng-ill-oŏl', 'tahn-joe-bee', 'tear-filled',
-    'tear-washed', 'tempest-tossed', 'temple-block', 'ten-fold', 'thank-offerings',
-    'thank-off’rings', 'thank-you’s', 'thunder-burst', 'top-most',
-    'tra-la-la-la-la-la-la', 'treasure-store', 'trick-a-lick-a-lick-a-lick', 'triste-y',
-    'truth-bearing', 'twenty-fifth', 'under-shepherds', 'valiant-hearted', 'valley-o',
-    'voulez-vous', 'war-cry', 'well-beloved', 'well-fought', 'well-known', 'where-ever',
-    'white-robed', 'yo-intenté', 'yule-tide', 'zip-a-dee-ay',
+    'abiding-place', 'all-conquering', 'all-embracing', 'all-important', 'all-perfect',
+    'all-pervading', 'all-powerful', 'all-seeing', 'anglo-american', 'anglo-catholic',
+    'anglo-irish', 'awe-inspiring', 'best-known', 'better-known', 'boarding-school',
+    'bourton-on-the-water', 'bright-eyed', 'brother-in-law', 'by-and-by', 'christ-child',
+    'country-dance', 'country-dances', 'dark-eyed', 'dwelling-place', 'eighty-eighth',
+    'eighty-first', 'eighty-second', 'english-speaking', 'far-famed', 'far-flung',
+    'father-in-law', 'first-rate', 'forty-fourth', 'forty-second', 'forty-sixth', 'forty-third',
+    'franco-prussian', 'god-given', 'golden-haired', 'grief-stricken', 'half-a-dozen',
+    'half-century', 'half-dozen', 'half-hour', 'harvest-home', 'heart-stirring', 'heaven-sent',
+    'heavenly-minded', 'high-flown', 'high-pitched', 'high-sounding', 'high-spirited',
+    'high-stepping', 'ill-feeling', 'ill-natured', 'ill-will', 'last-named', 'less-known',
+    'life-giver', 'long-ago', 'long-drawn', 'long-drawn-out', 'long-established', 'long-felt',
+    'long-lost', 'longed-for', 'many-colored', 'many-sided', 'matter-of-fact', 'never-dying',
+    'newcastle-on-tyne', 'oft-repeated', 'old-time', 'old-world', 'olive-branch', 'one-fourth',
+    'one-half', 'one-tenth', 'one-third', 'only-begotten', 'open-air', 'out-of-doors',
+    'out-of-the-way', 'pent-up', 'post-homeric', 'present-day', 'resting-place', 'sabbath-day',
+    'self-abasement', 'self-assertion', 'self-assertive', 'self-condemned', 'self-confidence',
+    'self-confident', 'self-created', 'self-deceiving', 'self-denial', 'self-devotion',
+    'self-distrust', 'self-educated', 'self-examination', 'self-inflicted', 'self-moving',
+    'self-righteousness', 'self-sacrifice', 'self-satisfied', 'self-seeking',
+    'self-sufficiency', 'self-taught', 'serious-minded', 'seventy-second', 'sister-in-law',
+    'snow-white', 'soul-destroying', 'stratford-on-avon', 'swaddling-clothes', 'tempest-tossed',
+    'thirty-seventh', 'thirty-sixth', 'time-honored', 'twenty-fifth', 'twenty-fourth',
+    'twenty-second', 'twenty-third', 'virgin-born', 'well-appointed', 'well-balanced',
+    'well-beloved', 'well-established', 'well-fed', 'well-loved', 'well-made', 'well-meant',
+    'well-pleased', 'well-proportioned', 'winding-sheet', 'world-famous', 'world-renowned',
+    'would-be',
   ],
   fr: [
-    'a-t-il', 'a-t-on', 'a-t’on', 'abed-nego', 'accorde-moi', 'accorde-nous',
-    'accueille-nous', 'adam-ondi-ahman', 'adorez-le', 'ai-je', 'aide-moi', 'aide-nous',
-    'aimes-tu', 'aimez-vous', 'aimons-le', 'allons-nous', 'allons-y', 'apaise-moi',
-    'apaise-toi', 'apporte-nous', 'apprends-moi', 'apprends-nous', 'apprenons-leur',
-    'approchez-vous', 'arrête-toi', 'as-tu', 'assieds-toi', 'attend-il', 'au-delà',
-    'au-dessus', 'au-fond', 'avez-vous', 'baisses-tu', 'baptise-nous', 'bats-toi',
-    'bien-aimé', 'bien-aimés', 'bénis-les', 'bénis-moi', 'bénis-nous', 'caches-tu',
-    'calme-nous', 'ceux-ci', 'ceux-là', 'chante-le', 'chantez-le', 'chantons-le',
-    'cherchez-les', 'choisirais-je', 'choses-là', 'comble-nous', 'comprends-tu',
-    'compte-les', 'conduis-moi', 'conduis-nous', 'confie-toi', 'conformons-nous',
-    'conforte-nous', 'consacrons-nous', 'console-moi', 'conte-moi', 'contemplerai-je',
-    'contre-chant', 'convertissez-vous', 'couronne-moi', 'crièrent-ils', 'crois-le',
-    'crois-tu', 'célébrez-le', 'de-tout', 'devrais-je', 'dirige-moi', 'dis-le',
-    'dis-lui', 'dis-moi', 'dis-nous', 'dit-on', 'dois-je', 'don-là', 'donne-moi',
-    'donne-nous', 'donnez-lui', 'donnez-nous', 'donnons-les', 'donnons-lui',
-    'découvre-toi', 'délivre-moi', 'délivre-nous', 'dénombre-les', 'd’ici-là',
-    'd’à-côté', 'ecoutez-le', 'efforçons-nous', 'enseigne-moi', 'enseigne-nous',
-    'entendez-vous', 'entends-le', 'entends-moi', 'entends-tu', 'envoie-moi',
-    'envolez-vous', 'es-tu', 'esprit-saint', 'est-ce', 'est-il', 'et-mes',
-    'eveille-toi', 'eveillez-vous', 'exaltons-le', 'fais-en', 'fais-le', 'fais-les',
-    'fais-moi', 'fais-nous', 'fais-toi', 'fais-tu', 'faisons-lui', 'faisons-nous',
-    'faites-le', 'faites-lui', 'faudrait-il', 'faut-il', 'façonne-la', 'ferons-nous',
-    'fie-toi', 'forge-la', 'garde-moi', 'garde-nous', 'gardez-vous', 'gardons-nous',
-    'grand-maman', 'grand-prêtre', 'grands-parents', 'guide-moi', 'guide-nous',
-    'guide-t-il', 'guidons-les', 'guéris-moi', 'guéris-nous', 'hâtons-nous', 'ici-bas',
-    'ignore-les', 'je-ne', 'jean-baptiste', 'jesus-christ', 'joignons-nous', 'jour-là',
-    'jusque-là', 'jésus-christ', 'laisse-le', 'laisse-les', 'laisse-nous',
-    'laissez-les', 'laissons-la', 'laissons-le', 'lance-toi', 'levez-vous',
-    'levons-nous', 'louez-le', 'louons-le', 'lui-même', 'là-bas', 'là-haut',
-    'l’arc-en-ciel', 'l’au-delà', 'l’esprit-saint', 'matin-là', 'maître-guérisseur',
-    'menons-les', 'mets-les', 'moi-même', 'montre-moi', 'montre-nous', 'montrons-nous',
-    'mène-moi', 'mène-nous', 'même-si', 'm’aimes-tu', 'm’as-tu', 'non-retour',
-    'nous-même', 'nouveau-né', 'n’ai-je', 'n’est-ce', 'n’est-il', 'n’écoutons-nous',
-    'n’éprouves-tu', 'obéis-lui', 'offre-nous', 'offrons-leur', 'offrons-lui',
-    'oserais-je', 'ouvre-lui', 'ouvrez-lui', 'par-dessus', 'parais-tu', 'pardonne-nous',
-    'pardonne-tous', 'parle-lui', 'parle-moi', 'parlerais-je', 'parlez-lui',
-    'partagerais-je', 'passa-t-il', 'penserais-je', 'permets-moi', 'permets-nous',
-    'peut-il', 'peut-on', 'peut-être', 'peux-tu', 'planes-tu', 'pleuraient-elles',
-    'porte-moi', 'portons-lui', 'pourrai-je', 'pourrais-je', 'pourrais-tu',
-    'pouvais-je', 'pouvons-nous', 'premier-né', 'prends-le', 'prends-les', 'prends-moi',
-    'prends-nous', 'prions-le', 'prosternons-nous', 'protège-moi', 'prépare-moi',
-    'préparons-nous', 'présentez-vous', 'prête-moi', 'puis-je', 'puisses-tu',
-    'puissiez-vous', 'puissions-nous', 'puissé-je', 'purifie-le', 'purifie-moi',
-    'quand-tu', 'qu’as-tu', 'qu’avons-nous', 'qu’est-ce', 'qu’offrirons-nous',
-    'qu’éprouves-tu', 'raconte-moi', 'rappelle-toi', 'rappelons-nous',
-    'rassemblez-vous', 'recherche-le', 'recouvrons-nous', 'reflèteraient-ils',
-    'refléteraient-ils', 'rejoins-les', 'rejoins-nous', 'remercions-le', 'remets-lui',
-    'remplis-moi', 'rendez-lui', 'rendez-vous', 'rendons-lui', 'rends-moi',
-    'rends-nous', 'repens-toi', 'repentez-vous', 'reposez-vous', 'ressens-tu',
-    'resteras-tu', 'revêts-moi', 'revêts-nous', 'reçois-moi', 'reçois-nous',
-    'réjouis-toi', 'réjouissez-vous', 'réunissons-nous', 'réveillez-vous', 'révèle-toi',
-    'saint-esprit', 'sainte-cène', 'sais-tu', 'saisissons-nous', 'sauve-moi',
-    'savoir-faire', 'scelle-nous', 'sens-tu', 'serais-je', 'serons-nous', 'servez-le',
-    'servons-le', 'soir-là', 'sois-lui', 'sommes-nous', 'son-œuvre', 'soulage-nous',
-    'soutiens-les', 'soutiens-moi', 'soutiens-nous', 'souvenez-vous', 'souvenons-nous',
-    'souviens-t-en', 'souviens-toi', 'souviens-tu', 'suffit-il', 'suis-le', 'suis-moi',
-    'suivez-moi', 'suivons-les', 'tends-moi', 'tenons-nous', 'tiens-toi',
-    'tou-puissant', 'tourne-toi', 'tournez-le', 'tournez-vous', 'tournons-nous',
-    'tout-petits', 'tout-puissant', 'très-haut', 'très-saint', 'tu-es', 't’es-tu',
-    'unissez-vous', 'unissons-les', 'unissons-nous', 'vais-je', 'vas-tu', 'veux-tu',
-    'viens-nous', 'viens-tu', 'vit-il', 'vois-tu', 'voudrais-je', 'ében-ézer',
-    'éclaire-moi', 'écoute-le', 'écoute-nous', 'écoutez-le', 'étiez-vous',
-    'étirez-vous', 'éveille-toi', 'éveillez-vous', 'éveillons-nous', 'évite-les',
-    'œuvrons-y',
+    'allez-vous-en', 'allez-y', 'allons-nous-en', 'amour-propre', 'appelez-vous',
+    'après-demain', 'après-midi', 'arc-en-ciel', 'arcs-en-ciel', 'arrière-pensée', 'arrête-toi',
+    'arrêtez-vous', 'arrêtons-nous', 'asseyez-vous', 'asseyons-nous', 'assieds-toi',
+    'au-dedans', 'au-delà', 'au-dessous', 'au-dessus', 'au-devant', 'avant-coureur',
+    'avant-goût', 'avant-hier', 'avant-propos', 'bas-fonds', 'bas-relief', 'bas-reliefs',
+    'bas-ventre', 'beau-frère', 'beau-père', 'beaux-arts', 'beaux-frères', 'belle-mère',
+    'belle-soeur', 'belles-lettres', 'bien-aimé', 'bien-aimée', 'bien-aimées', 'bien-aimés',
+    'bien-être', 'branle-bas', 'cachez-vous', 'celle-ci', 'celle-là', 'celles-ci', 'celles-là',
+    'celui-ci', 'celui-là', 'cerf-volant', 'ceux-ci', 'ceux-là', 'chauve-souris',
+    'chauves-souris', 'chef-lieu', 'cherchez-vous', 'château-fort', 'ci-après', 'ci-dessus',
+    'ci-devant', 'ci-gît', 'cinquante-deux', 'clair-obscur', 'connaissez-vous',
+    'contentons-nous', 'coupe-gorge', 'demandez-vous', 'demandons-nous', 'demi-cercle',
+    'demi-dieu', 'demi-dieux', 'demi-douzaine', 'demi-heure', 'demi-mort', 'demi-mot',
+    'demi-siècle', 'dernier-né', 'devez-vous', 'devons-nous', 'dix-huit', 'dix-huitième',
+    'dix-neuf', 'dix-neuvième', 'dix-sept', 'dix-septième', 'elle-même', 'elles-mêmes',
+    'entendez-vous', 'envolez-vous', 'est-il', 'eux-mêmes', 'excuse-moi', 'excusez-moi',
+    'fais-toi', 'faisons-nous', 'faites-vous', 'fer-blanc', 'grand-prêtre', 'grand-père',
+    'grande-bretagne', 'ici-bas', 'in-folio', 'in-octavo', 'in-quarto', 'ivre-mort',
+    'jean-baptiste', 'jean-paul', 'jusque-là', 'jésus-christ', 'laisse-toi', 'laisser-aller',
+    'laissez-vous', 'lapis-lazuli', 'lui-même', 'là-bas', 'là-dedans', 'là-dessus', 'là-haut',
+    'mi-clos', 'mi-close', 'moi-même', 'mont-blanc', 'mort-nés', 'moyen-âge', 'non-sens',
+    'nord-est', 'nord-ouest', 'notre-dame', 'nourris-toi', 'nous-mêmes', 'nouveau-né',
+    'nouveau-nés', 'nouvelle-france', 'nu-tête', 'ouï-dire', 'par-ci', 'par-delà',
+    'passe-temps', 'perce-neige', 'petit-fils', 'petite-fille', 'petits-enfants', 'petits-fils',
+    'peut-être', 'plain-chant', 'plaît-il', 'pont-euxin', 'porte-croix', 'porte-voix',
+    'portez-vous', 'premier-né', 'premiers-nés', 'prie-dieu', 'procès-verbal', 'puis-je',
+    'quarante-cinq', 'quatre-vingt-dix', 'quatre-vingt-treize', 'quatre-vingts',
+    'quelques-unes', 'quelques-uns', 'rappelez-vous', 'rappelle-toi', 'rappelons-nous',
+    'rendez-vous', 'rendons-nous', 'rends-toi', 'rez-de-chaussée', 'rouge-gorge',
+    'réveille-toi', 'réveillez-vous', 'saint-bernard', 'saint-cyr', 'saint-denis',
+    'saint-esprit', 'saint-jacques', 'saint-louis', 'saint-martin', 'saint-pierre',
+    'saint-pétersbourg', 'saint-sauveur', 'saint-siège', 'saint-étienne', 'sainte-hélène',
+    'sais-tu', 'sang-froid', 'sauf-conduit', 'savez-vous', 'savoir-vivre', 'sers-toi',
+    'soi-disant', 'soi-même', 'soixante-cinq', 'soixante-dix', 'soixante-dix-sept',
+    'soixante-quatorze', 'sous-marin', 'sous-marine', 'sous-marines', 'sous-marins',
+    'souvenez-vous', 'souvenons-nous', 'souviens-toi', 'soyez-vous', 'sud-est', 'sud-ouest',
+    'sur-le-champ', 'tais-toi', 'taisez-vous', 'taisons-nous', 'tenez-vous', 'terre-neuve',
+    'tiens-toi', 'toi-même', 'tout-puissant', 'tout-puissants', 'toute-puissante',
+    'trente-cinq', 'trente-deux', 'trente-quatre', 'trente-six', 'trente-trois', 'trop-plein',
+    'trouvez-vous', 'très-haut', 'tête-à-tête', 'va-et-vient', 'va-nu-pieds', 'vas-y',
+    'vice-roi', 'vif-argent', 'vingt-cinq', 'vingt-cinquième', 'vingt-deux', 'vingt-deuxième',
+    'vingt-huit', 'vingt-neuf', 'vingt-quatre', 'vingt-quatrième', 'vingt-sept',
+    'vingt-septième', 'vingt-six', 'vingt-sixième', 'vingt-trois', 'vis-à-vis', 'vois-tu',
+    'vous-même', 'vous-mêmes', 'voyez-vous', 'à-peu-près',
   ],
   pt: [
-    'abençoar-me', 'abram-nos', 'abraçar-me', 'abrem-se', 'abrir-se-ão', 'aceita-a',
-    'achegai-vos', 'adorai-o', 'adorar-te', 'afasta-me', 'agarrar-nos',
-    'agradecemos-te', 'agradecer-te', 'ajuda-me', 'ajuda-nos', 'ajuda-te', 'ajudai-me',
-    'ajudando-vos', 'ajudar-nos', 'ajudar-te', 'ajudou-me', 'ajudá-lo', 'ajudá-los',
-    'alegra-te', 'alegrem-se', 'aliviou-me', 'ama-me', 'amai-vos', 'amando-me',
-    'amar-te', 'amor-perfeito', 'ancorar-me', 'aparta-nos', 'apegar-nos',
-    'apresentar-se', 'aproxima-se', 'aproximar-nos', 'arco-íris', 'arrepender-nos',
-    'banhar-me', 'bem-amado', 'bem-estar', 'bem-vindo', 'buscaremos-te', 'buscá-la',
-    'buscá-lo', 'cantai-lhe', 'cantar-lhe-ei', 'cantaremos-te', 'carregas-me',
-    'chama-te', 'chamai-o', 'chamar-me', 'chamar-te', 'concede-me', 'concede-nos',
-    'conceder-nos', 'concedeu-me', 'conduzindo-os', 'confirma-lhes', 'conhece-te',
-    'conquistá-la', 'consagrai-o', 'construa-se', 'conta-me', 'conta-nos',
-    'converte-se', 'convida-nos', 'curar-me', 'curei-lhe', 'dai-lhes', 'damo-nos',
-    'damos-te', 'dan-quem', 'dando-lhe', 'dar-lhe', 'dar-me', 'dar-nos', 'dar-te',
-    'dei-lhe', 'deitei-me', 'deixa-me', 'deixa-o', 'deixa-te', 'deixai-os', 'deixas-te',
-    'deixou-nos', 'deleita-te', 'deseje-o', 'despede-nos', 'deste-me', 'deu-lhes',
-    'deu-me', 'deu-nos', 'deu-te', 'deu-vos', 'deve-se', 'devemo-nos', 'dirigir-nos',
-    'dirigiu-se', 'diz-lhe', 'diz-me', 'diz-nos', 'dize-as', 'dizendo-lhes', 'dou-lhe',
-    'dou-te', 'dá-lhe', 'dá-lhes', 'dá-me', 'dá-nos', 'dá-te', 'dás-me', 'dão-me',
-    'd’à-côté', 'ei-lo', 'eis-me', 'eis-nos', 'eleva-me', 'eleva-nos', 'eleva-te',
-    'elevar-me', 'elevar-te', 'enche-me', 'encher-me', 'encontrar-me', 'encontrei-me',
-    'ensina-me', 'ensina-nos', 'ensinai-me', 'ensinar-me', 'ensinar-nos', 'ensinar-te',
-    'ensinou-me', 'ensinou-nos', 'ensiná-las', 'envia-lhes', 'enviou-te', 'ergam-se',
-    'ergue-me', 'ergue-nos', 'ergue-te', 'erguei-vos', 'erguendo-me', 'erguer-nos',
-    'erguer-se', 'erguer-te', 'erguê-los', 'escolheu-me', 'escuta-me', 'escuta-nos',
-    'escuta-se', 'esforçando-me', 'esforçar-me', 'esquecer-me-ei', 'esqueci-me',
-    'est-il', 'estender-lhe', 'estender-lhes', 'estendeu-lhes', 'estão-na', 'exaltá-lo',
-    'fala-se', 'falar-lhes', 'faz-me', 'faz-nos', 'faz-se', 'faze-me', 'fazei-o',
-    'fazendo-os', 'fazes-me', 'fazê-lo', 'fez-lhes', 'fez-me', 'fez-nos', 'fez-te',
-    'finda-se', 'fizer-nos', 'fizeram-nos', 'foi-nos', 'formar-se', 'grands-parents',
-    'grá-cias', 'guardando-me', 'guardar-me', 'guardou-me', 'guia-me', 'guia-nos',
-    'guiai-vos', 'guiando-me', 'guiar-me', 'guiar-nos', 'guiar-te', 'honrá-lo',
-    'hão-de', 'inspira-me', 'inspiram-me', 'inspirar-te', 'inspire-nos', 'invocamos-te',
-    'junta-te', 'juntai-vos', 'lembra-me', 'lembra-te', 'leva-nos', 'levantai-vos',
-    'levantar-te', 'levantas-me', 'liberta-nos', 'libertar-nos', 'libertar-te',
-    'liderar-nos', 'ligar-nos', 'livra-me', 'livra-nos', 'livram-me', 'livrou-nos',
-    'louvai-o', 'louvá-lo', 'ma-lo', 'mandar-nos', 'mandou-me', 'mandou-nos',
-    'mandou-o', 'mantém-nos', 'mer-ci', 'moldar-te', 'mostra-me', 'mostrai-lhes',
-    'mostrando-me', 'mostrando-se', 'mostrar-lhe', 'mostrar-me', 'mostrar-nos',
-    'mostrar-te', 'mostrou-lhes', 'mostrou-me', 'mostrou-nos', 'nutre-nos',
-    'oferta-lhes', 'olvidá-lo', 'ouve-o', 'ouvem-se', 'ouvi-lo', 'ouvi-los', 'ouvir-te',
-    'ouviu-lhe', 'ouviu-se', 'partam-se', 'passando-se', 'pedimos-te', 'perde-se',
-    'perdoa-nos', 'perguntam-me', 'perguntar-me', 'peço-te', 'pode-me', 'porta-voz',
-    'poupe-nos', 'preparar-me', 'preparar-nos', 'preparou-nos', 'promete-me',
-    'protege-me', 'protege-nos', 'proteger-te', 'provar-me', 'purifica-nos', 'puxar-te',
-    'põe-me', 'quebram-se', 'quebrar-te', 'quer-me', 'queres-te', 'quero-te',
-    'redimir-nos', 'refina-me', 'refinar-te', 'rejubilai-vos', 'repetir-me',
-    'resgatar-nos', 'resgatou-me', 'responder-te', 'respondi-lhe', 'restaura-nos',
-    'reunir-se', 'revelar-te', 'revelou-nos', 'reverlar-se', 'rogamos-te', 'rogo-te',
-    'romper-se', 'salva-nos', 'salvar-me', 'salvar-nos', 'salvá-la', 'segue-me',
-    'segui-la', 'segui-lo', 'segui-lo-ei', 'segui-o', 'seguir-te', 'sela-nos',
-    'selá-los', 'sem-par', 'sentir-te', 'servi-lo', 'servi-o', 'servir-te',
-    'sigamos-te', 'sinto-me', 'sinto-o', 'sinto-te', 'sujeitam-se', 'suplicou-me',
-    'tem-me', 'tendo-te', 'tentam-me', 'ter-lhe', 'tira-te', 'tomou-me', 'tomou-te',
-    'tornar-me', 'traz-me', 'traz-nos', 'trazei-lhe', 'trazendo-nos', 'trazer-nos',
-    'trazê-la', 'trouxe-me', 'trá-lá-lá-lá-lá-lá', 'trá-lá-lá-lá-lá-lá-lá', 'tê-lo',
-    'unir-nos', 'vai-me', 'vai-nos', 'vai-te', 'vais-me', 'vamo-nos', 'vem-me',
-    'vens-me', 'ver-te', 'vier-me', 'voltar-me', 'vou-lhes', 'vou-me', 'vou-te',
-    'vão-me', 'vão-te', 'vê-la', 'vê-lo', 'vê-los', 'vê-nos', 'vê-o', 'vê-se',
-    'água-viva', 'écoutez-le',
-  ],
-  es: [
-    'abed-nego', 'dan-ken', 'd’à-côté', 'eben-ezer', 'est-il', 'grands-parents',
-    'kan-sha', 'mer-cí', 'que-haceres', 'shi-ma-su',
-  ],
-  bg: [
-    'в’планините-убежище', 'господ-цар', 'на-ни', 'най-бурните', 'най-великото',
-    'най-желана', 'най-праведния', 'най-правилния', 'най-прекрасна', 'най-прекрасно',
-    'най-простата', 'най-светлата', 'най-скъпа', 'най-скъпи', 'най-смирено',
-    'най-ценно', 'по-безценна', 'по-благословена', 'по-близо', 'по-бързи', 'по-велик',
-    'по-верен', 'по-добрата', 'по-добре', 'по-достоен', 'по-дълбока', 'по-земята',
-    'по-могъщ', 'по-мощни', 'по-послушен', 'по-светли', 'по-силен', 'по-хубав',
-    'по-щастливи', 'по-ярки', 'по-ясно', 'приятели-предатели', 'твое-сам',
-    'царе-свещеници',
-  ],
-  bi: [
-    'abed-nego',
-  ],
-  bik: [
-    'nag-ogma', 'pag-ranga',
-  ],
-  ceb: [
-    'abed-nego', 'ba-ba', 'bag-o', 'bag-oha', 'bag-ohon', 'batan-on', 'batan-ong',
-    'bug-at', 'bug-os', 'dad-on', 'dan-ag', 'don-ken', 'gibun-og', 'gidak-on',
-    'gipas-an', 'gipatak-um', 'grah-see-ahs', 'gub-on', 'hinay-hinay', 'idan-ag',
-    'ihaw-as', 'isul-ob', 'kababayen-an', 'kabug-at', 'kahitas-an', 'kahn-shah',
-    'kanus-a', 'kasal-anan', 'kinadak-an', 'lapa-lapa', 'lig-ona', 'lig-onon',
-    'ma-dominggo', 'ma-gulan', 'ma-pioneer', 'mag-alagad', 'mag-ampo', 'mag-ampo’g',
-    'mag-ampo’s', 'mag-antos', 'mag-inusara', 'mag-istorya', 'mag-mahigugmaon',
-    'mag-uban', 'mag-unsa', 'magbag-o', 'magduyan-duyan', 'magkanta-kanta', 'magkat-on',
-    'magkat-on’s', 'maglangoy-langoy', 'maglig-on', 'magsud-ong', 'magtan-aw',
-    'mah-loh', 'makakat-on', 'makat-on', 'makig-awit', 'makig-uban', 'makit-an',
-    'malig-on', 'maluluy-on', 'manag-ambahan', 'manag-uban', 'mapiko-piko', 'mare-see',
-    'masub-anon', 'masud-ong', 'matag-an', 'matan-awan', 'mawad-ag', 'miad-to’s',
-    'midan-ag', 'mobag-o', 'modan-ag', 'modayan-dayan', 'mondan-ag', 'motan-aw',
-    'nag-abut', 'nag-agni', 'nag-agos', 'nag-alima', 'nag-ampo', 'nag-ampo’s',
-    'nag-antos', 'nag-awhag', 'nag-ingon', 'nag-inusara', 'nag-masulundon',
-    'nagadan-ag', 'nagatan-aw', 'nagbag-o', 'nagbiay-biay', 'nagdan-ag', 'nagka-daotan',
-    'nagkat-on', 'nagpa-lig-on', 'nakakat-on', 'nakat-on', 'nakat-ong', 'nakig-uban',
-    'nanag-ampo', 'nanag-awit', 'pag-abin', 'pag-abot', 'pag-adto', 'pag-ampo',
-    'pag-ampo’ng', 'pag-amuma', 'pag-andam', 'pag-antos', 'pag-ayo', 'pag-iwag',
-    'pag-ula', 'pag-undang', 'pag-usab', 'pagbag-o', 'pagkalig-on', 'pagkamanggiloy-on',
-    'pagkat-on', 'pagtan-aw', 'pakit-a', 'pakit-on', 'pakitong-kitong', 'palas-anon',
-    'papuy-on', 'pinuy-anan', 'sad-an', 'shee-mah-sue', 'sik-sik', 'sud-onga',
-    'sud-ongang', 'sud-ungon', 'tan-aw', 'tan-awa', 'tan-awon', 'tin-aw', 'ting-init',
-    'tinun-an', 'wad-a', 'wad-ang',
-  ],
-  cmn: [
-    'dan-ken', 'dì-sān', 'gra-cias', 'kan-sha', 'liǎng-qiān', 'mer-ci', 'mā-lō',
-    'shi-ma-su', '哎-哎-哎',
-  ],
-  cs: [
-    'budu-li', 'dbáš-li', 'nevěříš-li', 'pomyslím-li', 'slábnu-li', 'zeptáš-li',
-  ],
-  da: [
-    'abed-nego', 'beg-ge', 'himmel-vang', 'ikke-jøder', 'luk-ker',
-  ],
-  de: [
-    'uuh-uuh',
-  ],
-  el: [
-    'γκρά-σιας', 'λίγο-λίγο', 'μα-λό', 'μερ-σί', 'νταν-κεν',
-  ],
-  et: [
-    'aadam-ondi-ahman', 'dan-ken', 'graa-si-as', 'kan-ša', 'maa-lo', 'mer-sii',
-    'päev-päevalt', 'samm-sammult', 'võik-in', 'ši-ma-su',
-  ],
-  fi: [
-    'abed-nego', 'iki-jumalaan', 'jeesus-lapsi', 'jeesus-lapsonen', 'lamoni-kuninkaan',
-    'popcorn-kukkaset', 'valoa-aan',
-  ],
-  fj: [
-    'don-ken', 'e-saionikorotabu', 'grah-see-ahs', 'gu-uu', 'kahn-shah', 'loto-foʻi',
-    'mah-loh', 'mare-see', 'me-maravutunaca', 'muni-i-i', 'na-mavoanitara',
-    'shee-mah-sue', 'vakatule-wa',
-  ],
-  gil: [
-    'nri-ki-ra-ke', 'rietata-i',
-  ],
-  hi: [
-    'उस-क', 'दिखा-क', 'दूं-ग',
-  ],
-  hil: [
-    'dugay-dugay', 'gab-i', 'gugma-mo', 'handa-on', 'higugma-on', 'himaya-on',
-    'ka-away', 'ka-diri', 'kabubut-on', 'kadam-an', 'kulba-ko', 'ma-asoy', 'ma-ayo',
-    'mag-ambit', 'maga-amlig', 'maga-iwag', 'maghinigugma-anay', 'mahagan-hagan',
-    'maluluy-on', 'manug-apin', 'mapag-on', 'mapung-aw', 'mas-a', 'matam-is',
-    'matin-aw', 'may-yuhum', 'na-agom', 'nabun-ag', 'nag-agay', 'nagatag-isa',
-    'nagligad-na', 'nalan-sang', 'napamatud-an', 'natun-an', 'nawad-an', 'pa-ambiton',
-    'pabay-an', 'padag-on', 'padali-on', 'pamatud-an', 'purong-purongan', 'saka-a',
-    'san-o', 'tigan-an', 'tun-an', 'unta-nakaupod', 'wa-ay',
-  ],
-  hmn: [
-    'nau-es',
-  ],
-  hr: [
-    'adam-ondi-ahman', 'dan-ken', 'gra-cias', 'kan-ša', 'mer-si', 'njeg’-ve',
-    'us-tra-jem', 'za-a', 'ši-ma-su',
-  ],
-  hu: [
-    'cselekedtem-e', 'd’à-côté', 'e-az', 'est-il', 'felvidítottam-e', 'grands-parents',
-    'hallod-e', 'hegyen-völgyön', 'ismer-e', 'jársz-e', 'jöttem-e', 'kérted-e',
-    'kész-e', 'körbe-körbe', 'lehet-e', 'lehetek-e', 'lesz-e', 'lángolt-e',
-    'megáldasz-e', 'mondtál-e', 'más-más', 'rosz-szat', 'réges-rég', 'réges-régen',
-    'segítettem-e', 'sikerül-e', 'sok-sok', 'szívvel-lélekkel', 'szólsz-e', 'tehetek-e',
-    'tudnánk-e', 'tudod-e', 'visszatérek-e', 'écoutez-le', 'éjjel-nappal', 'érzed-e',
-  ],
-  hy: [
-    'դա-մի',
-  ],
-  id: [
-    'ajaran-mu', 'ajaran-nya', 'alat-nya', 'ampunan-mu', 'anak-anak', 'anak-anak-mu',
-    'anak-anaknya', 'anak-mu', 'anak-nya', 'anug’rah-mu', 'anug’rah-nya', 'api-nya',
-    'arahan-nya', 'asas-mu', 'asuhan-nya', 'awasan-nya', 'bagi-mu', 'bagi-nya',
-    'baik-mu', 'bapa-nya', 'bayang-bayang', 'berkah-mu', 'berkat-mu', 'berkat-nya',
-    'bersama-mu', 'bersama-nya', 'beserta-nya', 'bimbingan-mu', 'bimbingan-nya',
-    'bintang-bintang', 'bisikan-nya', 'buah-buahan', 'bunda-nya', 'bunga-bunga',
-    'cahaya-mu', 'cah’ya-mu', 'ciptaan-nya', 'cita-citanya', 'daging-nya', 'damai-mu',
-    'damai-nya', 'darah-nya', 'dari-nya', 'dekat-mu', 'dengan-mu', 'dengan-nya',
-    'derita-mu', 'derita-nya', 'dialami-nya', 'diampuni-nya', 'diangkat-nya',
-    'diasuh-nya', 'dibelah-nya', 'dibentuk-nya', 'diberi-nya', 'diberkati-nya',
-    'dibimbing-nya', 'dibuka-nya', 'dibunuh-nya', 'dibutuhkan-nya', 'dib’ri-nya',
-    'dib’rikan-nya', 'dicari-nya', 'dicerahkan-nya', 'dicipta-nya', 'diciptakan-nya',
-    'dicurahkan-nya', 'didekap-nya', 'didengar-nya', 'didengarkan-nya', 'didobrak-nya',
-    'diemban-nya', 'dihadirat-nya', 'dihalau-nya', 'dihapus-nya', 'dihapuskan-nya',
-    'diinginkan-nya', 'diisi-nya', 'dijaga-nya', 'dijangkau-nya', 'dijejak-nya',
-    'dikalahkan-nya', 'dikirim-nya', 'dikuatkan-nya', 'dimana-mana', 'diminta-nya',
-    'dipanggil-nya', 'dipecah-nya', 'dipimpin-nya', 'dipindahkan-nya', 'dipulihkan-nya',
-    'dirancang-nya', 'diri-mu', 'dirintis-nya', 'dirumah-mu', 'disambut-nya',
-    'diselamatkan-nya', 'diselimuti-nya', 'disisi-nya', 'disucikan-nya',
-    'dis’lamatkan-nya', 'ditakhta-mu', 'ditaklukkan-nya', 'ditanam-nya', 'ditangan-nya',
-    'ditanggung-nya', 'ditebus-nya', 'ditempa-nya', 'ditenangkan-nya',
-    'ditinggalkan-nya', 'ditopang-nya', 'ditunjukkan-nya', 'dituntun-nya', 'diubah-nya',
-    'diucapkan-nya', 'diutus-nya', 'doa-nya', 'domba-mu', 'domba-nya', 'd’gan-mu',
-    'd’rita-mu', 'eben-haezerku', 'firman-mu', 'firman-nya', 'gada-nya', 'gereja-mu',
-    'g’reja-nya', 'hadir-mu', 'hadir-nya', 'hadirat-mu', 'hadirat-nya', 'hamba-mu',
-    'hati-nya', 'hidup-nya', 'hikmat-mu', 'hikmat-nya', 'hukum-mu', 'hukum-nya',
-    'hukuman-mu', 'iba-nya', 'ikut-ku', 'ilahi-nya', 'injil-mu', 'injil-nya',
-    'jaan-nya', 'jalan-nya', 'jang-kau', 'janji-mu', 'janji-nya', 'jejak-mu',
-    'jejak-nya', 'jiwa-nya', 'kagumi-mu', 'kaki-mu', 'kaki-nya', 'karena-nya',
-    'karunia-ku', 'karunia-mu', 'karunia-nya', 'karya-mu', 'karya-nya', 'kasih-mu',
-    'kasih-nya', 'kasur-nya', 'kaum-nya', 'keagungan-nya', 'keampuhan-nya',
-    'kebaikan-nya', 'kebangkitan-mu', 'kebenaran-mu', 'kebenaran-nya', 'keb’naran-nya',
-    'kedamaian-nya', 'kedatangan-nya', 'kehadiran-mu', 'kehendak-mu', 'kehendak-nya',
-    'kekuatan-mu', 'kekuatan-nya', 'kelembutan-nya', 'kematian-nya', 'kemuliaan-nya',
-    'kemurahan-nya', 'kepada-mu', 'kepada-nya', 'kepada-nyalah', 'kerajaan-mu',
-    'kerajaan-nya', 'kisah-nya', 'kitab-kitab', 'korban-mu', 'ku-lu-pa', 'kuasa-mu',
-    'kuasa-nya', 'kubur-nya', 'kudus-mu', 'kurban-nya', 'k’pada-ku', 'k’pada-mu',
-    'k’pada-nya', 'k’rajaan-mu', 'k’rajaan-nya', 'k’reta-nya', 'ladang-nya',
-    'lagu-lagu', 'lapar-nya', 'lengan-mu', 'lengan-nya', 'luka-nya', 'mata-mu',
-    'mata-nya', 'melayani-ku', 'melayani-mu', 'melayani-nya', 'melihat-mu',
-    'melihat-nya', 'mematuhi-mu', 'mematuhi-nya', 'membaptiskan-nya', 'membela-ku',
-    'membuat-nya', 'membutuhkan-mu', 'memuja-nya', 'memuji-mu', 'memuji-nya',
-    'memuliakan-nya', 'mendekat-nya', 'mendengar-mu', 'menemui-nya', 'menemukan-nya',
-    'mengejek-nya', 'menggapai-nya', 'menggembirakan-nya', 'menghalangi-nya',
-    'mengikuti-nya', 'mengingat-nya', 'mengombang-ambingkan', 'mengundang-nya',
-    'menjauhi-mu', 'menolak-mu', 'menolak-nya', 'menyambut-mu', 'menyambut-nya',
-    'menyanjung-mu', 'menyebut-mu', 'men’rima-nya', 'meraba-raba', 'milik-mu',
-    'milik-nya', 'muka-nya', 'mukjizat-nya', 'mula-mula', 'murah-nya', 'murid-ku',
-    'murid-murid-nya', 'murid-nya', 'murka-nya', 'm’layani-nya', 'm’ngasihi-nya',
-    'nabi-mu', 'nabi-nya', 'nama-mu', 'nama-nya', 'nyanyian-nya', 'nyawa-nya',
-    'oleh-nya', 'orang-orang', 'pada-mu', 'pada-nya', 'paku-nya', 'panggilan-nya',
-    'panji-nya', 'pekerjaan-nya', 'pelayanan-mu', 'pelukan-mu', 'pelukan-nya',
-    'penderitaan-nya', 'penebusan-mu', 'penghiburan-nya', 'pengurbanan-mu',
-    'pengurbanan-nya', 'per-jan-ji-an-ku', 'perintah-nya', 'perjanjian-nya',
-    'pertolongan-mu', 'petunjuk-mu', 'petunjuk-nya', 'pihak-nya', 'pilihan-nya',
-    'pimpinan-mu', 'pinta-nya', 'puji-pujian', 'putra-ku', 'putra-mu', 'putra-nya',
-    'putusan-mu', 'put’ra-nya', 'p’rintah-mu', 'p’rintah-nya', 'p’rintah-p’rintah',
-    'rahmat-mu', 'rahmat-nya', 'rancangan-mu', 'rencana-mu', 'rencana-nya', 'restu-mu',
-    'roh-mu', 'roh-nya', 'rumah-mu', 'sabda-nya', 'sadba-nya', 'saksi-nya', 'salib-nya',
-    'samaran-nya', 'sapa-nya', 'satu-satu', 'satu-satunya', 'sayang-nya',
-    'selama-lamanya', 'sentuhan-nya', 'senyum-mu', 'senyum-nya', 'seruan-nya',
-    'sesama-ku', 'sia-sia', 'siksa-mu', 'sinar-mu', 'sion-nya', 'sisi-mu', 'sisi-nya',
-    'suara-mu', 'suara-nya', 'suci-mu', 'surga-mu', 's’gala-galanya', 's’lama-lamanya',
-    's’mangat-mu', 's’perti-mu', 't-rus', 'takhta-mu', 'takhta-nya', 'tangan-mu',
-    'tangan-nya', 'tanpa-mu', 'tebusan-nya', 'teladan-nya', 'tempat-nya', 'terang-nya',
-    'terinjak-injak', 'terombang-ambing', 'terpa-teri', 'tiba-tiba', 'tidur-nya',
-    'tongkat-nya', 'tubuh-mu', 'tubuh-nya', 'tuggal-nya', 'tuk-mu', 'tunggu-tunggu',
-    'tuntunan-nya', 't’rang-mu', 'ucapan-nya', 'umat-ku', 'umat-mu', 'umat-nya',
-    'wajah-mu', 'wakil-mu',
-  ],
-  ig: [
-    'e-e', 'ebigh-ebi', 'ga-’bụ', 'ga-’gbalị', 'g’a-nọ', 'iny’a-ka', 'izu-ezu',
-    'mme’-kpa', 'ndi-nsọ', 'ndụ’a-ny’ọ', 'nk’onye-nwe’ayị', 'nwa-atụrụ', 'og’ikpe-azụ',
-    'r’o-nw’ayị', 'zu-te’n-kwe-kọ-rị-ta', 'ịbụ-eze', 'ọla-edo',
-  ],
-  ilo: [
-    'aw-awagannakayo', 'in-inut', 'itan-okkayto',
-  ],
-  is: [
-    'abeds-negó', 'dank-en', 'gra-sí-as', 'kan-sja', 'ma-lö', 'mer-sí', 'sí-ma-sú',
-  ],
-  it: [
-    'abed-nego', 'adorar-lo', 'd’à-côté', 'est-il', 'grands-parents', 'l’eben-ezer',
-  ],
-  ja: [
-    'dark-est', 'un-known',
-  ],
-  kek: [
-    'adan-ondi-ahman', 'aj-e', 'chat-ab’inq', 'chat-ok', 'ch’ina-us', 'ch’ina-usil',
-    'jalam-uuch', 'kaq-sut-iq', 'kolb’a-ib', 'mat-ab’iik', 'mat-elk', 'mat-elq’ak',
-    'mutz’uk-u', 'q’axol-u', 'rahok-ib', 'raqb’a-aatin', 'taaq’axoq-u',
-    'tat-awa’b’ejinq', 'tat-iloq', 'tat-osob’tesiiq', 'tin-iloq', 'tz’aqlok-u',
-    'xat-ok', 'yale’k-ix', 'yalok-u',
-  ],
-  km: [
-    'កាលយប់-យន់កាន់តែង-ងឹត', 'ខ្ញុំរកព-ន្លឺព្រះអង្គ', 'ដែលប-ង្កើតយើង', 'បេឌ-ន',
-  ],
-  ko: [
-    '간증-있으니', '경-전이', '넘어-지거나', '니파이전-서', '도-와주고', '두-려워하리까', '모-로나이', '보-라고', '부드럽-게',
-    '비-가', '빗-방울처럼', '삼-자', '순결-히', '순종하-며', '안넘-어지나', '약-하고', '어리-고', '예-알아', '용사들처-럼',
-    '이-야기와', '일-용할', '잡수셨-죠', '전-혀', '조-롱하며', '친구-여', '털-고', '해같-이', '현명-한',
-  ],
-  kos: [
-    'kutong-yac',
-  ],
-  mg: [
-    'afa-trosa', 'afa-tsy', 'ahi-maitso', 'ahyizaylala-mazava', 'aim-baovao',
-    'alaim-panahy', 'ali-maizim-pito', 'ali-maizina', 'am-bavaka', 'am-pahazotoana',
-    'am-pahendrena', 'am-panahy', 'am-panajana', 'am-pasana', 'am-pifaliana',
-    'am-pitiavana', 'am-pitoniana', 'am-po', 'am-pofoiny', 'am-poko', 'am-ponay',
-    'am-ponja', 'aman-danitra', 'amim-panajana', 'amim-pitia', 'amoron-drano',
-    'an-dalantsara', 'an-danitra', 'an-dapany', 'an-jaridaina', 'an-kiato', 'an-tany',
-    'an-tokantrano', 'an-trano', 'an-tranon', 'an-tranon’omby', 'an-tratranao',
-    'an-tsaha', 'an-tsaiko', 'an-tsaina', 'an-tsainao', 'an-tsorony',
-    'androm-pifaliana', 'diam-pantsika', 'drafi-pamonjeny', 'eran-tany',
-    'fahasoavam-be', 'fakam-panahy', 'fanehoam-pitia', 'fanehoam-pitiavana',
-    'fantsi-bỳ', 'fiadanam-po', 'fiainam-baovao', 'fiainan-tsambatra', 'fiakaram-be',
-    'fihinanam-bilona', 'fiononam-po', 'fitiavam-be', 'fitiavam-pamonjena',
-    'ha-nampinoana', 'hafa-pifaliana', 'haizi-mbe', 'han-ka', 'hanan-tsiny',
-    'hanandra-peo', 'hanara-dia', 'hanatri-tava', 'hangata-pamelana', 'hatsaram-panahy',
-    'herim-po', 'hiadam-po', 'hiara-dalana', 'hiara-dia', 'hiara-hihira',
-    'hiara-hivavaka', 'hiara-komana', 'hiram-pandresena', 'hiram-pifaliana',
-    'hitari-dia', 'im-piry', 'kinta-mamiratra', 'lala-misampana', 'maha-te',
-    'mampihetsi-po', 'manahiran-tsaina', 'manam-paharoa', 'manan-tanana',
-    'mandra-pahatonga', 'mandra-piverenako', 'mandra-podiako', 'maneran-tany',
-    'manjombon-dava', 'mavesa-be', 'mendri-piderana', 'miara-dia', 'miara-miaina',
-    'mihinam-boakazo', 'mpitari-dia', 'nanan-janaka', 'nitoe-jaza', 'nivoa-drà',
-    'olon-drehetra', 'olon-tiako', 'onjam-piainana', 'porofom-pitia', 'raiki-trosa',
-    'ratram-po', 'resin-tory', 'rivo-mahery', 'rivo-mitatao', 'sondrian-tory',
-    'sorom-pamonjena', 'tamim-pahasahiana', 'tamim-pahendrena', 'tamim-pifaliana',
-    'tantaram-pianakaviana', 'toe-panahy', 'toeram-baovao', 'tonom-bavaka',
-    'tontolo-izao', 'tra-pahoriana', 'tranom-bahiny', 'valim-bavaka', 'valin-teny',
-    'velom-pisaorana', 'velon-kira', 'velon-tsento', 'vonon-kanao', 'zava-dehibe',
-    'zava-drehetra', 'zava-manitra', 'zava-maro', 'zava-niseho', 'zava-poana',
-    'zava-tsoa', 'zotom-po',
-  ],
-  mh: [
-    'armej-in', 'ej-ļoo', 'er-wōj', 'iook-ļo̧k', 'ippān-doon', 'je-ale', 'je-je-ko',
-    'kooļ-ko', 'kūr-tok', 'mor-mon', 'm̧ool-eo', 'pil-iej', 'pān-doon', 'raam̧-m̧an',
-    'ro-ne', 'rool-tok', 'wōj-jān', 'ļo̧k-wōt',
-  ],
-  mi: [
-    'ai-i', 'tama-nui-te-rā',
-  ],
-  mn: [
-    'эргэлз-дэггүй',
-  ],
-  ms: [
-    'baik-baik', 'bersama-nya', 'bimbingan-mu', 'bimbingan-nya', 'cah’ya-mu',
-    'cah’ya-nya', 'dengan-ku', 'dengan-nya', 'dibentuk-nya', 'dib’ri-nya',
-    'dicerahkan-nya', 'dikuatkan-nya', 'dipeluk-nya', 'dipulihkan-nya', 'diri-mu',
-    'ditanggung-nya', 'gunung-mu', 'jejak-nya', 'kaki-nya', 'kasih-mu', 'kasih-nya',
-    'kekuatan-mu', 'kepada-nya', 'kuasa-nya', 'langkah-nya', 'lengan-nya', 'lu-pa',
-    'memerlukan-mu', 'mengikuti-nya', 'pekerjaan-nya', 'per-jan-ji-an-ku', 'pihak-nya',
-    'pikul-ku', 'p’rintah-nya', 'rahmat-mu', 'rahmat-nya', 'rancangan-nya', 'roh-nya',
-    'tangan-ku', 'teladan-nya', 'terang-nya',
-  ],
-  mt: [
-    'bl-eluf', 'd-dawl', 'dil-povra', 'il-fejqan', 'il-kliemu', 'il-qalb', 'in-nar',
-    'it-tama', 'it-telgħat', 'l-eku', 'l-eternita', 'l-ibħra', 'l-imnikket', 'l-pass',
-    'tas-salvatur', 'x-xewqa',
-  ],
-  nl: [
-    'abed-nego', 'maak-je-werk-af-dag',
-  ],
-  no: [
-    'abed-nego', 'livs-verk', 'tra-la-la-la-la',
-  ],
-  pag: [
-    'andi-angaa’y',
-  ],
-  pl: [
-    'abed-nego', 'adam-ondi-ahman', 'mer-si',
-  ],
-  pon: [
-    'rer-rer',
-  ],
-  ro: [
-    'a-mplinit', 'a-nceput', 'a-ncerca', 'a-nfruntat', 'a-ngenuncheat', 'a-ntors',
-    'a-nviat', 'a-nvins', 'a-nvăţat', 'a-nvățat', 'a-ți', 'abed-nego', 'adevăru-i',
-    'adevăru-ivestim', 'adevăru-n', 'aduce-n', 'adună-n', 'aibă-n', 'ajutați-ne',
-    'ajută-i', 'ajută-mă', 'ajută-ne', 'ajutămă-ntruna', 'ajutăne-n', 'albastru-i',
-    'aleluia-ți', 'alinare-ți', 'alină-te', 'amară-n', 'amenință-n', 'amintește-ți',
-    'amintindu-şi', 'apare-n', 'aproape-i', 'aprobarea-ta', 'apărându-l', 'arată-mi',
-    'articulaţii-n', 'asculta-vom', 'ascultaţi-l', 'ascultă-l', 'ascultă-mă',
-    'ascultă-ne', 'ascultă-ţi', 'ascunde-mă', 'asupra-i', 'asupra-ți', 'așteaptă-n',
-    'aștepta-nvierea', 'bine-ai', 'bine-aleg', 'bine-i', 'binecuvântează-i',
-    'binecuvântează-l', 'binecuvântează-mă', 'binecuvântează-ne', 'binecuvânteză-ne',
-    'binele-n', 'blândă-ndurare', 'braţele-ntind', 'brațele-i', 'bucurați-vă',
-    'bucurie-mparte', 'bucurie-n', 'bârna-n', 'bătălia-i', 'c-adevăr', 'c-ai', 'c-am',
-    'c-aproape', 'c-avem', 'c-aţi', 'c-o', 'ca-n', 'ca-nţeleapta', 'cale-ați',
-    'cale-nlătură', 'calea-i', 'calea-ţi', 'can-şa', 'care-adună', 'care-au', 'care-i',
-    'care-n', 'care-s', 'care-ţi', 'care-ți', 'casa-i', 'case-avem', 'case-n',
-    'caută-l', 'caută-ți', 'cauza-ți', 'ce-a', 'ce-abundă', 'ce-ai', 'ce-ajută',
-    'ce-am', 'ce-anunţă', 'ce-ar', 'ce-are', 'ce-atât', 'ce-au', 'ce-aveam', 'ce-aș',
-    'ce-așteaptă-l', 'ce-așteptăm', 'ce-ați', 'ce-mbogățesc', 'ce-mi', 'ce-n',
-    'ce-n-lume', 'ce-ndrumă', 'ce-o', 'ce-or', 'ce-s', 'ce-ți', 'celest-a',
-    'celorce-adevărul', 'cemi-o', 'cere-i', 'cere-n', 'ceru-i', 'ceru-n', 'chemarea-i',
-    'chemarea-ți', 'cheme-n', 'chinu-ți', 'cine-s', 'citește-o', 'coaja-n', 'comoară-l',
-    'condu-mi', 'condu-mă', 'conducătoru-ndeamnă', 'condus-o', 'credinţa-i',
-    'credinţa-nseamnă', 'credinţă-n', 'credința-ndură', 'credință-n', 'cruce-a',
-    'crăciunu-anunţă', 'cu-a', 'cu-aceeași', 'cu-adevărat', 'cu-al', 'cu-nțelepciune',
-    'cu-o', 'cu-oricine', 'cuie-n', 'cunună-i', 'cupa-mi', 'cuvântu-i', 'cuvântu-n',
-    'cuvântu-ți', 'cântați-i', 'cântându-i', 'cântându-ți', 'câte-ai', 'că-i',
-    'că-ivoi', 'că-l', 'că-n', 'că-s', 'căutați-i', 'dac-aveţi', 'dacă-i', 'dacă-l',
-    'dacă-mi', 'dan-ken', 'dat-o', 'de-a', 'de-acum', 'de-ai', 'de-al', 'de-alamă',
-    'de-amărăciune', 'de-aproape', 'de-apă', 'de-ar', 'de-asupra', 'de-atunci',
-    'de-atâtea', 'de-aur', 'de-așteptat', 'de-ați', 'de-exaltare', 'de-i', 'de-l',
-    'de-mparţi', 'de-mparți', 'de-mpărăție', 'de-n', 'de-ndur', 'de-nfricoșare',
-    'de-nfruntat', 'de-ngrijirea', 'de-nțelepți', 'de-oameni', 'de-odată', 'de-odihnă',
-    'de-om', 'de-un', 'departe-i', 'departe-s', 'depărtează-i', 'deschide-n',
-    'deschide-ți', 'despică-te', 'despre-ai', 'despre-al', 'dimineața-nvierii',
-    'disprețuindu-i', 'divina-i', 'divină-mi', 'doamne-a', 'doamne-acceptă',
-    'doamne-ajută-ne', 'doamne-am', 'doamne-n', 'doamne-ți', 'domnu-a', 'domnu-i',
-    'domnu-n', 'domnu-ți', 'dovada-i', 'dragoste-avem', 'dragoste-n', 'dragoste-ţi',
-    'dragostea-i', 'dragostea-mi', 'dragostea-ți', 'dreaptă-i', 'dreptşi-adevărat',
-    'du-mă', 'duce-n', 'dulce-a', 'dulce-i', 'dumbrava-mi', 'durere-i', 'durerea-mi',
-    'durerea-ți', 'dușmanii-acum', 'dă-i', 'dă-le', 'dă-mi', 'dă-n', 'dă-ne', 'dă-ne-n',
-    'e-aici', 'e-al', 'e-alăturea', 'e-aprinsă', 'e-aproape', 'e-mpărăția', 'e-n',
-    'e-ncântarea', 'e-nflorit', 'e-nfricoșată', 'e-ntuneric', 'e-nvolburată',
-    'e-nvrăjbit', 'e-o', 'ea-i', 'ea-n', 'ea-ntărește', 'ele-au', 'ele-n', 'ele-s',
-    'eliberează-i', 'eliberează-mă', 'emoția-n', 'este-a', 'este-adevărat', 'este-al',
-    'eterna-i', 'evanghelia-i', 'evanghelia-ți', 'exprimate-n', 'facă-se', 'familia-mi',
-    'familia-și', 'fapta-celor', 'faţa-i', 'fața-i', 'fericire-n', 'fericiți-s',
-    'fi-mpreună', 'fi-n', 'fi-ncercaţi', 'fi-ndreptate', 'fi-ndrumat', 'fi-va',
-    'fi-voi', 'fi-împreună', 'fie-a-mea', 'fie-al', 'fie-n', 'fie-nțelepți',
-    'fii-ntărit', 'fiinţe-a', 'fiva-n-suflet', 'flacără-n', 'floricele-n', 'flutură-n',
-    'forța-i', 'forță-l', 'forță-s', 'fost-a', 'frate-l', 'frumoasă-i', 'frântă-i',
-    'furtună-n', 'fă-ne', 'făr-de', 'făr-un', 'fărde-nceput', 'fără-ntârziere',
-    'glasu-i', 'glasu-mi', 'glasu-n', 'glasu-ți', 'glasurile-nălțe-n', 'golgota-m',
-    'gra-si-as', 'grabă-n', 'grija-n', 'grijile-mi', 'grăbește-te', 'grăbiți-vă',
-    'gândește-te', 'gândindu-mă', 'haine-au', 'haru-i', 'haru-ți', 'hrănește-ne', 'i-a',
-    'i-ai', 'i-am', 'i-arată', 'i-au', 'i-aud', 'i-auzim', 'i-l', 'ia-ne', 'iartă-le',
-    'iartă-ne', 'inchinați-i', 'inima-i', 'inima-mi', 'inimile-nduioșează', 'inimă-mi',
-    'intre-n', 'iubește-mă', 'iubire-n', 'iubirea-i', 'iubiți-l', 'iubiți-vă',
-    'juru-mi', 'l-a-ndemnat', 'l-a-nzestrat', 'l-ai', 'l-am', 'l-arăt', 'l-ascult',
-    'l-ascultau', 'l-au', 'l-aş', 'l-om', 'la-nceput', 'la-ncercări', 'lacrimile-o',
-    'lartă-ne', 'las-o', 'lasă-i', 'lasă-mă', 'le-a', 'le-acordăm', 'le-aduce', 'le-ai',
-    'le-am', 'le-arată', 'le-articulez', 'le-ascult', 'le-au', 'le-om', 'lili-ac',
-    'liniștea-ți', 'locu-i', 'lucra-n', 'lucra-vom', 'lucrarea-i', 'lume-n',
-    'lume-nainte', 'lumea-i', 'lumea-l', 'lumea-n', 'lumii-ntregi', 'lumina-i',
-    'lumina-n', 'lumina-ţi', 'lumina-ți', 'luminat-o', 'luminează-mi', 'luminează-ne',
-    'lumină-mi', 'lumină-n', 'lumină-ți', 'luptă-te', 'lâng-acel', 'lâng-al',
-    'lângă-al', 'lăcașu-mi', 'lăsaţi-i', 'lăudați-l', 'm-a', 'm-a-ndrumat',
-    'm-a-nălțat', 'm-ajută', 'm-ajuţi', 'm-ajuți', 'm-alini', 'm-alină', 'm-am',
-    'm-apără', 'm-ar', 'm-ardea', 'm-asculți', 'm-aș', 'm-așteaptă', 'ma-lo', 'mama-n',
-    'mare-e', 'mare-i', 'mare-nțelepciunea', 'marea-ți', 'mea-i', 'mer-si', 'merge-n',
-    'mi-a', 'mi-a-ncercat', 'mi-aduc', 'mi-ai', 'mi-alungă', 'mi-am', 'mi-amintesc',
-    'mi-apare', 'mi-arată', 'mi-arăt', 'mi-asigură', 'mi-aş', 'mi-ați', 'mi-e', 'mi-l',
-    'mi-o', 'mila-ți', 'mine-a', 'mine-i', 'minne-i', 'moare-ascultător', 'moartea-i',
-    'moartea-n', 'moartea-nfruntat', 'moroni-n-trecut', 'morții-a', 'multă-ntristare',
-    'mulțumindu-ți', 'muncă-n', 'munte-s', 'muritoarea-mi', 'mustră-mi', 'mâna-i',
-    'mângâietoru-ndrumă', 'mântuirea-i', 'mână-n', 'mă-nconjoară', 'mă-ncred',
-    'mă-ndoiesc', 'mă-ndrept', 'mă-ndruma', 'mă-ndrumi', 'mă-ndrumă', 'mă-nfrățesc',
-    'mă-ntreb', 'mă-ntăresc', 'mă-ntărește', 'mă-ntări', 'mă-nvaţă', 'mă-nvaƫă',
-    'mă-nvață', 'mă-nvănluie', 'mă-nșela', 'mărturie-ntr-adevăr', 'n-a', 'n-aduce',
-    'n-ai', 'n-am', 'n-are', 'n-au', 'n-avea', 'n-avem', 'n-aş', 'n-o', 'naintea-i',
-    'nalță-ți', 'ne-a', 'ne-a-nvăţat', 'ne-aduc', 'ne-aduce', 'ne-aduce-aproape',
-    'ne-aducă', 'ne-adunăm', 'ne-ai', 'ne-ajute', 'ne-ajută', 'ne-ajuți', 'ne-aline',
-    'ne-alină', 'ne-alunecă', 'ne-am', 'ne-amintim', 'ne-apar', 'ne-apropie',
-    'ne-arate', 'ne-arată', 'ne-arătat', 'ne-ascultă', 'ne-asigură', 'ne-au',
-    'ne-avântăm', 'ne-așteaptă', 'ne-mbarcăm', 'ne-mprejmuit', 'ne-mpărtăși',
-    'ne-mpărtășim', 'ne-nalță', 'ne-ncetat', 'ne-nconjoară', 'ne-ncredem', 'ne-ncântă',
-    'ne-ndoim', 'ne-ndreptăm', 'ne-ndrume', 'ne-ndrumi', 'ne-ndrumă', 'ne-nfricat',
-    'ne-nfricați', 'ne-ngrijim', 'ne-nsemnat', 'ne-nsemnate', 'ne-nsoțește',
-    'ne-nspăimântă', 'ne-ntrerupt', 'ne-ntâlnim', 'ne-nvaţă', 'ne-nvaƫă-n', 'ne-nvață',
-    'ne-nvețe', 'ne-nvăluie', 'ne-nălțăm', 'ne-o', 'ne-ocrotește', 'ne-om', 'ne-or',
-    'nechibzuitu-a', 'nefi-n', 'negat-o', 'nemărginita-ți', 'neprihănită-i',
-    'nesfârșită-i', 'nevoia-mi', 'ni-l', 'noaptea-i', 'noastre-i', 'noastră-i',
-    'nostru-n', 'nu-i', 'nu-l', 'nu-mi', 'nu-ncerca', 'nu-s', 'nu-ți', 'nume-a',
-    'nume-l', 'numele-i', 'numele-ți', 'numără-le', 'o-familie', 'oaia-i', 'oamenii-l',
-    'oare-a', 'ochii-i', 'ochii-nchidem', 'ochii-nchişi', 'odihn-o', 'opreștel-e',
-    'oriunde-ai', 'oriunde-am', 'oriunde-aș', 'pace-l', 'pace-n', 'pacea-mi', 'pacea-n',
-    'pacea-ți', 'palme-aşa', 'parca-i', 'partea-și', 'pași-mi', 'pe-a', 'pe-acea',
-    'pe-acest', 'pe-ai', 'pe-al', 'pe-altul', 'pe-alţii', 'pe-alții', 'pe-aridul',
-    'pe-aripi', 'pe-nserat', 'pe-ntregul', 'pe-ntuneric', 'pe-o', 'pe-oricine',
-    'pecetluit-a', 'pedeapsa-i', 'pentr-un', 'pentru-a', 'pentru-a-noastră',
-    'pentru-adevăr', 'pentru-al', 'pentru-alinare', 'perspectiva-i', 'picioare-i',
-    'pieptu-mi', 'pieptu-ți', 'pionieri-n', 'place-acea', 'planu-i', 'pleacă-ți',
-    'poarta-n', 'poate-n', 'poate-or', 'pocăiţi-vă', 'pocăiți-vă', 'poruncile-am',
-    'povara-mi', 'povara-n-seama', 'poveste-am', 'prea-nalt', 'preamărindu-l',
-    'preamăriți-l', 'preaslăviți-l', 'prezența-i', 'primi-va', 'primi-vei', 'primi-vom',
-    'primi-vor', 'primiţi-i', 'primăvară-n', 'privește-n', 'privirea-ți', 'priviți-l',
-    'proclamați-i', 'proclamă-i', 'profeţii-n', 'profeți-au', 'profeții-au',
-    'promise-n', 'promisiunea-i', 'promisiunea-ți', 'prânzu-mi', 'puterea-i',
-    'puterea-ți', 'puternică-i', 'pân-atunci', 'până-n', 'până-ntr-o', 'până-ntreaga',
-    'pământu-ntreg', 'părinții-au', 'păstoru-și', 'păzește-ne', 'pășunea-mi',
-    'radiază-ncredere', 'raze-aurii', 'recunoștința-mi', 'reflexe-argintii', 'rege-al',
-    'respectu-os', 'reverenţa-i', 'ridicați-vă', 'roagă-n', 'roagă-te',
-    'rostogolindu-se', 'ruga-i', 'ruga-mi', 'rugați-vă', 'rugându-ne', 'rugă-ți',
-    'rugăciunea-i', 'rupe-o', 'răsplata-i', 'războiu-ncetează', 's-a-mplinit',
-    's-a-ncălcat', 's-a-nfățișat', 's-a-nălțat', 's-admir', 's-aducă', 's-adune',
-    's-aflăm', 's-ajungem', 's-ajungă', 's-aleg', 's-alegem', 's-alegi', 's-aline',
-    's-alinăm', 's-alunge', 's-alungi', 's-ar', 's-arate', 's-aratăm', 's-arăt',
-    's-arătați', 's-arătăm', 's-ascult', 's-ascultați', 's-asculte', 's-ascultăm',
-    's-atingă', 's-aud', 's-avem', 's-o', 's-oferim', 's-or', 'sabatu-n', 'sacr-ai',
-    'schimbă-mi', 'schimbă-ţi', 'sculele-a', 'scutecele-a', 'se-aduce', 'se-adună',
-    'se-amplifică', 'se-aplică', 'se-arată', 'se-aud', 'se-audă', 'se-auzeau',
-    'se-așează', 'se-mplinește', 'se-nalță', 'se-ncheie', 'se-nchine', 'se-ncreadă',
-    'se-ncredea', 'se-ndreaptă', 'se-ngrijește', 'se-ntinde-n', 'se-ntindă',
-    'se-ntoarce', 'se-ntunecă', 'se-ntărește', 'se-nvârtesc', 'se-nălțau',
-    'se-oglindește', 'se-opresc', 'seara-n', 'seară-n', 'secretu-a', 'semnele-n',
-    'setea-m', 'sfinte-s', 'sfinții-s', 'sfânt-armură', 'sfânta-i', 'sfânta-ți',
-    'sfântă-n', 'simte-i', 'slabă-mi', 'slava-i', 'slava-ți', 'slavă-i', 'slavă-n',
-    'slova-i', 'slujindu-l', 'slujirea-mi', 'slăviți-l', 'soare-i', 'soare-n',
-    'soarele-i', 'soarele-n', 'soldați-au', 'speranţă-n', 'speranță-n', 'spiritu-mi',
-    'spiritu-nviorător', 'spiritu-ți', 'spre-a', 'spre-acel', 'spre-al', 'spre-o',
-    'spune-aşa', 'spune-mi', 'spune-n', 'spusă-n', 'steagu-i', 'strigă-ndată',
-    'străluci-n', 'suferință-i', 'sufletu-mi', 'sufletu-n', 'sufletu-ți', 'sânge-a',
-    'sângele-i', 'să-i', 'să-l', 'să-mi', 'să-mplinesc', 'să-mplinim', 'să-mpărtăşesc',
-    'să-mpărtăşim', 'să-naintăm', 'să-ncerci', 'să-ncercăm', 'să-ncânte',
-    'să-ndeplinești', 'să-ndurați', 'să-nflorească', 'să-nflorească-n', 'să-nfrunţi',
-    'să-nlătur', 'să-nlăture', 'să-ntâlnească', 'să-ntâlnim', 'să-ntăreasc-al',
-    'să-nveţe', 'să-nvețe', 'să-nvingem', 'să-nvățăm', 'să-nţeleg', 'să-şi', 'să-ţi',
-    'să-și', 'să-ți', 'ta-mpărăție', 'ta-nțelepciune', 'tare-bați', 'tare-l', 'tata-i',
-    'te-a', 'te-ai', 'te-ajută', 'te-alină', 'te-am', 'te-ascultă', 'te-ascultăm',
-    'te-au', 'te-aude', 'te-n-drume-n', 'te-nconjoară', 'te-ndoi', 'te-ndoiești',
-    'te-ndrume', 'te-ngrijesc', 'te-nvață', 'te-ocolesc', 'te-om', 'teama-mi',
-    'teama-nfruntăm', 'temple-mpreună', 'termina-voi', 'teroarea-i', 'tine-aduce',
-    'tine-avem', 'tine-i', 'tine-mi', 'toate-aceste', 'toate-au', 'toate-ncercările',
-    'toate-s', 'totu-i', 'totu-n', 'toții-n', 'trezește-te', 'treziți-vă', 'trimite-le',
-    'trimite-ne', 'trimite-ne-n', 'trimite-o', 'trupu-i', 'trăiește-al', 'tu-mi',
-    'tăcere-a', 'tălpile-n', 'tărie-mi', 'tărie-n', 'tărie-ți', 'u-ra', 'uite-a',
-    'unde-am', 'unde-i', 'unde-s', 'unge-mi', 'unii-mpingem', 'urmați-i', 'urmați-mă',
-    'urmează-l', 'urmează-mă', 'urmele-i', 'urmeze-n', 'urmându-i', 'urmându-și',
-    'urându-ți', 'v-aduc', 'v-adunați', 'v-am', 'v-amintiți', 'v-au', 'va-mplini',
-    'va-ncepe', 'va-nceta', 'va-ncheia', 'va-ncreți', 'va-ncuraja', 'va-ndruma',
-    'va-nsoți', 'va-ntări', 'va-nvinge', 'va-nălța', 'valu-a', 'vasta-ntindere',
-    'veche-ascunsă', 'vede-n', 'veghează-ne', 'veni-n', 'vestește-l', 'veșnice-i',
-    'viaţa-mi', 'viața-i', 'viața-l', 'viața-mi', 'viață-mi', 'viață-ți', 'vibrează-n',
-    'vine-n', 'vine-n-grabă', 'vino-n', 'vocea-ți', 'vocile-auzim', 'voi-nălța',
-    'voia-ți', 'vorbele-ți', 'vremea-i', 'vreodat-atât', 'vântu-a', 'vântu-i',
-    'vă-nconjoară', 'vă-ncredeți', 'vă-ndrume', 'vă-ntoarceți', 'vă-ntâmpină',
-    'vă-nvață', 'văzut-au', 'zeciuiala-i', 'zelu-n', 'zi-ntreagă', 'zile-nsorite',
-    'zilele-n', 'zilele-s', 'zâmbetu-ți', 'zâmbitoarea-ţi', 'împrejuru-i', 'împăratu-a',
-    'înainte-n', 'înaintea-celei', 'înalță-ne', 'început-o', 'închina-ți-i',
-    'încredere-n', 'încrederea-ți', 'îndrumă-ne', 'îngerii-n', 'îngeru-a', 'într-o',
-    'într-un', 'într-una', 'întărește-mă', 'întărește-ne', 'învață-mă', 'înălța-vom',
-    'înţeleptu-a', 'şi-a', 'şi-acum', 'şi-adevărat', 'şi-adevărul', 'şi-alţii', 'şi-am',
-    'şi-apoi', 'şi-atrimis', 'şi-au', 'şi-aur', 'şi-avea', 'şi-eu', 'şi-i', 'şi-ma-şu',
-    'şi-n', 'şi-o', 'şi-omul', 'ţi-am', 'ţi-aude', 'ș-avem', 'ș-inimă', 'și-a',
-    'și-acolo', 'și-adevărul', 'și-ajută', 'și-al', 'și-alta', 'și-am', 'și-ambiții',
-    'și-amintire-ai', 'și-apa', 'și-apoi', 'și-aproape', 'și-aproapelui', 'și-apă',
-    'și-ascultați', 'și-astfel', 'și-atuncea', 'și-atunci', 'și-au', 'și-aude',
-    'și-aurul', 'și-i', 'și-l', 'și-mi', 'și-n', 'și-ncălzești', 'și-ngustă',
-    'și-nsingurat', 'și-ntro', 'și-nviem', 'și-o', 'și-oricând', 'și-umbra', 'ști-n',
-    'țelu-ți', 'ți-a', 'ți-aducem', 'ți-ai', 'ți-am', 'ți-amintește', 'ți-au',
-    'ți-e-nălțat', 'ți-l', 'ți-o', 'țineți-vă',
-  ],
-  ru: [
-    'а-а', 'где-то', 'едва-едва', 'из-за', 'из-под', 'как-то', 'кем-то', 'когда-нибудь',
-    'когда-то', 'кто-то', 'м-м', 'о-о', 'оо-о', 'по-другому', 'самуилу-ламанийцу',
-    'тра-ля-ля-ля-ля-ля', 'тра-ля-ля-ля-ля-ля-ля', 'у-у', 'уу-у', 'чему-то',
-    'черно-белый', 'что-то', 'чудо-люди',
-  ],
-  sk: [
-    'abéd-nega', 'čo-to',
-  ],
-  sm: [
-    'don-ken', 'fanau-fouina', 'fefe-va-le', 'ie-s', 'kahn-shai', 'mah-loh',
-    'shee-mah-su',
-  ],
-  sq: [
-    'abed-negos', 'andej-këtej', 'dan-ken', 'gra-sias', 'mer-si', 'mjeri-met', 'mu-mm',
-    'nu-m’roj', 'pro-voi', 'ulje-ngritje',
-  ],
-  sv: [
-    'abed-nego',
-  ],
-  te: [
-    'నా-తోనడువుమను-న',
-  ],
-  th: [
-    'ถ้าฉันดำเนินตามพระองค์ดำรงในศรัท-ธา', 'พระองค์จะประทานพ-ลังดังที่ฉันต้องการ',
-    'โลก-สวรรค์พร',
-  ],
-  tl: [
-    'ao-y', 'araw-araw', 'balang-araw', 'bayad-sala', 'bigyang-liwanag',
-    'bigyang-saysay', 'bukang-liwayway', 'buntong-hininga', 'dan-ken', 'gra-syas',
-    'himig-tagumpay', 'hinding-hindi', 'ipasa-diyos', 'kagalang-galang',
-    'kagila-gilalas', 'kahanga-hanga', 'kahanga-hangang', 'kahn-sha', 'kanya-kanyang',
-    'kapit-bisig', 'kapitbahay-ko', 'karapat-dapat', 'kawalang-hanggan',
-    'kawalang-hangga’y', 'kay-aba', 'kay-amo', 'kay-inam', 'kaysaya-saya',
-    'lahat-lahat', 'mag-aalay', 'mag-alab', 'mag-alala', 'mag-alay', 'mag-alinlangan',
-    'mag-alo', 'mag-ambag', 'mag-anak', 'mag-aral', 'mag-aruga', 'mag-ina', 'mag-ingat',
-    'mag-isa', 'mag-isang', 'mag-isa’t', 'mag-uli', 'mag-usap', 'magbibigay-galak',
-    'magbibigay-lakas', 'magbibigay-sigla', 'magbigay-biyaya', 'magbigay-lakas',
-    'magbigay-ligaya', 'magkahawak-kamay', 'maglakas-loob', 'magsasama-sama',
-    'magsi-awit', 'magsipag-awit', 'magsipag-unat-unat', 'mah-lo', 'maka-diyos',
-    'mangilan-ngilan', 'may-ari', 'milyun-milyon', 'nag-aalab', 'nag-aanyaya',
-    'nag-aawitan', 'nag-alay', 'nag-aral', 'nag-awitan', 'nag-ayos', 'nag-iisa',
-    'nag-iisa’t', 'nagbabalik-loob', 'nagbibigay-buhay', 'nagkatawang-tao',
-    'namumukod-tangi', 'pag-aalabin', 'pag-aalala', 'pag-aalay', 'pag-aaralan',
-    'pag-aari’y', 'pag-aaruga', 'pag-alo', 'pag-asa', 'pag-asang', 'pag-asa’ng',
-    'pag-asa’t', 'pag-asa’y', 'pag-awit', 'pag-big', 'pag-ibig', 'pag-ingatan',
-    'pag-inom', 'pag-iwas', 'pag-unlad', 'pag-usapan', 'pag-uwi', 'pagbabayad-sala',
-    'pakitong-kitong', 'paligid-ligid', 'pambayad-sala', 'pang-unawa', 'paulit-ulit',
-    'pinag-aaralan', 'pulos-tinik', 'sama-samang', 'sang-ayunan', 'sari-sari',
-    'sari-saring', 'shee-ma-su', 'tag-araw', 'tag-init', 'taos-pusong', 'tulong-tulong',
-    'unti-unti', 'walang-hanggan', 'walang-hanggang',
-  ],
-  to: [
-    'anga-maʻá', 'anga-taʻetaau', 'anga-tonu', 'anga-tonú', 'don-ken', 'faka-ʻotua',
-    'faka-ʻotuá', 'grah-see-ahs', 'kahn-shah', 'loto-fakafetaʻí', 'loto-fakafiefia',
-    'loto-fiemālie', 'loto-foʻi', 'loto-hohaʻá', 'loto-laveá', 'loto-mafasiá',
-    'loto-mamahi', 'loto-mamahí', 'loto-maʻa', 'loto-maʻá', 'loto-mālohi',
-    'loto-mālohí', 'loto-māʻulalo', 'loto-nonga', 'loto-poto', 'loto-taha', 'loto-tahá',
-    'loto-toʻá', 'loto-tuiaki', 'loto-veiuá', 'mah-loh', 'maka-tuliki', 'maka-tulikí',
-    'mare-see', 'shee-mah-sue',
-  ],
-  tpi: [
-    'maun-ten', 'stret-im',
-  ],
-  tw: [
-    'sɛ’a-kwantu', 'wo-hwɛ',
-  ],
-  ty: [
-    'au-’ore-hia', 'bāpetizo-utuhi-hia', 'fa’ahuru-’ē-hia', 'fa’ahuru-’ē-’ore-hia',
-    'fa’atupu-ē-hia', 'fa’a’ere-mau-hia', 'fa’a’ite-pāpū-ra’a', 'fānau-ari’i-hia',
-    'fē-ra’o-ra’o', 'haere-’ē-hia', 'ha’amaita’i-noa-hia', 'hina’aro-mau-hia',
-    'hāmani-’ino-hia', 'hāmani-’ino-ra’a', 'hīmene-noa-hia', 'ite-fa’ahou-hia', 'iu-pī',
-    'mana-hope', 'na-’ō-hia', 'obede-nego', 'parau-’ore-hia', 'poi’ete-maita’i-hia',
-    'poro-haere-hia', 'tahe-noa-ra’a', 'ta’a-’ē-ra’a', 'ti’a-fa’ahou-ra’a',
-    'tohu-ātea-hia', 'tīa’i-maoro-hia',
-  ],
-  uk: [
-    'авед-неґо', 'бага-тьох', 'будь-де', 'будь-коли', 'будь-хто', 'будь-які',
-    'будь-якій', 'давним-давно', 'давно-давно', 'диво-дивне', 'ледве-ледь',
-    'матінко-земля', 'рути-м’яти', 'самуїл-пророк', 'хворогопід-няв', 'хлоп-хлоп',
-    'єгови-творця', 'ісус-немовлятко',
-  ],
-  war: [
-    'kagul-anan', 'kamakatarag-ob', 'mabag-o', 'mag-ampo', 'pagbag-o',
-    'pagkamahimayan-on',
-  ],
-  yap: [
-    'bur-ey', 'gi-nn’en', 'gu-ra', 'gum-’ircha', 'kir-baen', 'mach-albog', 'maga-won',
-    'may-ko', 'mu’-un', 'nga-lang', 'ngo-dad', 'ngo-med', 'pa’-ag', 'pinn-ing',
-    'pi’-in', 'powi’-iyem', 'tathap-eg', 'tham-ey',
+    'além-mar', 'amo-te', 'amor-perfeito', 'arrepender-se', 'ave-maria', 'ave-marias',
+    'beira-mar', 'bem-aventurada', 'bem-aventurado', 'bem-aventurados', 'chamo-me',
+    'confrange-se', 'diga-se', 'el-rei', 'guarda-roupa', 'guarda-sol', 'hei-de', 'hás-de',
+    'hão-de', 'leia-se', 'lembra-se', 'lembra-te', 'lembrai-vos', 'lembrando-se', 'lembrar-me',
+    'lembrar-se', 'lembrava-me', 'lembrei-me', 'lembro-me', 'lembrou-se', 'lusco-fusco',
+    'madre-silva', 'mal-estar', 'matar-me', 'meia-luz', 'meia-noite', 'meio-dia', 'porta-voz',
+    'pára-raios', 'pôr-do-sol', 'rendez-vous', 'sente-se', 'sentem-se', 'senti-me', 'sentia-me',
+    'sentia-se', 'sentiam-se', 'sentimo-nos', 'sentindo-se', 'sentir-me', 'sentir-se',
+    'sentira-se', 'sentiu-se', 'sexta-feira', 'sinto-me', 'sobre-humano', 'sol-pôr', 'viso-rei',
+    'vol-o', 'zig-zag',
   ],
 };
+
+// The table each language's list above builds, kept once rather than per score. The list
+// is prototype data and never changes, so neither does what it indexes to.
+ChScore.prototype._builtInHyphenPositions = new Map();
 
 // Hyphen-like characters seen in Finale-exported MEI: plain hyphen-minus, plus the
 // typographic and non-breaking variants -- a compound word can land whole on one
@@ -12633,22 +12053,26 @@ ChScore.prototype._hyphenPositionsTable = function (words, texts = []) {
   // Scanned words first, so a score's own printed hyphenation wins over the
   // hard-coded list on a conflict -- whichever is seen first for a given word claims
   // the table entry, and everything after (a repeated chorus, or a hard-coded word
-  // the score's own text already covers) is skipped rather than recomputed.
+  // the score's own text already covers) is skipped rather than recomputed. The two
+  // are read in turn rather than concatenated, so a list of thousands isn't copied
+  // to be walked once.
   const table = {};
-  for (const word of [...scannedWords, ...words]) {
-    if (!hyphenChars.test(word)) continue;
+  for (const source of [scannedWords, words]) {
+    for (const word of source) {
+      if (!hyphenChars.test(word)) continue;
 
-    const parts = word.split(hyphenChars);
-    const dehyphenated = parts.join('').toLowerCase();
-    if (Object.hasOwn(table, dehyphenated)) continue;
+      const parts = word.split(hyphenChars);
+      const dehyphenated = parts.join('').toLowerCase();
+      if (Object.hasOwn(table, dehyphenated)) continue;
 
-    const positions = [];
-    let position = 0;
-    for (const part of parts.slice(0, -1)) {
-      position += part.length;
-      positions.push(position);
+      const positions = [];
+      let position = 0;
+      for (const part of parts.slice(0, -1)) {
+        position += part.length;
+        positions.push(position);
+      }
+      table[dehyphenated] = positions;
     }
-    table[dehyphenated] = positions;
   }
   return table;
 }
@@ -12670,11 +12094,27 @@ ChScore.prototype._insertKnownHyphens = function (word, offsets = null) {
 // Where _insertKnownHyphens would put its hyphens, as offsets into the word. Read on its
 // own so the annotated reading of a word can place the same hyphens around its markers.
 ChScore.prototype._knownHyphenOffsets = function (word) {
+  return this._knownHyphens(word).offsets;
+}
+
+// The same offsets, with where they came from: 'printed' if the score's own title or stanza
+// text spells the word hyphenated, 'table' if only a word list does. Read in one pass because
+// trimming and lowercasing a word to look it up is the per-word cost of hyphenation, and
+// doing it twice to answer two questions about one lookup is half that cost wasted.
+ChScore.prototype._knownHyphens = function (word) {
   const leadingPunctuation = word.match(this._patterns.leadingPunctuation)[0].length;
   const trimmed = word.replace(this._patterns.punctuationAtEdges, '');
-  const hyphenPositions = this._scoreData?.hyphenPositions?.[trimmed.toLowerCase()];
-  if (!hyphenPositions) return [];
-  return hyphenPositions.map(position => position + leadingPunctuation);
+  const folded = trimmed.toLowerCase();
+  const hyphenPositions = this._scoreData?.hyphenPositions?.[folded];
+  // `trimmed` and the shift come back too: reading a word's clitic needs the same two,
+  // and trimming twice is the per-word cost this function was merged to stop paying
+  return {
+    trimmed: trimmed,
+    leadingPunctuation: leadingPunctuation,
+    offsets: (hyphenPositions ?? []).map(position => position + leadingPunctuation),
+    source: hyphenPositions
+      ? (this._scoreData.printedHyphenWords?.has(folded) ? 'printed' : 'table') : null,
+  };
 }
 
 // Every chord position a section covers needs a marker, so what is shown against the lyrics --
@@ -12737,6 +12177,13 @@ ChScore.prototype._syllableMarker = function (syllable) {
     + ` data-ch-lyric-line-id="${(syllable.lyricLineIds ?? []).join(' ')}"></span>`;
 }
 
+// The annotated spelling of a built word, derived once: the plain and annotated renderings
+// and the word records all ask for it, and it has to be the same string in each.
+ChScore.prototype._annotatedWord = function (word) {
+  word.annotated ??= this._annotateWord(word.segments, word.plain, word.hyphenOffsets);
+  return word.annotated;
+}
+
 // A word rebuilt from its syllables with each one's marker in front of it, hyphenated the
 // same way the plain reading is. The hyphen goes outside the marker, so the syllable the
 // marker names starts at its own first letter.
@@ -12762,29 +12209,81 @@ ChScore.prototype._annotateWord = function (segments, word, hyphenOffsets) {
 ChScore.prototype._wordBuilder = function () {
   const self = this;
   const trailingHyphen = new RegExp(`[${self._hyphenCharacters}\\s]+$`);
+  // A hyphen typed inside a syllable comes through as the engraver typed it, so one
+  // compound can arrive spelled with U+2010, U+2011 or U+002D depending on the score.
+  // Lyrics assembled here use the ordinary hyphen throughout -- the one
+  // _insertKnownHyphens puts back -- so a word reads the same however it was engraved.
+  // A score's own printed text is left alone: that is a copy of the page, not lyrics.
+  const anyHyphen = new RegExp(`[${self._hyphenCharacters}]`, 'g');
   // { text, segments, italic, bold, endsLine }. `segments` is the word's syllables, each
   // with the marker saying where it is sung, so the same word can be rendered plain or
   // annotated. Styling is merged into <em>/<strong> spans when rendering.
   const words = [];
-  // The word's hyphens, found once: rendering it annotated needs the same offsets, to put
-  // them back around the syllable markers
-  const hyphenated = (plain) => {
-    const offsets = self._knownHyphenOffsets(plain);
+  // Where a word's syllables join, as offsets into it: one fewer than it has syllables.
+  const syllableBoundaries = (segments) => {
+    const boundaries = [];
+    let offset = 0;
+    for (const segment of segments.slice(0, -1)) {
+      offset += segment.text.length;
+      boundaries.push(offset);
+    }
+    return boundaries;
+  };
+  const hyphenated = (plain, segments) => {
+    // A hyphen the engraving dropped is one that fell on a syllable boundary -- that is why
+    // it was never printed. So a word list offering one anywhere else has matched the wrong
+    // word, and the offer is refused rather than spelling the word in a way nothing sings.
+    const boundaries = syllableBoundaries(segments);
+    const { trimmed, leadingPunctuation, offsets: known, source } = self._knownHyphens(plain);
+    const offsets = known.filter(offset => boundaries.includes(offset));
+    // The clitic decides its own hyphen, whichever way a word list voted: it is the only
+    // reader here that can see the capital the two spellings differ by.
+    const clitic = self._cliticAt(trimmed, leadingPunctuation);
+    let ruledOffset = null;
+    if (clitic) {
+      if (clitic.capitalized) {
+        if (boundaries.includes(clitic.offset) && !offsets.includes(clitic.offset)) {
+          offsets.push(clitic.offset);
+          ruledOffset = clitic.offset;
+        }
+      } else {
+        const at = offsets.indexOf(clitic.offset);
+        if (at !== -1) offsets.splice(at, 1);
+      }
+    }
+    offsets.sort((a, b) => a - b);
+    // A hyphen the engraver typed inside a syllable is already in `plain`; a restored one
+    // is not. Both are reported, told apart by where they came from, so a reader can tell
+    // a hyphen the score vouches for from one a word list guessed at.
+    const engraved = [];
+    if (self._patterns.hyphen.test(plain)) {
+      for (let at = 0; at < plain.length; at++) {
+        if (self._hyphenCharacters.includes(plain[at])) {
+          engraved.push({ offset: at, source: 'engraved' });
+        }
+      }
+    }
     return {
       text: self._insertKnownHyphens(plain, offsets),
       plain: plain,
+      boundaries: boundaries,
       hyphenOffsets: new Set(offsets),
+      hyphens: [...engraved, ...offsets.map(offset => ({
+        offset, source: offset === ruledOffset ? 'rule' : source,
+      }))].sort((a, b) => a.offset - b.offset),
     };
   };
   let partial = '';
+  let complete = null;
   let partialSegments = [];
   let partialItalic = false;
   let partialBold = false;
 
   return {
     add(text, wordpos, italic, bold, marker = null) {
-      const syllable = text.replace(trailingHyphen, '');
+      const syllable = text.replace(trailingHyphen, '').replace(anyHyphen, '-');
       if (!syllable) return;
+      complete = null;
       if (wordpos === 'i' || wordpos === 'm') {
         partial += syllable;
         partialSegments.push({ marker: marker, text: syllable });
@@ -12794,9 +12293,10 @@ ChScore.prototype._wordBuilder = function () {
         // A hyphen means the word continues, even where a score marks the
         // continuing syllable inconsistently — @wordpos="s" in a second ending
         // where the first ending marks the same syllable "t".
+        const joinedSegments = [...partialSegments, { marker: marker, text: syllable }];
         words.push({
-          ...hyphenated(partial + syllable),
-          segments: [...partialSegments, { marker: marker, text: syllable }],
+          ...hyphenated(partial + syllable, joinedSegments),
+          segments: joinedSegments,
           italic: partialItalic || italic,
           bold: partialBold || bold,
         });
@@ -12806,7 +12306,7 @@ ChScore.prototype._wordBuilder = function () {
         partialBold = false;
       } else {
         words.push({
-          ...hyphenated(syllable),
+          ...hyphenated(syllable, [{ marker: marker, text: syllable }]),
           segments: [{ marker: marker, text: syllable }],
           italic, bold,
         });
@@ -12815,6 +12315,7 @@ ChScore.prototype._wordBuilder = function () {
     // End the current line. Marked on the last word rather than pushed as its own entry,
     // so a break can't land inside a word still being assembled in `partial`.
     breakLine() {
+      complete = null;
       const last = words.at(-1);
       if (last && !partial) last.endsLine = true;
     },
@@ -12822,12 +12323,13 @@ ChScore.prototype._wordBuilder = function () {
     // with it
     addRoundMarker(text) {
       if (!text) return;
+      complete = null;
       if (partial) {
         partial = `${text} ${partial}`;
         partialSegments.unshift({ marker: null, text: `${text} ` });
       } else {
         words.push({
-          ...hyphenated(text),
+          ...hyphenated(text, [{ marker: null, text: text }]),
           segments: [{ marker: null, text: text }],
           italic: false, bold: false,
         });
@@ -12836,13 +12338,35 @@ ChScore.prototype._wordBuilder = function () {
     // Both readings come out of one walk: `annotated` decides whether each word is written
     // plainly or with its syllable markers in place. Everything else -- how words join into
     // styled runs, where lines break -- is the same either way.
+    // Every word, including one still being assembled -- a stanza can end mid-word where
+    // the last syllable is marked as continuing. Read three times per stanza (plain,
+    // annotated, records), so the trailing word is assembled once and kept.
+    all() {
+      if (!complete) {
+        complete = partial
+          ? words.concat({
+              ...hyphenated(partial, partialSegments), segments: partialSegments,
+              italic: partialItalic, bold: partialBold,
+            })
+          : words;
+      }
+      return complete;
+    },
+    // The words as data rather than text, in the order they are sung: what each one is
+    // spelled as plainly and annotated, where its syllables join, and the hyphens it
+    // already carries. A reader with a dictionary can weigh a joined word against its
+    // syllable boundaries without re-deriving them from the markup.
+    records() {
+      return this.all().map(word => ({
+        plain: word.plain,
+        text: word.text,
+        annotated: self._annotatedWord(word),
+        boundaries: word.boundaries,
+        hyphens: word.hyphens,
+      }));
+    },
     render(annotated) {
-      const all = partial
-        ? words.concat({
-            ...hyphenated(partial), segments: partialSegments,
-            italic: partialItalic, bold: partialBold,
-          })
-        : words;
+      const all = this.all();
 
       // A styling change doesn't happen mid-word, so consecutive words with the
       // same styling are one <em>/<strong> span — "one, two, three." stays a
@@ -12850,9 +12374,7 @@ ChScore.prototype._wordBuilder = function () {
       // spans a line break, so the markup stays inside its own line.
       const runs = [];
       for (const word of all) {
-        const wordText = annotated
-          ? self._annotateWord(word.segments, word.plain, word.hyphenOffsets)
-          : word.text;
+        const wordText = annotated ? self._annotatedWord(word) : word.text;
         const current = runs.at(-1);
         if (current && !current.endsLine && current.italic === word.italic && current.bold === word.bold) {
           current.text += ` ${wordText}`;
