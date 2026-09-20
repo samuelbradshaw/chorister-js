@@ -1605,11 +1605,23 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
         const textPieces = textBlockPieces(text);
         const htmlPieces = textBlockPieces(html);
         const group = groupCounter++;
+        // Styling can run across the blank line between pieces ("<em>Optional verse:" ending one,
+        // "(Child)</em> Mother, tell me..." opening the next), so each piece closes what it
+        // leaves open and the next opens it again
+        let open = [];
         textPieces.forEach((textPiece, i) => {
           const htmlPiece = htmlPieces[i] ?? textPiece;
+          const unclosed = [...open];
+          for (const [, closing, tag] of htmlPiece.matchAll(/<(\/?)(em|strong)>/g)) {
+            if (!closing) unclosed.push(tag);
+            else if (unclosed.includes(tag)) unclosed.splice(unclosed.lastIndexOf(tag), 1);
+          }
+          const balanced = open.map(tag => `<${tag}>`).join('') + htmlPiece
+            + [...unclosed].reverse().map(tag => `</${tag}>`).join('');
+          open = unclosed;
           const textBlockStyle = this._textBlockStyles?.get(htmlPiece);
           blocks.push({
-            html: htmlPiece,
+            html: balanced,
             text: textPiece.replace(this._patterns.stylingMarkup, ''),
             halign: textBlockStyle?.halign ?? rend.getAttribute('halign'),
             valign: rend.getAttribute('valign'),
@@ -1649,13 +1661,24 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
   const isCapoBlock = block => this._patterns.capoMark.test(block.text.trim());
   const isNumberBlock = block => this._patterns.standaloneNumber.test(block.text.trim()) && Number.parseInt(block.text) > 0;
   const isFootnoteBlock = block => block.text.trimStart().startsWith('*');
+  // A phrase ending in a separator is a credit's label ("Paroles :"), read only where it opens
+  // a line: a verse can sing "ses paroles: j'en ai tant besoin" without being a credit. Any
+  // other phrase is read wherever it is printed. Sorted once here rather than per block.
   const attributionWords = [...this._attributionWords._any, ...(this._attributionWords[lang] ?? [])];
+  const attributionLabels = attributionWords.filter(phrase => this._patterns.creditLabel.test(phrase));
+  const attributionPhrases = attributionWords.filter(phrase => !this._patterns.creditLabel.test(phrase));
   const looksLikeAttributions = block => {
     if (contributors.some(({ name }) => name && block.text.includes(name))) return true;
     // French and Spanish typography puts a space before a colon ("Paroles : ..."), so
     // it comes off here rather than being listed as a second spelling of every phrase.
-    const lowerText = block.text.toLowerCase().replace(/\s+:/g, ':');
-    return attributionWords.some(phrase => lowerText.includes(phrase));
+    const lowerText = block.text.toLowerCase().replace(this._patterns.separatorSpacing, '$1');
+    // Whitespace flattened, so a rights notice matches across the line it is wrapped at
+    const unwrapped = lowerText.replace(/\s+/g, ' ');
+    return attributionPhrases.some(phrase => unwrapped.includes(phrase))
+      || lowerText.split('\n').some(line => {
+        const opening = line.trimStart();
+        return attributionLabels.some(label => opening.startsWith(label));
+      });
   };
 
   // A block naming a marker anywhere counts as a stanza in full, not just the piece the
@@ -1677,6 +1700,9 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
     if (looksLikeVerseMarker(block)) groupsWithVerseMarker.add(block.group);
     if (lines.some(line => line.length > this._longLineThreshold)) wrapped.add(block);
   }
+  // Who sings, as the score labels its staves ("(Child)", "(Mother)")
+  const speakerLabels = new Set(Array.from(meiParsed.querySelectorAll('dir'), dir => dir.textContent.trim())
+    .filter(text => /^\([^()]+\)$/.test(text)));
   const looksLikeStanza = block => {
     const lines = block.text.split('\n');
     // A block that names its own verse is a stanza whatever its lines measure: the long-line
@@ -1685,6 +1711,9 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
     if (wrapped.has(block)) return false;
     if (groupsWithVerseMarker.has(block.group)) return true;
     if (lines.length < 2) return false;
+    // One the score's own speakers open is that speaker's verse ("Mother, Tell Me the Story"
+    // prints "(Child) Mother, tell me of Jesus..." under the music)
+    if (speakerLabels.has(lines[0].trim().match(/^\([^()]+\)/)?.[0])) return true;
     return lines.some(line => lineCounts.get(line.trim()) > 1);
   };
 
@@ -2332,12 +2361,18 @@ const CH_FOOTNOTE_MARK = /[*\u2020\u2021]/;
 ChScore.prototype._instructedPassNumber = function (text) {
   const digits = this._markerNumber(text);
   if (digits != null) return digits;
-  const words = this._verseNumberWords[this._scoreData.scoreMetadata?.lang] ?? {};
-  const spelled = new Set(text.toLowerCase().split(/[^\p{L}]+/u));
-  for (const [number, word] of Object.entries(words)) {
-    if (spelled.has(word)) return Number.parseInt(number);
-  }
-  return null;
+  const numberWords = this._ordinalWords[this._scoreData.scoreMetadata?.lang] ?? [];
+  // Whole words, and the longest form found: "décimo primero" is 11, not the 1 inside it
+  const spelled = ` ${text.toLowerCase().split(/[^\p{L}]+/u).filter(Boolean).join(' ')} `;
+  let found = null;
+  numberWords.forEach((forms, index) => {
+    for (const form of forms) {
+      if (spelled.includes(` ${form} `) && form.length > (found?.form.length ?? 0)) {
+        found = { form, number: index + 1 };
+      }
+    }
+  });
+  return found?.number ?? null;
 }
 
 ChScore.prototype._markInstructedLyricLines = function () {
@@ -7679,6 +7714,11 @@ ChScore.prototype._normalizeSections = function () {
     return true;
   };
 
+  // Words already given as printed below the music (lyrics handed in name those verses too)
+  const printedWords = new Set(otherSections
+    .filter(section => section.placement === 'below' && section.lyricsText)
+    .map(section => foldWords(section.lyricsText)));
+
   for (const block of stanzaBlocks) {
     const stanzaText = block.html;
     // A verse marker is 1 or 2 digits at the beginning of a line (skipping text in parentheses)
@@ -7711,7 +7751,7 @@ ChScore.prototype._normalizeSections = function () {
       // with no marker to dedupe on, compare folded text against what's already sung
       // from the staff instead.
       printedLyrics = stanzaText;
-      if (alreadySung(stanzaText)) continue;
+      if (alreadySung(stanzaText) || printedWords.has(foldWords(stanzaText))) continue;
     }
 
     otherSections.push(this._newSection({
@@ -7817,12 +7857,17 @@ ChScore.prototype._normalizeSections = function () {
     this._splitTwoPartFinalPass(lyricChordPositionRanges);
     const numbers = this._numberSections(this._scoreData.sections.map(section => section.type));
     const usedSectionIds = new Set();
+    let previousVerseNumber = 0;
     for (const [index, section] of this._scoreData.sections.entries()) {
       // A number the score prints for itself ("5." under the music, where only some of the
-      // verses are sung from the staff) is what that verse is called; the ordinal is the
-      // answer only for a verse the score never numbered.
+      // verses are sung from the staff) is what that verse is called. A verse the score never
+      // numbered follows the one before it, which is its ordinal until a printed number and
+      // the count part company ("Mother, Tell Me the Story" sings its verses together as
+      // well, and the verses printed under the music are 3 and 4, not 4 and 5).
       const printed = section.type === 'verse' ? this._cleanMarker(section.marker) : '';
-      const number = /^\d+$/.test(printed) ? Number.parseInt(printed) : numbers[index];
+      const number = /^\d+$/.test(printed) ? Number.parseInt(printed)
+        : section.type === 'verse' ? previousVerseNumber + 1 : numbers[index];
+      if (section.type === 'verse') previousVerseNumber = number;
       const identity = this._sectionIdentity(section.type, number);
       // Two sections can still land on one number (a verse sung twice). The name is the
       // score's to give, so the id is what gets made unique.
@@ -8008,16 +8053,32 @@ ChScore.prototype._getLyricChordPositionRanges = function (otherSections, melody
     const expansionSectionElementIds = expansion.getAttribute('plist').trim().split(' ').map(sid => sid.substring(1));
     // Separate repeated sections (choruses)
     const timesPlayed = new Map();
-    for (const id of expansionSectionElementIds) {
+    const before = new Map();
+    const after = new Map();
+    expansionSectionElementIds.forEach((id, index) => {
       timesPlayed.set(id, (timesPlayed.get(id) ?? 0) + 1);
-    }
+      this._addToSetMap(before, id, expansionSectionElementIds[index - 1] ?? null);
+      this._addToSetMap(after, id, expansionSectionElementIds[index + 1] ?? null);
+    });
+    const elementOf = (id) => this._scoreData.meiParsed.querySelector(`[*|id="${id}"]`);
+    // Unless it is only ever played straight after one section that is only ever followed by it,
+    // and carries more than one verse's words: then it is those verses carrying on ("Mother, Tell
+    // Me the Story" repeats both halves of each verse together), not a chorus coming round
+    const continuesPrevious = (id) => {
+      const [previous] = before.get(id);
+      return before.get(id).size === 1 && previous !== null && previous !== id
+        && after.get(previous).size === 1
+        && (melodyLyricElements?.linesBySection.get(elementOf(id))?.size ?? 0) > 1;
+    };
     for (const expansionSectionElementId of expansionSectionElementIds) {
-      const sectionElement = this._scoreData.meiParsed.querySelector(`[*|id="${expansionSectionElementId}"]`);
+      const sectionElement = elementOf(expansionSectionElementId);
       const sectionElementChordPositions = sectionElement.getAttribute('ch-chord-position').trim().split(' ').map(cp => Number.parseInt(cp));
+      const continues = continuesPrevious(expansionSectionElementId);
       lyricChordPositionRanges.push({
         start: sectionElementChordPositions[0],
         end: sectionElementChordPositions.at(-1) + 1,
-        startsRepeatedSection: timesPlayed.get(expansionSectionElementId) > 1,
+        startsRepeatedSection: timesPlayed.get(expansionSectionElementId) > 1 && !continues,
+        continuesRepeatedSection: continues,
       });
     }
   } else {
@@ -9019,8 +9080,10 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
     if (cp === range.start) {
       isFirstSyllableOfSection = range.startsSection ?? false;
       isFirstSyllableOfRepeatedSection = range.startsRepeatedSection ?? false;
-      isFirstSyllableAfterRepeatedSection = previousRangeWasRepeated && !isFirstSyllableOfRepeatedSection;
-      previousRangeWasRepeated = isFirstSyllableOfRepeatedSection;
+      isFirstSyllableAfterRepeatedSection = previousRangeWasRepeated && !isFirstSyllableOfRepeatedSection
+        && !range.continuesRepeatedSection;
+      previousRangeWasRepeated = isFirstSyllableOfRepeatedSection
+        || (previousRangeWasRepeated && Boolean(range.continuesRepeatedSection));
     }
     // The per-staff signal needs the two-part guard; range.hasSingleLine does not
     // (see _hasStackedMelodyLyrics)
@@ -9230,13 +9293,9 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
 
   const claimForCurrentStanza = (syllable) => {
     if (currentStanzaIndex >= stanzas.length) return;
-    for (const [start, end] of syllable.chordPositionRuns) {
-      stanzas[currentStanzaIndex].chordPositionRanges.push({
-        start: start,
-        end: end,
-        lyricLineIds: syllable.lyricLineIds,
-        staffNumbers: staffNumbers,
-      });
+    for (const run of syllable.chordPositionRuns) {
+      this._addChordPositionRun(stanzas[currentStanzaIndex].chordPositionRanges, run,
+        syllable.lyricLineIds, staffNumbers);
     }
     stanzas[currentStanzaIndex].expandedChordPositions.push(...syllable.expandedChordPositions);
     // Same record the extracted-lyrics path keeps, so a stanza names its verse elements
@@ -9333,7 +9392,6 @@ ChScore.prototype._alignSyllablesToLyrics = function (expandedLyrics, syllables,
   if (this._scoreData) this._scoreData.lyricLineBreaks = { breakers: breakers, singers: singers };
 
   for (const stanza of stanzas) {
-    stanza.chordPositionRanges = this._consolidateChordPositionRanges(stanza.chordPositionRanges);
     stanza.expandedChordPositions = [stanza.expandedChordPositions[0], stanza.expandedChordPositions.at(-1) + 1];
   }
 
@@ -9484,25 +9542,20 @@ ChScore.prototype._lyricSimilarity = function (str1, str2, from = 0, length = nu
   return (maxLen * 2) / (len1 + len2);
 }
 
-// Join chord position ranges that continue one another on the same staves and lyric line
-ChScore.prototype._consolidateChordPositionRanges = function (ranges) {
-  const result = [];
-  for (const range of ranges) {
-    const last = result.at(-1);
-    if (last
-        && (last.end === range.start
-          || (last.end < range.start && this._continuesOverGap(last.end, range.start, last.lyricLineIds)))
-        && last.staffNumbers.toString() === range.staffNumbers.toString()
-        && last.lyricLineIds.toString() === range.lyricLineIds.toString()) {
-      last.end = range.end;
-      for (const id of range.lyricLineIds) {
-        if (!last.lyricLineIds.includes(id)) last.lyricLineIds.push(id);
-      }
-    } else {
-      result.push(range);
-    }
+// Add where a syllable is sung to a stanza's chord position ranges. The last range grows where
+// the syllable starts where it ends, or carries on from it over a gap (see _continuesOverGap), on
+// the same staves and lyric lines; anything else -- a jump back into a repeat, a gap the stanza
+// skips, a move onto another lyric line -- opens a range of its own.
+ChScore.prototype._addChordPositionRun = function (ranges, [start, end], lyricLineIds, staffNumbers) {
+  const last = ranges.at(-1);
+  if (last
+    && last.staffNumbers.toString() === staffNumbers.toString()
+    && last.lyricLineIds.toString() === lyricLineIds.toString()
+    && (start === last.end || (start > last.end && this._continuesOverGap(last.end, start, lyricLineIds)))) {
+    last.end = Math.max(last.end, end);
+  } else {
+    ranges.push({ start, end, staffNumbers, lyricLineIds: [...lyricLineIds] });
   }
-  return result;
 }
 
 // Whether one lyric line carries on into another. A line is identified per staff ("2.1" is
@@ -9757,6 +9810,7 @@ ChScore.prototype._splitRunsAtRepeatedWords = function (runs, phraseStarts) {
   });
   const cuts = new Set();
   const chorusSyllables = new Set();
+  const leadSyllables = new Set();
   const seen = new Set();
   for (const indices of byChordPosition.values()) {
     for (let a = 0; a < indices.length; a++) {
@@ -9779,7 +9833,26 @@ ChScore.prototype._splitRunsAtRepeatedWords = function (runs, phraseStarts) {
         // that has to close a phrase as it is: words changing mid-phrase ("To lead me safely
         // home" and "To lead us") are one chorus reworded, not a return to cut out.
         let start = -from;
-        while (start <= to && !(opensPhrase(first + start) && opensPhrase(second + start))) start++;
+        // Unless one copy opens its phrase a pickup's length before the words agree ("So we
+        // welcome" coming round to "We welcome" in "We Welcome You"): that lead-in is the
+        // chorus's, and that copy starts there. Punctuation closing the word before it ("day.")
+        // opens a phrase as surely as the segmenter does.
+        const leadIn = (copy) => {
+          for (let k = 1; k <= this._maxPickupSyllables && copy + start - k >= 0; k++) {
+            const index = copy + start - k;
+            if (opensPhrase(index)
+              || this._patterns.phrasePunctuation.test(syllables[index - 1]?.text ?? '')) return k;
+          }
+          return 0;
+        };
+        const lead = { [first]: 0, [second]: 0 };
+        if (opensPhrase(first + start) !== opensPhrase(second + start)) {
+          const lagging = opensPhrase(first + start) ? second : first;
+          lead[lagging] = leadIn(lagging);
+        }
+        if (!lead[first] && !lead[second]) {
+          while (start <= to && !(opensPhrase(first + start) && opensPhrase(second + start))) start++;
+        }
         if (!(opensPhrase(first + to + 1) && opensPhrase(second + to + 1))) continue;
         if (to - start + 1 <= 2 * this._maxLoneSyllables) continue;
         // The verse's refrain or not is a question about the music both copies share, not the
@@ -9794,9 +9867,10 @@ ChScore.prototype._splitRunsAtRepeatedWords = function (runs, phraseStarts) {
         melodyLyricElements ??= this._melodyLyricElementIndex();
         if (this._isWithinVerse(sharedFrom, sharedTo, melodyLyricElements)) continue;
         for (const copy of [first, second]) {
-          cuts.add(copy + start);
+          cuts.add(copy + start - lead[copy]);
           cuts.add(copy + to + 1);
-          for (let k = start; k <= to; k++) chorusSyllables.add(syllables[copy + k]);
+          for (let k = start - lead[copy]; k <= to; k++) chorusSyllables.add(syllables[copy + k]);
+          for (let k = start - lead[copy]; k < start; k++) leadSyllables.add(syllables[copy + k]);
         }
       }
     }
@@ -9819,6 +9893,13 @@ ChScore.prototype._splitRunsAtRepeatedWords = function (runs, phraseStarts) {
       pieceStart = index;
     }
     offset += run.syllables.length;
+  }
+  // A lead-in closing one run opens the chorus the next one carries on ("So we" ending the verse
+  // before the jump back to "welcome"), so the two are one stanza
+  for (let index = split.length - 2; index >= 0; index--) {
+    const [piece, next] = [split[index], split[index + 1]];
+    if (piece.type !== 'chorus' || next.type !== 'chorus' || !leadSyllables.has(piece.syllables[0])) continue;
+    split.splice(index, 2, { ...next, syllables: [...piece.syllables, ...next.syllables] });
   }
   return split;
 }
@@ -10007,6 +10088,10 @@ ChScore.prototype._mergeSingleLineRuns = function (runs, phraseStarts) {
     // below would otherwise refuse to give back.
     const assertsNothing = !first.label && !first.startsSection && !first.startsRepeatedSection
       && run.syllables.length < this._maxPickupSyllables;
+    // Unless it leads into the run after it, sung just before playback jumps back to it: that
+    // is the next verse's pickup ("I'm" in a first ending, "I'm Trying to Be like Jesus"), which
+    // _mergePickupRuns gives to that verse
+    if (assertsNothing && this._isPickupFragment(run, runs[r + 1])) continue;
     const sameLine = previous.lyricLineId === run.lyricLineId && previous.isShared === run.isShared;
     if (!assertsNothing && (previous.type !== run.type || sameLine)) continue;
     if (first.label || first.startsSection || first.startsRepeatedSection) continue;
@@ -10116,7 +10201,7 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
 
     if (index === 0) {
       current = this._newLyricStanza(
-        run.lyricLineId, run.type, label, chordPosition, syllable.expandedChordPositions[0]);
+        run.lyricLineId, run.type, label, syllable.expandedChordPositions[0]);
       current.isChorus = run.isChorus ?? false;
       current.isShared = run.isShared ?? false;
       builder = this._wordBuilder();
@@ -10157,25 +10242,13 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
     // A label reached mid-stanza names the stanza; it doesn't start a new one
     if (label && !current.marker) current.marker = label;
 
-    // Record where the stanza is actually sung: a run outside the current range opens
-    // another, forward over a gap it doesn't carry on over or backward over a jump into a
-    // repeat. A syllable held over a jump back collects positions nothing sings -- a position
-    // another verse sings starts a syllable of its own -- so they are this stanza's, played
-    // after its last word.
-    for (const [runStart, runEnd] of syllable.chordPositionRuns) {
-      const lastRange = current.chordPositionRanges.at(-1);
-      if (runStart < lastRange.start || (runStart > lastRange.end
-        && !this._continuesOverGap(lastRange.end, runStart, lastRange.lyricLineIds))) {
-        current.chordPositionRanges.push({
-          start: runStart,
-          end: runEnd,
-          staffNumbers: lastRange.staffNumbers,
-          // Copied, not shared: _consolidateChordPositionRanges pushes into this
-          lyricLineIds: [...lastRange.lyricLineIds],
-        });
-      } else if (runEnd > lastRange.end) {
-        lastRange.end = runEnd;
-      }
+    // Record where the stanza is actually sung, on the line each syllable is sung from. A
+    // syllable held over a jump back collects positions nothing sings -- a position another
+    // verse sings starts a syllable of its own -- so they are this stanza's, played after its
+    // last word.
+    for (const run of syllable.chordPositionRuns) {
+      this._addChordPositionRun(current.chordPositionRanges, run,
+        syllable.lyricLineIds ?? [], this._scoreData.staffNumbers);
     }
     current.expandedChordPositions[1] = syllable.expandedChordPositions.at(-1) + 1;
   }
@@ -10208,7 +10281,10 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
         && refrainTexts.some(refrain => stanza.lyricsText?.startsWith(refrain))) {
         previous.lyricsText = `${previous.lyricsText}\n${stanza.lyricsText}`.trim();
         previous.lyricsAnnotated = `${previous.lyricsAnnotated}\n${stanza.lyricsAnnotated}`.trim();
-        previous.chordPositionRanges = previous.chordPositionRanges.concat(stanza.chordPositionRanges);
+        for (const range of stanza.chordPositionRanges) {
+          this._addChordPositionRun(previous.chordPositionRanges, [range.start, range.end],
+            range.lyricLineIds, range.staffNumbers);
+        }
         previous.lyricElements.push(...stanza.lyricElements);
         if (stanza.expandedChordPositions.length) {
           previous.expandedChordPositions[1] = stanza.expandedChordPositions.at(-1);
@@ -10230,14 +10306,33 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
   // Words labelled as every verse's come back by being labelled again, reworded or not ("My
   // Covenants" changes its last chorus)
   const labelledComesBack = stanzas.filter(stanza => stanza.isShared).length > 1;
+  // Or sung again over the same notes, however it is reworded ("Teacher, Do You Love Me?"
+  // leads "me" safely home the first time and "us" the second): most of the notes either
+  // stanza is sung to, the other is sung to as well
+  const notesOf = new Map(stanzas.map(stanza => [stanza, new Set(stanza.chordPositionRanges
+    .flatMap(({ start, end }) => Array.from({ length: end - start }, (_, offset) => start + offset)))]));
+  const sameNotes = (stanza, other) => {
+    const [notes, otherNotes] = [notesOf.get(stanza), notesOf.get(other)];
+    let shared = 0;
+    for (const chordPosition of notes) if (otherNotes.has(chordPosition)) shared++;
+    return shared >= 0.75 * Math.min(notes.size, otherNotes.size);
+  };
   const chorusStanzas = stanzas.filter(stanza =>
     !stanza.type && stanza.isChorus && stanza.lyricsText
     && ((stanza.isShared && labelledComesBack)
-      || repeated.some(text => stanza.lyricsText.startsWith(text))));
+      || repeated.some(text => stanza.lyricsText.startsWith(text))
+      || stanzas.some(other => other !== stanza && other.isChorus && !other.type && sameNotes(stanza, other))));
   // A chorus is what the verses alternate with, so a song that is all chorus is none:
   // in a round every voice sings the same words, and they are the verse
   if (chorusStanzas.length < stanzas.length) {
     for (const stanza of chorusStanzas) stanza.type = 'chorus';
+  }
+  // And one sung over the same notes as another on another lyric line is one of the verses
+  // stacked there, numbered or not (the teacher's two in "Teacher, Do You Love Me?")
+  for (const stanza of stanzas) {
+    if (stanza.type || stanza.isChorus || !stanza.lyricsText) continue;
+    if (stanzas.some(other => other !== stanza && other.lyricLineIds[0] !== stanza.lyricLineIds[0]
+      && !other.isChorus && sameNotes(stanza, other))) stanza.type = 'verse';
   }
   // Where a score numbers no verses of its own, the derived verses are numbered in the order
   // they are sung. The lyric line a stanza was read from cannot say it: a passage sung twice
@@ -10333,15 +10428,41 @@ ChScore.prototype._weights = function (rates = null) {
   return calibrated;
 }
 
-// Verse numbers an instruction spells out rather than writing as a digit ("Chorus after
-// fourth verse:" in "O Thou Rock of Our Salvation"). Only as far as a verse count reaches.
-ChScore.prototype._verseNumberWords = {
-  en: { 1: 'first', 2: 'second', 3: 'third', 4: 'fourth', 5: 'fifth', 6: 'sixth', 7: 'seventh', 8: 'eighth' },
-  // Left commented until a score spells a verse number out in one of these. A language with
-  // no entry reads no spelled-out number; a digit is read whatever the language.
-  // fr: { 1: 'premier', 2: 'deuxième', 3: 'troisième', 4: 'quatrième', ... },
-  // es: { 1: 'primero', 2: 'segundo', 3: 'tercero', 4: 'cuarto', ... },
-  // pt: { 1: 'primeiro', 2: 'segundo', 3: 'terceiro', 4: 'quarto', ... },
+// Ordinal numbers spelled out, for an instruction naming a verse in words rather than a digit
+// ("Chorus after fourth verse:" in "O Thou Rock of Our Salvation"), 1-13. A form's position in the list is the
+// number it stands for, and every spelling of it is listed: masculine and feminine, the
+// shortened "primer" and "tercer", and Spanish's classical "undécimo" beside "decimoprimero".
+// A written ordinal ("4th", "1er", "2e", "1º") needs no entry: its digit is read first. A
+// language with no entry reads no spelled-out number. From python-scripture-lookup's
+// ordinal_words.
+ChScore.prototype._ordinalWords = {
+  en: [
+    ['first'], ['second'], ['third'], ['fourth'], ['fifth'], ['sixth'], ['seventh'], ['eighth'],
+    ['ninth'], ['tenth'], ['eleventh'], ['twelfth'], ['thirteenth'],
+  ],
+  fr: [
+    ['premier', 'première'], ['deuxième', 'second', 'seconde'], ['troisième'], ['quatrième'],
+    ['cinquième'], ['sixième'], ['septième'], ['huitième'], ['neuvième'], ['dixième'], ['onzième'],
+    ['douzième'], ['treizième'],
+  ],
+  es: [
+    ['primero', 'primer', 'primera'], ['segundo', 'segunda'], ['tercero', 'tercer', 'tercera'],
+    ['cuarto', 'cuarta'], ['quinto', 'quinta'], ['sexto', 'sexta'], ['séptimo', 'séptima'],
+    ['octavo', 'octava'], ['noveno', 'novena'], ['décimo', 'décima'],
+    ['undécimo', 'undécima', 'decimoprimero', 'decimoprimera', 'decimoprimer', 'décimo primero',
+      'décima primera', 'décimo primer'],
+    ['duodécimo', 'duodécima', 'decimosegundo', 'decimosegunda', 'décimo segundo', 'décima segunda'],
+    ['decimotercero', 'decimotercera', 'decimotercer', 'décimo tercero', 'décima tercera',
+      'décimo tercer'],
+  ],
+  pt: [
+    ['primeiro', 'primeira'], ['segundo', 'segunda'], ['terceiro', 'terceira'], ['quarto', 'quarta'],
+    ['quinto', 'quinta'], ['sexto', 'sexta'], ['sétimo', 'sétima'], ['oitavo', 'oitava'],
+    ['nono', 'nona'], ['décimo', 'décima'],
+    ['décimo primeiro', 'décima primeira', 'undécimo', 'undécima'],
+    ['décimo segundo', 'décima segunda', 'duodécimo', 'duodécima'],
+    ['décimo terceiro', 'décima terceira'],
+  ],
 };
 
 ChScore.prototype._phraseFunctionWords = {
@@ -10356,15 +10477,317 @@ ChScore.prototype._phraseFunctionWords = {
 
 // Phrases used only in attributions
 ChScore.prototype._attributionWords = {
-  _any: ['©'],
-  en: ['words by', 'music by', 'words:', 'music:', 'text:', 'arranged by',
-    'arrangement:', 'copyright', 'all rights reserved', 'used by permission'],
-  fr: ['paroles:', 'musique:', 'texte:', 'traduction française', 'arrangement',
-    'droits réservés'],
-  es: ['letra:', 'música:', 'texto:', 'traducción al español', 'arreglo',
-    'derechos reservados'],
-  pt: ['letra:', 'música:', 'texto:', 'tradução para o português', 'arranjo',
-    'direitos reservados'],
+  _any: [
+    '(c)', 'all rights reserved', 'arranged by', 'artist:', 'ascap', 'ccli', 'copr.',
+    'copyright', 'creative commons', 'inc.', 'intellectual reserve', 'music:', 'non-commercial',
+    'noncommercial', 'produced by', 'public domain', 'sesac', 'socan', 'text:', '©', '℗',
+  ],
+  ar: [
+    'الموسيقى:', 'النص والموسيقى:', 'النص:',
+  ],
+  bg: [
+    'всички права запазени', 'музика:',
+    'тази бележка трябва да бъде включена на всяко направено копие', 'текст и музика:', 'текст:',
+  ],
+  bi: [
+    'myusek:', 'ol tok mo myusek:', 'ol tok:',
+  ],
+  bik: [
+    'musika:', 'texto asin musika:', 'texto:',
+  ],
+  ceb: [
+    'dili pangnegosyo nga paggamit sa simbahan o', 'kini nga pahibalo kinahanglang',
+    'mga pulong ug musika:', 'mga pulong:', 'musika:', 'tanang mga katungod gigahin', 'teksto:',
+  ],
+  cmn: [
+    'words and', '曲：', '演出者：', '演唱者：', '監製：', '編曲：', '编曲：', '詞/曲：', '詞曲：', '詞與曲：', '詞：', '词与曲：',
+    '词曲：', '词：',
+  ],
+  cs: [
+    'aranže:', 'hudba:', 'produkce:', 'slova a hudba:',
+    'tato píseň může být kopírována pro příležitostné, nekomerční použití v církvi nebo v rodině',
+    'toto sdělení musí být uvedeno na každé pořízené kopii', 'všechna práva vyhrazena',
+  ],
+  da: [
+    'alle rettigheder forbeholdes', 'arrangement:',
+    'denne sang kan kopieres til lejlighedsvis, ikke-kommercielt brug i kirke og hjem',
+    'denne tekst skal medtages på alle kopier', 'denne tekst skal stå på alle kopier', 'musik:',
+    'tekst og musik:', 'tekst:',
+  ],
+  de: [
+    'alle rechte vorbehalten', 'arrangement:', 'audioproduktion:', 'bearb.:', 'bearbeitung:',
+    'das lied darf für den gelegentlichen, nichtkommerziellen gebrauch in kirche und familie vervielfältigt werden',
+    'jede kopie muss diesen hinweis enthalten', 'künstler:', 'musik:', 'satz:',
+    'text und musik:',
+  ],
+  el: [
+    'mουσική:', 'κείμενο και μουσική:', 'κείμενο:', 'λόγια και μουσική:', 'λόγια:', 'μουσική:',
+  ],
+  en: [
+    'accompanist:', 'adapt.:', 'arr. by', 'arrangement:', 'arranger:', 'artists:',
+    'choir director:', 'conductor:', 'lyrics:',
+    'making copies of this music for use within the church is permitted',
+    'may be copied for incidental, noncommercial', 'music arr', 'music by', 'on each copy made',
+    'original french text:', 'producer:', 'text and music:', 'text by', 'trans.:',
+    'translated text:', 'tune name:', 'tune:', 'used by permission', 'words and music:',
+    'words by', 'words:',
+  ],
+  es: [
+    'arr:', 'arrangement:', 'arreglo:', 'artista:', 'artistas:', 'artists:',
+    'en todas las copias', 'esta canción se puede copiar para', 'letra y música:', 'letra:',
+    'música:', 'para voz y guitarra', 'producido:', 'text and music:',
+    'todos los derechos reservados', 'words and music:', 'words:',
+  ],
+  et: [
+    'laulu võib paljundada kirikus ja kodus kasutamiseks', 'muusika:',
+    'see teave peab oleme märgitud igale koopiale', 'sõnad ja muusika:', 'sõnad ja viis:',
+    'sõnad:', 'viis:',
+  ],
+  eu: [
+    'musika:', 'testua eta musika:', 'testua:',
+  ],
+  fi: [
+    'ei-kaupalliseen käyttöön kirkossa tai kotona', 'kaikki oikeudet pidätetään',
+    'sanat ja sävel:', 'sanat:', 'sävel:', 'tämä huomautus on liitettävä jokaiseen kopioon',
+  ],
+  fj: [
+    'ikabakaba:', 'kabakaba:', 'na notisi oqo e dodonu me na tiko ena vei ilavelave kece e caka',
+    'qaqana kei na ikabakaba:', 'qaqana kei na kabakaba:', 'qaqana:',
+  ],
+  fr: [
+    'arrangement:', 'arranger:', 'arrangeur:', 'artiste:', 'artistes:', 'artists:',
+    'ce chant peut être copié pour une utilisation ponctuelle, non commerciale, pour usage personnel ou dans le cadre de l’eglise',
+    'cet avertissement doit figurer sur chaque copie',
+    'cet avertissement doit être porté sur chaque copie', 'chant et guitare', 'd’après le',
+    'musique:', 'paroles et musique:', 'paroles:', 'producer:', 'producteur:',
+    'tous droits réservés', 'traduction française', 'words and music:', 'words:',
+  ],
+  gil: [
+    'taekana ao',
+  ],
+  hil: [
+    'lanton:', 'texto kag lanton:', 'texto:',
+  ],
+  hmn: [
+    'cov lus thiab suab nkauj:', 'cov lus:', 'suab nkauj:',
+  ],
+  hr: [
+    'aranžman:', 'glazba:', 'naziv melodije:',
+    'ova pjesma smije se umnažati za povremenu, nekomercijalnu kućnu i crkvenu uporabu',
+    'rijeçi i glazba:', 'riječi i glazba:', 'riječi originala:', 'riječi:',
+    'svaki načinjeni primjerak mora sadržavati ovo upozorenje', 'tekst i glazba:', 'tekst:',
+  ],
+  ht: [
+    'mizik:', 'pawòl ak mizik:', 'tèks ak mizik:', 'tèks:',
+  ],
+  hu: [
+    'elrendezés:', 'eredeti szöveg és zene:',
+    'erről a dalról készíthető másolat esetenkénti, nem kereskedelmi',
+    'ezt a megjegyzést minden másolaton fel kell tüntetni!', 'szöveg és zene:', 'szöveg:',
+    'zene és szöveg:', 'zene:', 'énekes:', 'énekesek:',
+  ],
+  hy: [
+    'այս երգը կարող է բազմացվել միայն առանձին դեպքերում` ոչ առևտրային նպատակներով՝ եկեղեցում կամ տանը օգտագործելու համար',
+    'երաժշտություն՝', 'խոսք և երաժշտություն՝', 'խոսք՝', 'մշակումը՝',
+  ],
+  id: [
+    'biduanita:', 'lirik dan musik:', 'musik:',
+    'nyanyian ini boleh dikopi untuk penggunaan insidental dan nonkomersial di gereja atau di rumah',
+    'nyanyian ini boleh disalin untuk penggunaan tertentu, di rumah atau di gereja yang non-komersial',
+    'pernyataan ini harus disertakan pada setiap', 'teks dan musik:', 'teks:',
+    'terjemahan bahasa',
+  ],
+  ig: [
+    'egwu:', 'isi-okwu na egwu:', 'isi-okwu:', 'isiokwu:',
+  ],
+  ilo: [
+    'balikas ken musika:', 'balikas:', 'musika:',
+  ],
+  is: [
+    'lag og texti:', 'lag:', 'texti:', 'íslensk þýðing:', 'þennan söng má afrita til nota',
+    'þessi athugasemd skal fylgja hverju afriti',
+  ],
+  it: [
+    'arranger:', 'arrangiamento:', 'artista:', 'artisti:', 'musica:',
+    'per uso occasionale, non a scopo di lucro, in chiesa o in famiglia', 'producer:',
+    'questo avviso deve essere riportato su ogni copia', 'testo e musica:', 'testo:',
+    'tutti i diritti riservati',
+  ],
+  ja: [
+    'words and music:', '原題：', '和声：', '教会あるいは家庭における一時的または非営利目的の使用に限り， この表示を含めて複製することを許可する', '曲：',
+    '歌手：', '編曲：', '詞·曲：', '詞と曲：', '詞・曲：', '詞：', '詩：',
+  ],
+  ka: [
+    'მუსიკა:', 'სიტყვები და მუსიკა:', 'სიტყვები:',
+  ],
+  kek: [
+    'naru risinkil reetalil re roksinkil saʼ iglees malaj saʼ ochoch chi inkʼaʼ patzʼbʼil xtzʼaq',
+    'raatinul ut xyaabʼal:', 'raatinul:', 'xyaabʼal:',
+  ],
+  km: [
+    'arranged:', 'produced:', 'និពន្ធទំនុកច្រៀង និង', 'និពន្ធទំនុកច្រៀង ៖', 'និពន្ធបទភ្លេង ៖',
+  ],
+  ko: [
+    '가사:', '노래:', '배열:', '보컬, 기타', '성부 작성:', '음악:', '음악프로듀서:', '작곡:', '작사 및 작곡:', '작사 작곡:',
+    '작사(영어) 및', '작사, 작곡:', '작사:', '편곡:', '한국어 번역',
+  ],
+  kos: [
+    'ohn:', 'sifwen kahs ac ohn:', 'sifwen kahs:',
+  ],
+  ln: [
+    'maloba mpe miziki:', 'maloba:', 'miziki:',
+  ],
+  lo: [
+    'ທຳນອງ:',
+  ],
+  lt: [
+    'muzika:', 'nekomerciniam naudojimui bažnyčioje ar namuose',
+    'ši pastaba turi būti ant kiekvienos kopijos', 'žodžiai ir muzika:', 'žodžiai:',
+  ],
+  lv: [
+    'dziesmu atļauts pavairot vienīgi nekomerciālai lietošanai baznīcā un mājās', 'mūzika:',
+    'vārdi un mūzika:', 'vārdi:',
+    'šo dziesmu drīkst pavairot un izmantot baznīcā vai mājās nekomerciālos nolūkos',
+  ],
+  mg: [
+    'dikanteny amin’ny', 'feony:',
+    'ity fanamarihana ity dia tsy maintsy avoaka eo amin’ny tahadika tsirairay izay atao',
+    'ity hira ity dia azo adika raha sendra ampiasaina ao', 'tonony sy feony:',
+    'tonony tamin’ ny teny anglisy:', 'tonony:',
+  ],
+  mi: [
+    'me tuhi i tēnei kōrero ki ia whakatāruatanga',
+  ],
+  mn: [
+    'words and', 'ая:', 'бүх эрх хамгаалагдсан', 'дуучин:',
+    'энэ мэдэгдлийг хэвлэсэн хувь бүр дээр оруулсан байх ёстой', 'үг ба aя:', 'үг ба ая:',
+    'үг, ая:', 'үг, аяыг', 'үг:',
+  ],
+  ms: [
+    'lirik dan', 'notis ini mesti disertakan pada setiap salinan yang dibuat',
+  ],
+  mt: [
+    'mużika:', 'test u mużika:', 'test:',
+  ],
+  nl: [
+    'alle rechten voorbehouden', 'deze kennisgeving moet op elke kopie vermeld worden',
+    'musiek:', 'muziek:', 'tekst en muziek:', 'tekst naar:', 'tekst:',
+    'voor incidenteel, niet-commercieel gebruik',
+  ],
+  no: [
+    'denne notis må stå på alle kopier',
+    'denne sangen kan kopieres til leilighetsvis, ikke-kommersiell bruk i kirken eller i hjemmet',
+    'musikk:', 'overs.:', 'tekst og melodi:', 'tekst og musikk:', 'tekst:',
+  ],
+  pag: [
+    'laineng:', 'texto tan laineng:', 'texto:',
+  ],
+  pl: [
+    'informacja ta musi znajdować się na każdym egzemplarzu', 'muzyka:',
+    'pieśń ta może być powielana na potrzeby kościoła lub na użytek domowy, bez prawa sprzedaży',
+    'słowa i muzyka:', 'słowa:', 'wszelkie prawa zastrzeżone',
+  ],
+  pon: [
+    'koul:', 'pwuhk oh koul:', 'pwuhk:',
+  ],
+  pt: [
+    'arranger:', 'arranjo:', 'artista:', 'artists:', 'autor original:',
+    'esta música pode ser copiada para uso', 'harmonização de',
+    'informação deverá constar em todas as cópias', 'letra e música:', 'letra:', 'musica:',
+    'música:', 'para voz e violão', 'performed by:', 'producer:', 'texto:',
+    'todos os direitos reservados', 'versão de:', 'versão em português:', 'versão:',
+    'words and music:', 'words:',
+  ],
+  ro: [
+    'muzica:', 'textul şi muzica:', 'textul și muzica:', 'textul:', 'versuri și muzică:',
+  ],
+  rtm: [
+    'fäeag ne him ta:', 'toag ne him ta:',
+  ],
+  ru: [
+    'words and music:', 'words:', 'аранжировка:', 'аранжировщик:', 'все права защищены',
+    'исполнитель:', 'музыка:', 'подобная ссылка должна содержаться в каждой сделанной копии',
+    'продюсер:', 'слова и музыка:', 'слова:',
+    'эту песню можно копировать для разового, некоммерческого использования в церкви или дома',
+  ],
+  sk: [
+    'hudba:', 'slová a hudba:', 'text a hudba:',
+  ],
+  sl: [
+    'besedilo in glasba:', 'besedilo in uglasbitev:', 'besedilo:', 'glasba:',
+    'razmnoževanje pesmi je dovoljeno za priložnostno, nekomercialno uporabo v cerkvi ali doma',
+    'to obvestilo mora biti na vsakem izvodu pesmi',
+  ],
+  sm: [
+    'arranger:', 'fati:', 'i luga o kopi taitasi e faia', 'musika:', 'producer:',
+    'ua taofia aia tatau uma', 'upu ma le fati:', 'upu:',
+  ],
+  sn: [
+    'manzwi nemumhanzi:', 'manzwi:', 'mumhanzi:',
+  ],
+  sq: [
+    'fjalët dhe muzika:', 'fjalët:',
+    'kjo këngë mund të kopjohet për t’u përdorur me raste në kishë ose në shtëpi, jo për tregti',
+    'ky shënim duhet të përfshihet në çdo kopje që bëhet', 'muzika:', 'teksti dhe muzika:',
+    'teksti:',
+  ],
+  sr: [
+    'аутор музике и текста:', 'музика:', 'текст и музика:', 'текст:',
+  ],
+  sv: [
+    'denna text måste finnas med på varje kopia',
+    'får kopieras för tillfällig, icke kommersiell användning i kyrkan eller hemmet', 'musik:',
+    'text och musik:',
+  ],
+  sw: [
+    'maandishi na muziki:', 'maandishi:', 'maneno na muziki:', 'muziki:',
+    'notisi hii lazima ionekane kwenye kila nakala iliyotolewa',
+    'wimbo huu ni kwa matumizi ya kawaida, ya kanisa yasiyo ya kibiashara au matumizi ya nyumbani',
+  ],
+  th: [
+    'คำร้องและทำนอง โดย', 'ทำนอง:',
+    'อนุญาตให้ทำสำเนาเพลงนี้ไว้ใช้ที่บ้านหรือที่โบสถ์ได้โดยไม่หวังผลในเชิงพาณิชย์ ขอให้ระบุหมายเหตุนี้ในสำเนาทุกฉบับ',
+    'อนุญาตให้ทำสำเนาเพลงนี้ไว้ใช้ที่บ้านหรือที่โบสถ์ได้โดยไม่หวังผลในเชิงพาณิชย์ โปรดระบุหมายเหตุนี้ในสำเนาทุกฉบับ',
+  ],
+  tl: [
+    'ang paunawang ito ay kailangang isama sa bawat kopyang gagawin',
+    'di-pangkalakal na gamit sa simbahan o tahanan', 'himig:', 'lahat ng karapatan ay nakalaan',
+    'mga titik at himig:', 'mga titik:', 'musika:', 'para sa boses at gitara', 'titik at himig:',
+    'titik:',
+  ],
+  tn: [
+    'mmino:', 'temana le mmino:', 'temana:',
+  ],
+  to: [
+    'arranger:', 'e fakatokanga ko ʻení ʻi he tatau kotoa pē ʻoku hikí', 'fakalea mo',
+    'fakalea:', 'fakaleá mo e fakatuʻungafasí:', 'fakaleá mo e tuʻungafasí:',
+    'fakaleá mo fakatuʻungafasí:', 'fakaleá:', 'fakatuʻungafasi:', 'fakatuʻungafasí:',
+    'performer:', 'producer:',
+    'ʻe lava ke hiki ha tatau ʻo e hivá ni ke ngāue ʻaki fakatāutaha, faka-siasi pe ʻi ʻapi',
+  ],
+  tr: [
+    'güfte ve müzik:', 'güfte:', 'müzik:',
+  ],
+  tw: [
+    'nnwom:', 'ɛmu nsɛm ne nnwom:', 'ɛmu nsɛm:',
+  ],
+  ty: [
+    'd’après le', 'e tu’uhia teie fa’aarara’a i ni’a i te hīmene tāta’itahi e nene’ihia',
+    'fatura’a pāruruhia', 'musique de', 'pehe:', 'pehehia e', 'pāpa’ihia i',
+  ],
+  uk: [
+    'має бути на кожній', 'музика:', 'слова і музика:', 'слова:', 'усі права застережено',
+    'цю пісню можна копіювати для разового некомерційного церковного або домашнього використання',
+  ],
+  vi: [
+    'bản dịch', 'lời:', 'nguyên văn và nhạc:', 'nguyên văn:', 'nhạc và lời:', 'nhạc:',
+  ],
+  war: [
+    'mga pulong ngan musika:', 'mga pulong:', 'musika:',
+  ],
+  yue: [
+    '曲：', '編曲：', '詞/曲：', '詞曲：', '詞與曲：', '詞：',
+  ],
 };
 
 
@@ -11356,23 +11779,18 @@ ChScore.prototype._sectionChordPositionRanges = function () {
 // Chord position ranges carry the lyric line and staves they belong to, the same
 // shape _extractLyricStanzas and generateDefaultSection produce — _expandSections
 // reads both to link sections to their lyric elements.
-ChScore.prototype._newLyricStanza = function (lyricLineId, type, marker, chordPosition, expandedChordPosition) {
+ChScore.prototype._newLyricStanza = function (lyricLineId, type, marker, expandedChordPosition) {
   return {
     type: type,
     name: null, // set by _stanzaName once the stanza is complete
     marker: marker,
     lyricsText: '',
     lyricsAnnotated: '',
-    chordPositionRanges: [{
-      start: chordPosition,
-      end: chordPosition + 1,
-      // Every staff that plays, not just the one these words were read off: @staffNumbers
-      // is what _loadMidi filters the note sequence by, so naming one staff here silences
-      // the accompaniment. Narrowed to the verse's own staves where the stanza becomes a
-      // section (see _normalizeSections).
-      staffNumbers: this._scoreData.staffNumbers,
-      lyricLineIds: lyricLineId ? [lyricLineId] : [],
-    }],
+    // Filled as syllables are added (_addChordPositionRun). Every staff that plays, not just
+    // the one the words were read off: @staffNumbers is what _loadMidi filters the note
+    // sequence by, so naming one staff silences the accompaniment. Narrowed to the verse's
+    // own staves where the stanza becomes a section (see _normalizeSections).
+    chordPositionRanges: [],
     expandedChordPositions: expandedChordPosition == null ? [] : [expandedChordPosition, expandedChordPosition + 1],
     lyricLineIds: lyricLineId ? [lyricLineId] : [],
     // Filled as syllables are added; the section paired with this stanza names these
@@ -11402,96 +11820,722 @@ ChScore.prototype._applyFindReplace = function (text) {
 // doesn't, in any language.
 ChScore.prototype._hyphenatedWords = {
   en: [
-    'adam-ondi-ahman', 'ah-so', 'all-gracious', 'all-pervading', 'birthday-time',
-    'chewk-ha-hahm-nee-dah', 'coom-play-ahn-yos', 'day-dawn', 'death-beds', 'dog-en',
-    'don-ken', 'earth-stains', 'easter-time', 'ever-circling', 'ever-joyful',
-    'ever-living', 'ever-present', 'ever-sure', 'ever-tender', 'fah-now', 'far-called',
-    'far-flung', 'fay-lees', 'fie-lee-mawn', 'firm-rooted', 'frer-li-sher',
-    'get-the-work-done', 'grah-see-ahs', 'grah-too-lay-rare', 'guh-burts-tahk',
-    'habit-free', 'heaven-born', 'heav’n-born', 'heav’n-rescued', 'heigh-dee-ho',
-    'kahn-shah', 'latter-day', 'life-gate', 'life-giving', 'light-mindedness',
-    'long-awaited', 'long-expected', 'love-light', 'mah-loh', 'mah-noo-ee-yah',
-    'mare-see', 'nail-prints', 'never-fading', 'oh-meh-deh-toe', 'one-tenth',
-    'prayer-time', 'purple-headed', 're-echoes', 'safe-folded', 'self-control',
-    'shee-mah-sue', 'soul-cheering', 'star-spangled', 'stepping-stones', 'storm-tossed',
-    'săng-ill-oŏl', 'tahn-joe-bee', 'tempest-tossed', 'thank-off’rings',
-    'under-shepherds', 'valley-o', 'war-cry', 'well-fought', 'white-robed',
-    'zip-a-dee-ay',
+    'a-down', 'a-seeking', 'a-singing', 'a-sleeping', 'a-watching', 'abed-nego',
+    'adam-ondi-ahman', 'ah-so', 'all-atoning', 'all-cleansing', 'all-consuming',
+    'all-gracious', 'all-pervading', 'all-redeeming', 'all-searching', 'all-sufficient',
+    'angel-sent', 'baa-baa', 'battle-line', 'battle-worn', 'birthday-time',
+    'black-horse', 'blood-washed', 'blood-wash’d', 'brand-new', 'by-ways',
+    'careful-tended', 'chewk-ha-hahm-nee-dah', 'christ-child', 'co-operatives',
+    'coom-play-ahn-yos', 'dark-browed', 'day-a', 'day-dawn', 'day-star', 'death-beds',
+    'dew-distilling', 'dim-lit', 'ding-dong', 'dog-en', 'don-ken', 'd’à-côté',
+    'eagle-wings', 'earth-stains', 'easter-time', 'enoch-like', 'est-il',
+    'ever-blazing', 'ever-changing', 'ever-circling', 'ever-joyful', 'ever-living',
+    'ever-present', 'ever-sure', 'ever-tender', 'fac-simile', 'fah-now', 'faith-filled',
+    'far-called', 'far-flung', 'far-off', 'fay-lees', 'fie-lee-mawn', 'fire-side',
+    'firm-rooted', 'fish-nets', 'flower-time', 'fortunate-and', 'free-fall', 'free-men',
+    'frer-li-sher', 'get-the-work-done', 'gloom-wrapt', 'god-guarded', 'god-hating',
+    'gold-bought', 'grah-see-ahs', 'grah-too-lay-rare', 'grands-parents',
+    'guh-burts-tahk', 'habit-free', 'hand-me-downs', 'heart-songs', 'heart-strings',
+    'heaven-born', 'heaven-bound', 'heaven-lit', 'heaven-rescued', 'heaven-sent',
+    'heaven-wrought', 'heavy-laden', 'heav’n-born', 'heav’n-rescued', 'heav’n-wrought',
+    'heigh-dee-ho', 'high-de-ho', 'kahn-shah', 'lamp-lit', 'late-night', 'latter-day',
+    'latter-days', 'latter-kingdom', 'life-gate', 'life-giving', 'light-mindedness',
+    'long-awaited', 'long-expected', 'love-a', 'love-inspired', 'love-light',
+    'loved-ones', 'loving-watch', 'mah-loh', 'mah-noo-ee-yah', 'mammon-care',
+    'man-made', 'mare-see', 'modern-day', 'nail-prints', 'near-touching', 'needle-work',
+    'never-ending', 'never-fading', 'never-failing', 'night-caps', 'o-ooo',
+    'obedience-to', 'oh-meh-deh-toe', 'old-fashioned', 'one-tenth', 'peak-a-boo',
+    'peek-a-boo', 'pine-crowned', 'pit-ter', 'pitter-patter', 'prayer-time',
+    'pride-filled', 'purple-headed', 're-ascends', 're-echo', 're-echoes',
+    'restored-their', 'rock-a-bye', 'rock-sealed', 'safe-folded', 'sand-duned',
+    'sea-billows', 'self-control', 'self-denial', 'shade-trees', 'shee-mah-sue',
+    'snow-clad', 'snow-time', 'sobre-el', 'soft-spoken', 'sought-out', 'soul-cheering',
+    'soul-reviving', 'spirit-wings', 'star-spangled', 'stepping-stones', 'storm-tossed',
+    'stumbling-stone', 'sweet-toned', 'săng-ill-oŏl', 'tahn-joe-bee', 'tear-filled',
+    'tear-washed', 'tempest-tossed', 'temple-block', 'ten-fold', 'thank-offerings',
+    'thank-off’rings', 'thank-you’s', 'thunder-burst', 'top-most',
+    'tra-la-la-la-la-la-la', 'treasure-store', 'trick-a-lick-a-lick-a-lick', 'triste-y',
+    'truth-bearing', 'twenty-fifth', 'under-shepherds', 'valiant-hearted', 'valley-o',
+    'voulez-vous', 'war-cry', 'well-beloved', 'well-fought', 'well-known', 'where-ever',
+    'white-robed', 'yo-intenté', 'yule-tide', 'zip-a-dee-ay',
   ],
   fr: [
-    'a-t-il', 'accorde-moi', 'accorde-nous', 'adorez-le', 'ai-je', 'aide-moi',
-    'aide-nous', 'aimez-vous', 'aimons-le', 'apaise-moi', 'apaise-toi', 'apporte-nous',
-    'apprends-moi', 'apprends-nous', 'approchez-vous', 'as-tu', 'assieds-toi',
-    'au-delà', 'au-dessus', 'avez-vous', 'baptise-nous', 'bien-aimé', 'bien-aimés',
-    'bénis-moi', 'bénis-nous', 'calme-nous', 'chante-le', 'chantons-le', 'cherchez-les',
-    'choisirais-je', 'comble-nous', 'compte-les', 'conduis-moi', 'conduis-nous',
-    'conforte-nous', 'consacrons-nous', 'console-moi', 'contemplerai-je',
+    'a-t-il', 'a-t-on', 'a-t’on', 'abed-nego', 'accorde-moi', 'accorde-nous',
+    'accueille-nous', 'adam-ondi-ahman', 'adorez-le', 'ai-je', 'aide-moi', 'aide-nous',
+    'aimes-tu', 'aimez-vous', 'aimons-le', 'allons-nous', 'allons-y', 'apaise-moi',
+    'apaise-toi', 'apporte-nous', 'apprends-moi', 'apprends-nous', 'apprenons-leur',
+    'approchez-vous', 'arrête-toi', 'as-tu', 'assieds-toi', 'attend-il', 'au-delà',
+    'au-dessus', 'au-fond', 'avez-vous', 'baisses-tu', 'baptise-nous', 'bats-toi',
+    'bien-aimé', 'bien-aimés', 'bénis-les', 'bénis-moi', 'bénis-nous', 'caches-tu',
+    'calme-nous', 'ceux-ci', 'ceux-là', 'chante-le', 'chantez-le', 'chantons-le',
+    'cherchez-les', 'choisirais-je', 'choses-là', 'comble-nous', 'comprends-tu',
+    'compte-les', 'conduis-moi', 'conduis-nous', 'confie-toi', 'conformons-nous',
+    'conforte-nous', 'consacrons-nous', 'console-moi', 'conte-moi', 'contemplerai-je',
     'contre-chant', 'convertissez-vous', 'couronne-moi', 'crièrent-ils', 'crois-le',
-    'célébrez-le', 'dirige-moi', 'dis-moi', 'dis-nous', 'donne-moi', 'donne-nous',
-    'donnons-lui', 'délivre-moi', 'délivre-nous', 'dénombre-les', 'efforçons-nous',
-    'enseigne-moi', 'enseigne-nous', 'entends-le', 'entends-moi', 'envoie-moi', 'es-tu',
-    'esprit-saint', 'est-il', 'exaltons-le', 'fais-en', 'fais-les', 'fais-toi',
-    'faisons-lui', 'faites-lui', 'faut-il', 'fie-toi', 'forge-la', 'garde-moi',
-    'garde-nous', 'gardons-nous', 'guide-moi', 'guide-nous', 'guidons-les',
-    'guéris-moi', 'guéris-nous', 'ici-bas', 'ignore-les', 'jean-baptiste',
-    'joignons-nous', 'jour-là', 'jusque-là', 'jésus-christ', 'laisse-nous',
-    'laissez-les', 'laissons-la', 'laissons-le', 'levez-vous', 'levons-nous',
-    'louez-le', 'louons-le', 'lui-même', 'là-bas', 'là-haut', 'l’arc-en-ciel',
-    'l’esprit-saint', 'maître-guérisseur', 'menons-les', 'montre-moi', 'montre-nous',
-    'montrons-nous', 'mène-moi', 'mène-nous', 'm’aimes-tu', 'm’as-tu', 'nouveau-né',
-    'n’ai-je', 'n’est-ce', 'n’est-il', 'n’écoutons-nous', 'n’éprouves-tu', 'offre-nous',
-    'offrons-lui', 'oserais-je', 'ouvrez-lui', 'pardonne-nous', 'pardonne-tous',
-    'parle-moi', 'parlerais-je', 'penserais-je', 'permets-moi', 'permets-nous',
-    'peut-on', 'peut-être', 'peux-tu', 'pleuraient-elles', 'porte-moi', 'portons-lui',
-    'pourrais-je', 'pouvons-nous', 'premier-né', 'prends-le', 'prends-moi',
-    'prends-nous', 'prosternons-nous', 'protège-moi', 'prépare-moi', 'présentez-vous',
-    'prête-moi', 'puis-je', 'puisses-tu', 'puissiez-vous', 'puissions-nous',
-    'puissé-je', 'purifie-le', 'purifie-moi', 'qu’avons-nous', 'qu’offrirons-nous',
-    'raconte-moi', 'rappelons-nous', 'recouvrons-nous', 'reflèteraient-ils',
-    'rejoins-les', 'rendez-lui', 'rendez-vous', 'rends-moi', 'rends-nous',
-    'repentez-vous', 'reposez-vous', 'revêts-moi', 'revêts-nous', 'reçois-moi',
-    'reçois-nous', 'réjouis-toi', 'réveillez-vous', 'révèle-toi', 'saint-esprit',
-    'sainte-cène', 'saisissons-nous', 'sauve-moi', 'scelle-nous', 'serais-je',
-    'serons-nous', 'servez-le', 'soir-là', 'sois-lui', 'sommes-nous', 'soulage-nous',
+    'crois-tu', 'célébrez-le', 'de-tout', 'devrais-je', 'dirige-moi', 'dis-le',
+    'dis-lui', 'dis-moi', 'dis-nous', 'dit-on', 'dois-je', 'don-là', 'donne-moi',
+    'donne-nous', 'donnez-lui', 'donnez-nous', 'donnons-les', 'donnons-lui',
+    'découvre-toi', 'délivre-moi', 'délivre-nous', 'dénombre-les', 'd’ici-là',
+    'd’à-côté', 'ecoutez-le', 'efforçons-nous', 'enseigne-moi', 'enseigne-nous',
+    'entendez-vous', 'entends-le', 'entends-moi', 'entends-tu', 'envoie-moi',
+    'envolez-vous', 'es-tu', 'esprit-saint', 'est-ce', 'est-il', 'et-mes',
+    'eveille-toi', 'eveillez-vous', 'exaltons-le', 'fais-en', 'fais-le', 'fais-les',
+    'fais-moi', 'fais-nous', 'fais-toi', 'fais-tu', 'faisons-lui', 'faisons-nous',
+    'faites-le', 'faites-lui', 'faudrait-il', 'faut-il', 'façonne-la', 'ferons-nous',
+    'fie-toi', 'forge-la', 'garde-moi', 'garde-nous', 'gardez-vous', 'gardons-nous',
+    'grand-maman', 'grand-prêtre', 'grands-parents', 'guide-moi', 'guide-nous',
+    'guide-t-il', 'guidons-les', 'guéris-moi', 'guéris-nous', 'hâtons-nous', 'ici-bas',
+    'ignore-les', 'je-ne', 'jean-baptiste', 'jesus-christ', 'joignons-nous', 'jour-là',
+    'jusque-là', 'jésus-christ', 'laisse-le', 'laisse-les', 'laisse-nous',
+    'laissez-les', 'laissons-la', 'laissons-le', 'lance-toi', 'levez-vous',
+    'levons-nous', 'louez-le', 'louons-le', 'lui-même', 'là-bas', 'là-haut',
+    'l’arc-en-ciel', 'l’au-delà', 'l’esprit-saint', 'matin-là', 'maître-guérisseur',
+    'menons-les', 'mets-les', 'moi-même', 'montre-moi', 'montre-nous', 'montrons-nous',
+    'mène-moi', 'mène-nous', 'même-si', 'm’aimes-tu', 'm’as-tu', 'non-retour',
+    'nous-même', 'nouveau-né', 'n’ai-je', 'n’est-ce', 'n’est-il', 'n’écoutons-nous',
+    'n’éprouves-tu', 'obéis-lui', 'offre-nous', 'offrons-leur', 'offrons-lui',
+    'oserais-je', 'ouvre-lui', 'ouvrez-lui', 'par-dessus', 'parais-tu', 'pardonne-nous',
+    'pardonne-tous', 'parle-lui', 'parle-moi', 'parlerais-je', 'parlez-lui',
+    'partagerais-je', 'passa-t-il', 'penserais-je', 'permets-moi', 'permets-nous',
+    'peut-il', 'peut-on', 'peut-être', 'peux-tu', 'planes-tu', 'pleuraient-elles',
+    'porte-moi', 'portons-lui', 'pourrai-je', 'pourrais-je', 'pourrais-tu',
+    'pouvais-je', 'pouvons-nous', 'premier-né', 'prends-le', 'prends-les', 'prends-moi',
+    'prends-nous', 'prions-le', 'prosternons-nous', 'protège-moi', 'prépare-moi',
+    'préparons-nous', 'présentez-vous', 'prête-moi', 'puis-je', 'puisses-tu',
+    'puissiez-vous', 'puissions-nous', 'puissé-je', 'purifie-le', 'purifie-moi',
+    'quand-tu', 'qu’as-tu', 'qu’avons-nous', 'qu’est-ce', 'qu’offrirons-nous',
+    'qu’éprouves-tu', 'raconte-moi', 'rappelle-toi', 'rappelons-nous',
+    'rassemblez-vous', 'recherche-le', 'recouvrons-nous', 'reflèteraient-ils',
+    'refléteraient-ils', 'rejoins-les', 'rejoins-nous', 'remercions-le', 'remets-lui',
+    'remplis-moi', 'rendez-lui', 'rendez-vous', 'rendons-lui', 'rends-moi',
+    'rends-nous', 'repens-toi', 'repentez-vous', 'reposez-vous', 'ressens-tu',
+    'resteras-tu', 'revêts-moi', 'revêts-nous', 'reçois-moi', 'reçois-nous',
+    'réjouis-toi', 'réjouissez-vous', 'réunissons-nous', 'réveillez-vous', 'révèle-toi',
+    'saint-esprit', 'sainte-cène', 'sais-tu', 'saisissons-nous', 'sauve-moi',
+    'savoir-faire', 'scelle-nous', 'sens-tu', 'serais-je', 'serons-nous', 'servez-le',
+    'servons-le', 'soir-là', 'sois-lui', 'sommes-nous', 'son-œuvre', 'soulage-nous',
     'soutiens-les', 'soutiens-moi', 'soutiens-nous', 'souvenez-vous', 'souvenons-nous',
-    'souviens-toi', 'suffit-il', 'suis-le', 'suis-moi', 'tenons-nous', 'tiens-toi',
-    'tournez-vous', 'tournons-nous', 'tout-petits', 'tout-puissant', 'très-haut',
-    'très-saint', 'unissez-vous', 'unissons-les', 'unissons-nous', 'vas-tu', 'veux-tu',
-    'viens-nous', 'vois-tu', 'voudrais-je', 'ében-ézer', 'écoute-le', 'écoute-nous',
-    'écoutez-le', 'étiez-vous', 'éveille-toi', 'éveillez-vous', 'éveillons-nous',
-    'évite-les', 'œuvrons-y',
+    'souviens-t-en', 'souviens-toi', 'souviens-tu', 'suffit-il', 'suis-le', 'suis-moi',
+    'suivez-moi', 'suivons-les', 'tends-moi', 'tenons-nous', 'tiens-toi',
+    'tou-puissant', 'tourne-toi', 'tournez-le', 'tournez-vous', 'tournons-nous',
+    'tout-petits', 'tout-puissant', 'très-haut', 'très-saint', 'tu-es', 't’es-tu',
+    'unissez-vous', 'unissons-les', 'unissons-nous', 'vais-je', 'vas-tu', 'veux-tu',
+    'viens-nous', 'viens-tu', 'vit-il', 'vois-tu', 'voudrais-je', 'ében-ézer',
+    'éclaire-moi', 'écoute-le', 'écoute-nous', 'écoutez-le', 'étiez-vous',
+    'étirez-vous', 'éveille-toi', 'éveillez-vous', 'éveillons-nous', 'évite-les',
+    'œuvrons-y',
   ],
   pt: [
-    'abraçar-me', 'abrem-se', 'achegai-vos', 'adorai-o', 'adorar-te', 'agarrar-nos',
-    'agradecemos-te', 'agradecer-te', 'ajuda-me', 'ajuda-nos', 'ajudai-me',
-    'ajudando-vos', 'ajudar-nos', 'ajudá-lo', 'alegra-te', 'aliviou-me', 'amai-vos',
-    'amar-te', 'ancorar-me', 'aparta-nos', 'apegar-nos', 'apresentar-se', 'arco-íris',
-    'arrepender-nos', 'bem-amado', 'bem-estar', 'bem-vindo', 'buscá-la', 'cantai-lhe',
-    'cantaremos-te', 'chamai-o', 'chamar-te', 'concede-me', 'concede-nos',
-    'conceder-nos', 'concedeu-me', 'conduzindo-os', 'consagrai-o', 'conta-me',
-    'conta-nos', 'convida-nos', 'curei-lhe', 'damos-te', 'dar-lhe', 'dar-me', 'dar-nos',
-    'dei-lhe', 'deitei-me', 'deixa-me', 'deixai-os', 'deixou-nos', 'deu-me',
-    'dirigiu-se', 'dá-lhe', 'dá-lhes', 'dá-me', 'dá-nos', 'eleva-nos', 'ensina-me',
-    'ensina-nos', 'ensinai-me', 'ensinar-me', 'ensinar-nos', 'ensinar-te',
-    'ensinou-nos', 'ergam-se', 'ergue-nos', 'ergue-te', 'erguei-vos', 'escuta-nos',
-    'esqueci-me', 'estender-lhe', 'estendeu-lhes', 'faz-me', 'faz-nos', 'fazendo-os',
-    'fez-lhes', 'fez-nos', 'fizer-nos', 'guardou-me', 'guia-me', 'guia-nos',
-    'guiai-vos', 'guiar-me', 'guiar-nos', 'guiar-te', 'inspira-me', 'inspiram-me',
-    'inspirar-te', 'inspire-nos', 'leva-nos', 'libertar-nos', 'liderar-nos',
-    'ligar-nos', 'livram-me', 'livrou-nos', 'louvai-o', 'louvá-lo', 'mandar-nos',
-    'mandou-me', 'mandou-nos', 'mostra-me', 'mostrai-lhes', 'mostrar-nos',
-    'mostrou-lhes', 'mostrou-me', 'mostrou-nos', 'nutre-nos', 'oferta-lhes', 'ouve-o',
-    'ouvi-lo', 'ouvir-te', 'ouviu-se', 'passando-se', 'pedimos-te', 'perde-se',
-    'perdoa-nos', 'peço-te', 'porta-voz', 'preparar-nos', 'preparou-nos', 'protege-me',
-    'protege-nos', 'proteger-te', 'purifica-nos', 'redimir-nos', 'refina-me',
-    'resgatar-nos', 'resgatou-me', 'responder-te', 'restaura-nos', 'reunir-se',
-    'rogamos-te', 'rogo-te', 'salva-nos', 'salvar-nos', 'salvá-la', 'segui-lo',
-    'segui-o', 'sela-nos', 'sem-par', 'servi-lo', 'servi-o', 'servir-te', 'sigamos-te',
-    'sujeitam-se', 'suplicou-me', 'traz-me', 'trazer-nos', 'trazê-la', 'unir-nos',
-    'vê-nos',
+    'abençoar-me', 'abram-nos', 'abraçar-me', 'abrem-se', 'abrir-se-ão', 'aceita-a',
+    'achegai-vos', 'adorai-o', 'adorar-te', 'afasta-me', 'agarrar-nos',
+    'agradecemos-te', 'agradecer-te', 'ajuda-me', 'ajuda-nos', 'ajuda-te', 'ajudai-me',
+    'ajudando-vos', 'ajudar-nos', 'ajudar-te', 'ajudou-me', 'ajudá-lo', 'ajudá-los',
+    'alegra-te', 'alegrem-se', 'aliviou-me', 'ama-me', 'amai-vos', 'amando-me',
+    'amar-te', 'amor-perfeito', 'ancorar-me', 'aparta-nos', 'apegar-nos',
+    'apresentar-se', 'aproxima-se', 'aproximar-nos', 'arco-íris', 'arrepender-nos',
+    'banhar-me', 'bem-amado', 'bem-estar', 'bem-vindo', 'buscaremos-te', 'buscá-la',
+    'buscá-lo', 'cantai-lhe', 'cantar-lhe-ei', 'cantaremos-te', 'carregas-me',
+    'chama-te', 'chamai-o', 'chamar-me', 'chamar-te', 'concede-me', 'concede-nos',
+    'conceder-nos', 'concedeu-me', 'conduzindo-os', 'confirma-lhes', 'conhece-te',
+    'conquistá-la', 'consagrai-o', 'construa-se', 'conta-me', 'conta-nos',
+    'converte-se', 'convida-nos', 'curar-me', 'curei-lhe', 'dai-lhes', 'damo-nos',
+    'damos-te', 'dan-quem', 'dando-lhe', 'dar-lhe', 'dar-me', 'dar-nos', 'dar-te',
+    'dei-lhe', 'deitei-me', 'deixa-me', 'deixa-o', 'deixa-te', 'deixai-os', 'deixas-te',
+    'deixou-nos', 'deleita-te', 'deseje-o', 'despede-nos', 'deste-me', 'deu-lhes',
+    'deu-me', 'deu-nos', 'deu-te', 'deu-vos', 'deve-se', 'devemo-nos', 'dirigir-nos',
+    'dirigiu-se', 'diz-lhe', 'diz-me', 'diz-nos', 'dize-as', 'dizendo-lhes', 'dou-lhe',
+    'dou-te', 'dá-lhe', 'dá-lhes', 'dá-me', 'dá-nos', 'dá-te', 'dás-me', 'dão-me',
+    'd’à-côté', 'ei-lo', 'eis-me', 'eis-nos', 'eleva-me', 'eleva-nos', 'eleva-te',
+    'elevar-me', 'elevar-te', 'enche-me', 'encher-me', 'encontrar-me', 'encontrei-me',
+    'ensina-me', 'ensina-nos', 'ensinai-me', 'ensinar-me', 'ensinar-nos', 'ensinar-te',
+    'ensinou-me', 'ensinou-nos', 'ensiná-las', 'envia-lhes', 'enviou-te', 'ergam-se',
+    'ergue-me', 'ergue-nos', 'ergue-te', 'erguei-vos', 'erguendo-me', 'erguer-nos',
+    'erguer-se', 'erguer-te', 'erguê-los', 'escolheu-me', 'escuta-me', 'escuta-nos',
+    'escuta-se', 'esforçando-me', 'esforçar-me', 'esquecer-me-ei', 'esqueci-me',
+    'est-il', 'estender-lhe', 'estender-lhes', 'estendeu-lhes', 'estão-na', 'exaltá-lo',
+    'fala-se', 'falar-lhes', 'faz-me', 'faz-nos', 'faz-se', 'faze-me', 'fazei-o',
+    'fazendo-os', 'fazes-me', 'fazê-lo', 'fez-lhes', 'fez-me', 'fez-nos', 'fez-te',
+    'finda-se', 'fizer-nos', 'fizeram-nos', 'foi-nos', 'formar-se', 'grands-parents',
+    'grá-cias', 'guardando-me', 'guardar-me', 'guardou-me', 'guia-me', 'guia-nos',
+    'guiai-vos', 'guiando-me', 'guiar-me', 'guiar-nos', 'guiar-te', 'honrá-lo',
+    'hão-de', 'inspira-me', 'inspiram-me', 'inspirar-te', 'inspire-nos', 'invocamos-te',
+    'junta-te', 'juntai-vos', 'lembra-me', 'lembra-te', 'leva-nos', 'levantai-vos',
+    'levantar-te', 'levantas-me', 'liberta-nos', 'libertar-nos', 'libertar-te',
+    'liderar-nos', 'ligar-nos', 'livra-me', 'livra-nos', 'livram-me', 'livrou-nos',
+    'louvai-o', 'louvá-lo', 'ma-lo', 'mandar-nos', 'mandou-me', 'mandou-nos',
+    'mandou-o', 'mantém-nos', 'mer-ci', 'moldar-te', 'mostra-me', 'mostrai-lhes',
+    'mostrando-me', 'mostrando-se', 'mostrar-lhe', 'mostrar-me', 'mostrar-nos',
+    'mostrar-te', 'mostrou-lhes', 'mostrou-me', 'mostrou-nos', 'nutre-nos',
+    'oferta-lhes', 'olvidá-lo', 'ouve-o', 'ouvem-se', 'ouvi-lo', 'ouvi-los', 'ouvir-te',
+    'ouviu-lhe', 'ouviu-se', 'partam-se', 'passando-se', 'pedimos-te', 'perde-se',
+    'perdoa-nos', 'perguntam-me', 'perguntar-me', 'peço-te', 'pode-me', 'porta-voz',
+    'poupe-nos', 'preparar-me', 'preparar-nos', 'preparou-nos', 'promete-me',
+    'protege-me', 'protege-nos', 'proteger-te', 'provar-me', 'purifica-nos', 'puxar-te',
+    'põe-me', 'quebram-se', 'quebrar-te', 'quer-me', 'queres-te', 'quero-te',
+    'redimir-nos', 'refina-me', 'refinar-te', 'rejubilai-vos', 'repetir-me',
+    'resgatar-nos', 'resgatou-me', 'responder-te', 'respondi-lhe', 'restaura-nos',
+    'reunir-se', 'revelar-te', 'revelou-nos', 'reverlar-se', 'rogamos-te', 'rogo-te',
+    'romper-se', 'salva-nos', 'salvar-me', 'salvar-nos', 'salvá-la', 'segue-me',
+    'segui-la', 'segui-lo', 'segui-lo-ei', 'segui-o', 'seguir-te', 'sela-nos',
+    'selá-los', 'sem-par', 'sentir-te', 'servi-lo', 'servi-o', 'servir-te',
+    'sigamos-te', 'sinto-me', 'sinto-o', 'sinto-te', 'sujeitam-se', 'suplicou-me',
+    'tem-me', 'tendo-te', 'tentam-me', 'ter-lhe', 'tira-te', 'tomou-me', 'tomou-te',
+    'tornar-me', 'traz-me', 'traz-nos', 'trazei-lhe', 'trazendo-nos', 'trazer-nos',
+    'trazê-la', 'trouxe-me', 'trá-lá-lá-lá-lá-lá', 'trá-lá-lá-lá-lá-lá-lá', 'tê-lo',
+    'unir-nos', 'vai-me', 'vai-nos', 'vai-te', 'vais-me', 'vamo-nos', 'vem-me',
+    'vens-me', 'ver-te', 'vier-me', 'voltar-me', 'vou-lhes', 'vou-me', 'vou-te',
+    'vão-me', 'vão-te', 'vê-la', 'vê-lo', 'vê-los', 'vê-nos', 'vê-o', 'vê-se',
+    'água-viva', 'écoutez-le',
   ],
   es: [
-    'eben-ezer',
+    'abed-nego', 'dan-ken', 'd’à-côté', 'eben-ezer', 'est-il', 'grands-parents',
+    'kan-sha', 'mer-cí', 'que-haceres', 'shi-ma-su',
+  ],
+  bg: [
+    'в’планините-убежище', 'господ-цар', 'на-ни', 'най-бурните', 'най-великото',
+    'най-желана', 'най-праведния', 'най-правилния', 'най-прекрасна', 'най-прекрасно',
+    'най-простата', 'най-светлата', 'най-скъпа', 'най-скъпи', 'най-смирено',
+    'най-ценно', 'по-безценна', 'по-благословена', 'по-близо', 'по-бързи', 'по-велик',
+    'по-верен', 'по-добрата', 'по-добре', 'по-достоен', 'по-дълбока', 'по-земята',
+    'по-могъщ', 'по-мощни', 'по-послушен', 'по-светли', 'по-силен', 'по-хубав',
+    'по-щастливи', 'по-ярки', 'по-ясно', 'приятели-предатели', 'твое-сам',
+    'царе-свещеници',
+  ],
+  bi: [
+    'abed-nego',
+  ],
+  bik: [
+    'nag-ogma', 'pag-ranga',
+  ],
+  ceb: [
+    'abed-nego', 'ba-ba', 'bag-o', 'bag-oha', 'bag-ohon', 'batan-on', 'batan-ong',
+    'bug-at', 'bug-os', 'dad-on', 'dan-ag', 'don-ken', 'gibun-og', 'gidak-on',
+    'gipas-an', 'gipatak-um', 'grah-see-ahs', 'gub-on', 'hinay-hinay', 'idan-ag',
+    'ihaw-as', 'isul-ob', 'kababayen-an', 'kabug-at', 'kahitas-an', 'kahn-shah',
+    'kanus-a', 'kasal-anan', 'kinadak-an', 'lapa-lapa', 'lig-ona', 'lig-onon',
+    'ma-dominggo', 'ma-gulan', 'ma-pioneer', 'mag-alagad', 'mag-ampo', 'mag-ampo’g',
+    'mag-ampo’s', 'mag-antos', 'mag-inusara', 'mag-istorya', 'mag-mahigugmaon',
+    'mag-uban', 'mag-unsa', 'magbag-o', 'magduyan-duyan', 'magkanta-kanta', 'magkat-on',
+    'magkat-on’s', 'maglangoy-langoy', 'maglig-on', 'magsud-ong', 'magtan-aw',
+    'mah-loh', 'makakat-on', 'makat-on', 'makig-awit', 'makig-uban', 'makit-an',
+    'malig-on', 'maluluy-on', 'manag-ambahan', 'manag-uban', 'mapiko-piko', 'mare-see',
+    'masub-anon', 'masud-ong', 'matag-an', 'matan-awan', 'mawad-ag', 'miad-to’s',
+    'midan-ag', 'mobag-o', 'modan-ag', 'modayan-dayan', 'mondan-ag', 'motan-aw',
+    'nag-abut', 'nag-agni', 'nag-agos', 'nag-alima', 'nag-ampo', 'nag-ampo’s',
+    'nag-antos', 'nag-awhag', 'nag-ingon', 'nag-inusara', 'nag-masulundon',
+    'nagadan-ag', 'nagatan-aw', 'nagbag-o', 'nagbiay-biay', 'nagdan-ag', 'nagka-daotan',
+    'nagkat-on', 'nagpa-lig-on', 'nakakat-on', 'nakat-on', 'nakat-ong', 'nakig-uban',
+    'nanag-ampo', 'nanag-awit', 'pag-abin', 'pag-abot', 'pag-adto', 'pag-ampo',
+    'pag-ampo’ng', 'pag-amuma', 'pag-andam', 'pag-antos', 'pag-ayo', 'pag-iwag',
+    'pag-ula', 'pag-undang', 'pag-usab', 'pagbag-o', 'pagkalig-on', 'pagkamanggiloy-on',
+    'pagkat-on', 'pagtan-aw', 'pakit-a', 'pakit-on', 'pakitong-kitong', 'palas-anon',
+    'papuy-on', 'pinuy-anan', 'sad-an', 'shee-mah-sue', 'sik-sik', 'sud-onga',
+    'sud-ongang', 'sud-ungon', 'tan-aw', 'tan-awa', 'tan-awon', 'tin-aw', 'ting-init',
+    'tinun-an', 'wad-a', 'wad-ang',
+  ],
+  cmn: [
+    'dan-ken', 'dì-sān', 'gra-cias', 'kan-sha', 'liǎng-qiān', 'mer-ci', 'mā-lō',
+    'shi-ma-su', '哎-哎-哎',
+  ],
+  cs: [
+    'budu-li', 'dbáš-li', 'nevěříš-li', 'pomyslím-li', 'slábnu-li', 'zeptáš-li',
+  ],
+  da: [
+    'abed-nego', 'beg-ge', 'himmel-vang', 'ikke-jøder', 'luk-ker',
+  ],
+  de: [
+    'uuh-uuh',
+  ],
+  el: [
+    'γκρά-σιας', 'λίγο-λίγο', 'μα-λό', 'μερ-σί', 'νταν-κεν',
+  ],
+  et: [
+    'aadam-ondi-ahman', 'dan-ken', 'graa-si-as', 'kan-ša', 'maa-lo', 'mer-sii',
+    'päev-päevalt', 'samm-sammult', 'võik-in', 'ši-ma-su',
+  ],
+  fi: [
+    'abed-nego', 'iki-jumalaan', 'jeesus-lapsi', 'jeesus-lapsonen', 'lamoni-kuninkaan',
+    'popcorn-kukkaset', 'valoa-aan',
+  ],
+  fj: [
+    'don-ken', 'e-saionikorotabu', 'grah-see-ahs', 'gu-uu', 'kahn-shah', 'loto-foʻi',
+    'mah-loh', 'mare-see', 'me-maravutunaca', 'muni-i-i', 'na-mavoanitara',
+    'shee-mah-sue', 'vakatule-wa',
+  ],
+  gil: [
+    'nri-ki-ra-ke', 'rietata-i',
+  ],
+  hi: [
+    'उस-क', 'दिखा-क', 'दूं-ग',
+  ],
+  hil: [
+    'dugay-dugay', 'gab-i', 'gugma-mo', 'handa-on', 'higugma-on', 'himaya-on',
+    'ka-away', 'ka-diri', 'kabubut-on', 'kadam-an', 'kulba-ko', 'ma-asoy', 'ma-ayo',
+    'mag-ambit', 'maga-amlig', 'maga-iwag', 'maghinigugma-anay', 'mahagan-hagan',
+    'maluluy-on', 'manug-apin', 'mapag-on', 'mapung-aw', 'mas-a', 'matam-is',
+    'matin-aw', 'may-yuhum', 'na-agom', 'nabun-ag', 'nag-agay', 'nagatag-isa',
+    'nagligad-na', 'nalan-sang', 'napamatud-an', 'natun-an', 'nawad-an', 'pa-ambiton',
+    'pabay-an', 'padag-on', 'padali-on', 'pamatud-an', 'purong-purongan', 'saka-a',
+    'san-o', 'tigan-an', 'tun-an', 'unta-nakaupod', 'wa-ay',
+  ],
+  hmn: [
+    'nau-es',
+  ],
+  hr: [
+    'adam-ondi-ahman', 'dan-ken', 'gra-cias', 'kan-ša', 'mer-si', 'njeg’-ve',
+    'us-tra-jem', 'za-a', 'ši-ma-su',
+  ],
+  hu: [
+    'cselekedtem-e', 'd’à-côté', 'e-az', 'est-il', 'felvidítottam-e', 'grands-parents',
+    'hallod-e', 'hegyen-völgyön', 'ismer-e', 'jársz-e', 'jöttem-e', 'kérted-e',
+    'kész-e', 'körbe-körbe', 'lehet-e', 'lehetek-e', 'lesz-e', 'lángolt-e',
+    'megáldasz-e', 'mondtál-e', 'más-más', 'rosz-szat', 'réges-rég', 'réges-régen',
+    'segítettem-e', 'sikerül-e', 'sok-sok', 'szívvel-lélekkel', 'szólsz-e', 'tehetek-e',
+    'tudnánk-e', 'tudod-e', 'visszatérek-e', 'écoutez-le', 'éjjel-nappal', 'érzed-e',
+  ],
+  hy: [
+    'դա-մի',
+  ],
+  id: [
+    'ajaran-mu', 'ajaran-nya', 'alat-nya', 'ampunan-mu', 'anak-anak', 'anak-anak-mu',
+    'anak-anaknya', 'anak-mu', 'anak-nya', 'anug’rah-mu', 'anug’rah-nya', 'api-nya',
+    'arahan-nya', 'asas-mu', 'asuhan-nya', 'awasan-nya', 'bagi-mu', 'bagi-nya',
+    'baik-mu', 'bapa-nya', 'bayang-bayang', 'berkah-mu', 'berkat-mu', 'berkat-nya',
+    'bersama-mu', 'bersama-nya', 'beserta-nya', 'bimbingan-mu', 'bimbingan-nya',
+    'bintang-bintang', 'bisikan-nya', 'buah-buahan', 'bunda-nya', 'bunga-bunga',
+    'cahaya-mu', 'cah’ya-mu', 'ciptaan-nya', 'cita-citanya', 'daging-nya', 'damai-mu',
+    'damai-nya', 'darah-nya', 'dari-nya', 'dekat-mu', 'dengan-mu', 'dengan-nya',
+    'derita-mu', 'derita-nya', 'dialami-nya', 'diampuni-nya', 'diangkat-nya',
+    'diasuh-nya', 'dibelah-nya', 'dibentuk-nya', 'diberi-nya', 'diberkati-nya',
+    'dibimbing-nya', 'dibuka-nya', 'dibunuh-nya', 'dibutuhkan-nya', 'dib’ri-nya',
+    'dib’rikan-nya', 'dicari-nya', 'dicerahkan-nya', 'dicipta-nya', 'diciptakan-nya',
+    'dicurahkan-nya', 'didekap-nya', 'didengar-nya', 'didengarkan-nya', 'didobrak-nya',
+    'diemban-nya', 'dihadirat-nya', 'dihalau-nya', 'dihapus-nya', 'dihapuskan-nya',
+    'diinginkan-nya', 'diisi-nya', 'dijaga-nya', 'dijangkau-nya', 'dijejak-nya',
+    'dikalahkan-nya', 'dikirim-nya', 'dikuatkan-nya', 'dimana-mana', 'diminta-nya',
+    'dipanggil-nya', 'dipecah-nya', 'dipimpin-nya', 'dipindahkan-nya', 'dipulihkan-nya',
+    'dirancang-nya', 'diri-mu', 'dirintis-nya', 'dirumah-mu', 'disambut-nya',
+    'diselamatkan-nya', 'diselimuti-nya', 'disisi-nya', 'disucikan-nya',
+    'dis’lamatkan-nya', 'ditakhta-mu', 'ditaklukkan-nya', 'ditanam-nya', 'ditangan-nya',
+    'ditanggung-nya', 'ditebus-nya', 'ditempa-nya', 'ditenangkan-nya',
+    'ditinggalkan-nya', 'ditopang-nya', 'ditunjukkan-nya', 'dituntun-nya', 'diubah-nya',
+    'diucapkan-nya', 'diutus-nya', 'doa-nya', 'domba-mu', 'domba-nya', 'd’gan-mu',
+    'd’rita-mu', 'eben-haezerku', 'firman-mu', 'firman-nya', 'gada-nya', 'gereja-mu',
+    'g’reja-nya', 'hadir-mu', 'hadir-nya', 'hadirat-mu', 'hadirat-nya', 'hamba-mu',
+    'hati-nya', 'hidup-nya', 'hikmat-mu', 'hikmat-nya', 'hukum-mu', 'hukum-nya',
+    'hukuman-mu', 'iba-nya', 'ikut-ku', 'ilahi-nya', 'injil-mu', 'injil-nya',
+    'jaan-nya', 'jalan-nya', 'jang-kau', 'janji-mu', 'janji-nya', 'jejak-mu',
+    'jejak-nya', 'jiwa-nya', 'kagumi-mu', 'kaki-mu', 'kaki-nya', 'karena-nya',
+    'karunia-ku', 'karunia-mu', 'karunia-nya', 'karya-mu', 'karya-nya', 'kasih-mu',
+    'kasih-nya', 'kasur-nya', 'kaum-nya', 'keagungan-nya', 'keampuhan-nya',
+    'kebaikan-nya', 'kebangkitan-mu', 'kebenaran-mu', 'kebenaran-nya', 'keb’naran-nya',
+    'kedamaian-nya', 'kedatangan-nya', 'kehadiran-mu', 'kehendak-mu', 'kehendak-nya',
+    'kekuatan-mu', 'kekuatan-nya', 'kelembutan-nya', 'kematian-nya', 'kemuliaan-nya',
+    'kemurahan-nya', 'kepada-mu', 'kepada-nya', 'kepada-nyalah', 'kerajaan-mu',
+    'kerajaan-nya', 'kisah-nya', 'kitab-kitab', 'korban-mu', 'ku-lu-pa', 'kuasa-mu',
+    'kuasa-nya', 'kubur-nya', 'kudus-mu', 'kurban-nya', 'k’pada-ku', 'k’pada-mu',
+    'k’pada-nya', 'k’rajaan-mu', 'k’rajaan-nya', 'k’reta-nya', 'ladang-nya',
+    'lagu-lagu', 'lapar-nya', 'lengan-mu', 'lengan-nya', 'luka-nya', 'mata-mu',
+    'mata-nya', 'melayani-ku', 'melayani-mu', 'melayani-nya', 'melihat-mu',
+    'melihat-nya', 'mematuhi-mu', 'mematuhi-nya', 'membaptiskan-nya', 'membela-ku',
+    'membuat-nya', 'membutuhkan-mu', 'memuja-nya', 'memuji-mu', 'memuji-nya',
+    'memuliakan-nya', 'mendekat-nya', 'mendengar-mu', 'menemui-nya', 'menemukan-nya',
+    'mengejek-nya', 'menggapai-nya', 'menggembirakan-nya', 'menghalangi-nya',
+    'mengikuti-nya', 'mengingat-nya', 'mengombang-ambingkan', 'mengundang-nya',
+    'menjauhi-mu', 'menolak-mu', 'menolak-nya', 'menyambut-mu', 'menyambut-nya',
+    'menyanjung-mu', 'menyebut-mu', 'men’rima-nya', 'meraba-raba', 'milik-mu',
+    'milik-nya', 'muka-nya', 'mukjizat-nya', 'mula-mula', 'murah-nya', 'murid-ku',
+    'murid-murid-nya', 'murid-nya', 'murka-nya', 'm’layani-nya', 'm’ngasihi-nya',
+    'nabi-mu', 'nabi-nya', 'nama-mu', 'nama-nya', 'nyanyian-nya', 'nyawa-nya',
+    'oleh-nya', 'orang-orang', 'pada-mu', 'pada-nya', 'paku-nya', 'panggilan-nya',
+    'panji-nya', 'pekerjaan-nya', 'pelayanan-mu', 'pelukan-mu', 'pelukan-nya',
+    'penderitaan-nya', 'penebusan-mu', 'penghiburan-nya', 'pengurbanan-mu',
+    'pengurbanan-nya', 'per-jan-ji-an-ku', 'perintah-nya', 'perjanjian-nya',
+    'pertolongan-mu', 'petunjuk-mu', 'petunjuk-nya', 'pihak-nya', 'pilihan-nya',
+    'pimpinan-mu', 'pinta-nya', 'puji-pujian', 'putra-ku', 'putra-mu', 'putra-nya',
+    'putusan-mu', 'put’ra-nya', 'p’rintah-mu', 'p’rintah-nya', 'p’rintah-p’rintah',
+    'rahmat-mu', 'rahmat-nya', 'rancangan-mu', 'rencana-mu', 'rencana-nya', 'restu-mu',
+    'roh-mu', 'roh-nya', 'rumah-mu', 'sabda-nya', 'sadba-nya', 'saksi-nya', 'salib-nya',
+    'samaran-nya', 'sapa-nya', 'satu-satu', 'satu-satunya', 'sayang-nya',
+    'selama-lamanya', 'sentuhan-nya', 'senyum-mu', 'senyum-nya', 'seruan-nya',
+    'sesama-ku', 'sia-sia', 'siksa-mu', 'sinar-mu', 'sion-nya', 'sisi-mu', 'sisi-nya',
+    'suara-mu', 'suara-nya', 'suci-mu', 'surga-mu', 's’gala-galanya', 's’lama-lamanya',
+    's’mangat-mu', 's’perti-mu', 't-rus', 'takhta-mu', 'takhta-nya', 'tangan-mu',
+    'tangan-nya', 'tanpa-mu', 'tebusan-nya', 'teladan-nya', 'tempat-nya', 'terang-nya',
+    'terinjak-injak', 'terombang-ambing', 'terpa-teri', 'tiba-tiba', 'tidur-nya',
+    'tongkat-nya', 'tubuh-mu', 'tubuh-nya', 'tuggal-nya', 'tuk-mu', 'tunggu-tunggu',
+    'tuntunan-nya', 't’rang-mu', 'ucapan-nya', 'umat-ku', 'umat-mu', 'umat-nya',
+    'wajah-mu', 'wakil-mu',
+  ],
+  ig: [
+    'e-e', 'ebigh-ebi', 'ga-’bụ', 'ga-’gbalị', 'g’a-nọ', 'iny’a-ka', 'izu-ezu',
+    'mme’-kpa', 'ndi-nsọ', 'ndụ’a-ny’ọ', 'nk’onye-nwe’ayị', 'nwa-atụrụ', 'og’ikpe-azụ',
+    'r’o-nw’ayị', 'zu-te’n-kwe-kọ-rị-ta', 'ịbụ-eze', 'ọla-edo',
+  ],
+  ilo: [
+    'aw-awagannakayo', 'in-inut', 'itan-okkayto',
+  ],
+  is: [
+    'abeds-negó', 'dank-en', 'gra-sí-as', 'kan-sja', 'ma-lö', 'mer-sí', 'sí-ma-sú',
+  ],
+  it: [
+    'abed-nego', 'adorar-lo', 'd’à-côté', 'est-il', 'grands-parents', 'l’eben-ezer',
+  ],
+  ja: [
+    'dark-est', 'un-known',
+  ],
+  kek: [
+    'adan-ondi-ahman', 'aj-e', 'chat-ab’inq', 'chat-ok', 'ch’ina-us', 'ch’ina-usil',
+    'jalam-uuch', 'kaq-sut-iq', 'kolb’a-ib', 'mat-ab’iik', 'mat-elk', 'mat-elq’ak',
+    'mutz’uk-u', 'q’axol-u', 'rahok-ib', 'raqb’a-aatin', 'taaq’axoq-u',
+    'tat-awa’b’ejinq', 'tat-iloq', 'tat-osob’tesiiq', 'tin-iloq', 'tz’aqlok-u',
+    'xat-ok', 'yale’k-ix', 'yalok-u',
+  ],
+  km: [
+    'កាលយប់-យន់កាន់តែង-ងឹត', 'ខ្ញុំរកព-ន្លឺព្រះអង្គ', 'ដែលប-ង្កើតយើង', 'បេឌ-ន',
+  ],
+  ko: [
+    '간증-있으니', '경-전이', '넘어-지거나', '니파이전-서', '도-와주고', '두-려워하리까', '모-로나이', '보-라고', '부드럽-게',
+    '비-가', '빗-방울처럼', '삼-자', '순결-히', '순종하-며', '안넘-어지나', '약-하고', '어리-고', '예-알아', '용사들처-럼',
+    '이-야기와', '일-용할', '잡수셨-죠', '전-혀', '조-롱하며', '친구-여', '털-고', '해같-이', '현명-한',
+  ],
+  kos: [
+    'kutong-yac',
+  ],
+  mg: [
+    'afa-trosa', 'afa-tsy', 'ahi-maitso', 'ahyizaylala-mazava', 'aim-baovao',
+    'alaim-panahy', 'ali-maizim-pito', 'ali-maizina', 'am-bavaka', 'am-pahazotoana',
+    'am-pahendrena', 'am-panahy', 'am-panajana', 'am-pasana', 'am-pifaliana',
+    'am-pitiavana', 'am-pitoniana', 'am-po', 'am-pofoiny', 'am-poko', 'am-ponay',
+    'am-ponja', 'aman-danitra', 'amim-panajana', 'amim-pitia', 'amoron-drano',
+    'an-dalantsara', 'an-danitra', 'an-dapany', 'an-jaridaina', 'an-kiato', 'an-tany',
+    'an-tokantrano', 'an-trano', 'an-tranon', 'an-tranon’omby', 'an-tratranao',
+    'an-tsaha', 'an-tsaiko', 'an-tsaina', 'an-tsainao', 'an-tsorony',
+    'androm-pifaliana', 'diam-pantsika', 'drafi-pamonjeny', 'eran-tany',
+    'fahasoavam-be', 'fakam-panahy', 'fanehoam-pitia', 'fanehoam-pitiavana',
+    'fantsi-bỳ', 'fiadanam-po', 'fiainam-baovao', 'fiainan-tsambatra', 'fiakaram-be',
+    'fihinanam-bilona', 'fiononam-po', 'fitiavam-be', 'fitiavam-pamonjena',
+    'ha-nampinoana', 'hafa-pifaliana', 'haizi-mbe', 'han-ka', 'hanan-tsiny',
+    'hanandra-peo', 'hanara-dia', 'hanatri-tava', 'hangata-pamelana', 'hatsaram-panahy',
+    'herim-po', 'hiadam-po', 'hiara-dalana', 'hiara-dia', 'hiara-hihira',
+    'hiara-hivavaka', 'hiara-komana', 'hiram-pandresena', 'hiram-pifaliana',
+    'hitari-dia', 'im-piry', 'kinta-mamiratra', 'lala-misampana', 'maha-te',
+    'mampihetsi-po', 'manahiran-tsaina', 'manam-paharoa', 'manan-tanana',
+    'mandra-pahatonga', 'mandra-piverenako', 'mandra-podiako', 'maneran-tany',
+    'manjombon-dava', 'mavesa-be', 'mendri-piderana', 'miara-dia', 'miara-miaina',
+    'mihinam-boakazo', 'mpitari-dia', 'nanan-janaka', 'nitoe-jaza', 'nivoa-drà',
+    'olon-drehetra', 'olon-tiako', 'onjam-piainana', 'porofom-pitia', 'raiki-trosa',
+    'ratram-po', 'resin-tory', 'rivo-mahery', 'rivo-mitatao', 'sondrian-tory',
+    'sorom-pamonjena', 'tamim-pahasahiana', 'tamim-pahendrena', 'tamim-pifaliana',
+    'tantaram-pianakaviana', 'toe-panahy', 'toeram-baovao', 'tonom-bavaka',
+    'tontolo-izao', 'tra-pahoriana', 'tranom-bahiny', 'valim-bavaka', 'valin-teny',
+    'velom-pisaorana', 'velon-kira', 'velon-tsento', 'vonon-kanao', 'zava-dehibe',
+    'zava-drehetra', 'zava-manitra', 'zava-maro', 'zava-niseho', 'zava-poana',
+    'zava-tsoa', 'zotom-po',
+  ],
+  mh: [
+    'armej-in', 'ej-ļoo', 'er-wōj', 'iook-ļo̧k', 'ippān-doon', 'je-ale', 'je-je-ko',
+    'kooļ-ko', 'kūr-tok', 'mor-mon', 'm̧ool-eo', 'pil-iej', 'pān-doon', 'raam̧-m̧an',
+    'ro-ne', 'rool-tok', 'wōj-jān', 'ļo̧k-wōt',
+  ],
+  mi: [
+    'ai-i', 'tama-nui-te-rā',
+  ],
+  mn: [
+    'эргэлз-дэггүй',
+  ],
+  ms: [
+    'baik-baik', 'bersama-nya', 'bimbingan-mu', 'bimbingan-nya', 'cah’ya-mu',
+    'cah’ya-nya', 'dengan-ku', 'dengan-nya', 'dibentuk-nya', 'dib’ri-nya',
+    'dicerahkan-nya', 'dikuatkan-nya', 'dipeluk-nya', 'dipulihkan-nya', 'diri-mu',
+    'ditanggung-nya', 'gunung-mu', 'jejak-nya', 'kaki-nya', 'kasih-mu', 'kasih-nya',
+    'kekuatan-mu', 'kepada-nya', 'kuasa-nya', 'langkah-nya', 'lengan-nya', 'lu-pa',
+    'memerlukan-mu', 'mengikuti-nya', 'pekerjaan-nya', 'per-jan-ji-an-ku', 'pihak-nya',
+    'pikul-ku', 'p’rintah-nya', 'rahmat-mu', 'rahmat-nya', 'rancangan-nya', 'roh-nya',
+    'tangan-ku', 'teladan-nya', 'terang-nya',
+  ],
+  mt: [
+    'bl-eluf', 'd-dawl', 'dil-povra', 'il-fejqan', 'il-kliemu', 'il-qalb', 'in-nar',
+    'it-tama', 'it-telgħat', 'l-eku', 'l-eternita', 'l-ibħra', 'l-imnikket', 'l-pass',
+    'tas-salvatur', 'x-xewqa',
+  ],
+  nl: [
+    'abed-nego', 'maak-je-werk-af-dag',
+  ],
+  no: [
+    'abed-nego', 'livs-verk', 'tra-la-la-la-la',
+  ],
+  pag: [
+    'andi-angaa’y',
+  ],
+  pl: [
+    'abed-nego', 'adam-ondi-ahman', 'mer-si',
+  ],
+  pon: [
+    'rer-rer',
+  ],
+  ro: [
+    'a-mplinit', 'a-nceput', 'a-ncerca', 'a-nfruntat', 'a-ngenuncheat', 'a-ntors',
+    'a-nviat', 'a-nvins', 'a-nvăţat', 'a-nvățat', 'a-ți', 'abed-nego', 'adevăru-i',
+    'adevăru-ivestim', 'adevăru-n', 'aduce-n', 'adună-n', 'aibă-n', 'ajutați-ne',
+    'ajută-i', 'ajută-mă', 'ajută-ne', 'ajutămă-ntruna', 'ajutăne-n', 'albastru-i',
+    'aleluia-ți', 'alinare-ți', 'alină-te', 'amară-n', 'amenință-n', 'amintește-ți',
+    'amintindu-şi', 'apare-n', 'aproape-i', 'aprobarea-ta', 'apărându-l', 'arată-mi',
+    'articulaţii-n', 'asculta-vom', 'ascultaţi-l', 'ascultă-l', 'ascultă-mă',
+    'ascultă-ne', 'ascultă-ţi', 'ascunde-mă', 'asupra-i', 'asupra-ți', 'așteaptă-n',
+    'aștepta-nvierea', 'bine-ai', 'bine-aleg', 'bine-i', 'binecuvântează-i',
+    'binecuvântează-l', 'binecuvântează-mă', 'binecuvântează-ne', 'binecuvânteză-ne',
+    'binele-n', 'blândă-ndurare', 'braţele-ntind', 'brațele-i', 'bucurați-vă',
+    'bucurie-mparte', 'bucurie-n', 'bârna-n', 'bătălia-i', 'c-adevăr', 'c-ai', 'c-am',
+    'c-aproape', 'c-avem', 'c-aţi', 'c-o', 'ca-n', 'ca-nţeleapta', 'cale-ați',
+    'cale-nlătură', 'calea-i', 'calea-ţi', 'can-şa', 'care-adună', 'care-au', 'care-i',
+    'care-n', 'care-s', 'care-ţi', 'care-ți', 'casa-i', 'case-avem', 'case-n',
+    'caută-l', 'caută-ți', 'cauza-ți', 'ce-a', 'ce-abundă', 'ce-ai', 'ce-ajută',
+    'ce-am', 'ce-anunţă', 'ce-ar', 'ce-are', 'ce-atât', 'ce-au', 'ce-aveam', 'ce-aș',
+    'ce-așteaptă-l', 'ce-așteptăm', 'ce-ați', 'ce-mbogățesc', 'ce-mi', 'ce-n',
+    'ce-n-lume', 'ce-ndrumă', 'ce-o', 'ce-or', 'ce-s', 'ce-ți', 'celest-a',
+    'celorce-adevărul', 'cemi-o', 'cere-i', 'cere-n', 'ceru-i', 'ceru-n', 'chemarea-i',
+    'chemarea-ți', 'cheme-n', 'chinu-ți', 'cine-s', 'citește-o', 'coaja-n', 'comoară-l',
+    'condu-mi', 'condu-mă', 'conducătoru-ndeamnă', 'condus-o', 'credinţa-i',
+    'credinţa-nseamnă', 'credinţă-n', 'credința-ndură', 'credință-n', 'cruce-a',
+    'crăciunu-anunţă', 'cu-a', 'cu-aceeași', 'cu-adevărat', 'cu-al', 'cu-nțelepciune',
+    'cu-o', 'cu-oricine', 'cuie-n', 'cunună-i', 'cupa-mi', 'cuvântu-i', 'cuvântu-n',
+    'cuvântu-ți', 'cântați-i', 'cântându-i', 'cântându-ți', 'câte-ai', 'că-i',
+    'că-ivoi', 'că-l', 'că-n', 'că-s', 'căutați-i', 'dac-aveţi', 'dacă-i', 'dacă-l',
+    'dacă-mi', 'dan-ken', 'dat-o', 'de-a', 'de-acum', 'de-ai', 'de-al', 'de-alamă',
+    'de-amărăciune', 'de-aproape', 'de-apă', 'de-ar', 'de-asupra', 'de-atunci',
+    'de-atâtea', 'de-aur', 'de-așteptat', 'de-ați', 'de-exaltare', 'de-i', 'de-l',
+    'de-mparţi', 'de-mparți', 'de-mpărăție', 'de-n', 'de-ndur', 'de-nfricoșare',
+    'de-nfruntat', 'de-ngrijirea', 'de-nțelepți', 'de-oameni', 'de-odată', 'de-odihnă',
+    'de-om', 'de-un', 'departe-i', 'departe-s', 'depărtează-i', 'deschide-n',
+    'deschide-ți', 'despică-te', 'despre-ai', 'despre-al', 'dimineața-nvierii',
+    'disprețuindu-i', 'divina-i', 'divină-mi', 'doamne-a', 'doamne-acceptă',
+    'doamne-ajută-ne', 'doamne-am', 'doamne-n', 'doamne-ți', 'domnu-a', 'domnu-i',
+    'domnu-n', 'domnu-ți', 'dovada-i', 'dragoste-avem', 'dragoste-n', 'dragoste-ţi',
+    'dragostea-i', 'dragostea-mi', 'dragostea-ți', 'dreaptă-i', 'dreptşi-adevărat',
+    'du-mă', 'duce-n', 'dulce-a', 'dulce-i', 'dumbrava-mi', 'durere-i', 'durerea-mi',
+    'durerea-ți', 'dușmanii-acum', 'dă-i', 'dă-le', 'dă-mi', 'dă-n', 'dă-ne', 'dă-ne-n',
+    'e-aici', 'e-al', 'e-alăturea', 'e-aprinsă', 'e-aproape', 'e-mpărăția', 'e-n',
+    'e-ncântarea', 'e-nflorit', 'e-nfricoșată', 'e-ntuneric', 'e-nvolburată',
+    'e-nvrăjbit', 'e-o', 'ea-i', 'ea-n', 'ea-ntărește', 'ele-au', 'ele-n', 'ele-s',
+    'eliberează-i', 'eliberează-mă', 'emoția-n', 'este-a', 'este-adevărat', 'este-al',
+    'eterna-i', 'evanghelia-i', 'evanghelia-ți', 'exprimate-n', 'facă-se', 'familia-mi',
+    'familia-și', 'fapta-celor', 'faţa-i', 'fața-i', 'fericire-n', 'fericiți-s',
+    'fi-mpreună', 'fi-n', 'fi-ncercaţi', 'fi-ndreptate', 'fi-ndrumat', 'fi-va',
+    'fi-voi', 'fi-împreună', 'fie-a-mea', 'fie-al', 'fie-n', 'fie-nțelepți',
+    'fii-ntărit', 'fiinţe-a', 'fiva-n-suflet', 'flacără-n', 'floricele-n', 'flutură-n',
+    'forța-i', 'forță-l', 'forță-s', 'fost-a', 'frate-l', 'frumoasă-i', 'frântă-i',
+    'furtună-n', 'fă-ne', 'făr-de', 'făr-un', 'fărde-nceput', 'fără-ntârziere',
+    'glasu-i', 'glasu-mi', 'glasu-n', 'glasu-ți', 'glasurile-nălțe-n', 'golgota-m',
+    'gra-si-as', 'grabă-n', 'grija-n', 'grijile-mi', 'grăbește-te', 'grăbiți-vă',
+    'gândește-te', 'gândindu-mă', 'haine-au', 'haru-i', 'haru-ți', 'hrănește-ne', 'i-a',
+    'i-ai', 'i-am', 'i-arată', 'i-au', 'i-aud', 'i-auzim', 'i-l', 'ia-ne', 'iartă-le',
+    'iartă-ne', 'inchinați-i', 'inima-i', 'inima-mi', 'inimile-nduioșează', 'inimă-mi',
+    'intre-n', 'iubește-mă', 'iubire-n', 'iubirea-i', 'iubiți-l', 'iubiți-vă',
+    'juru-mi', 'l-a-ndemnat', 'l-a-nzestrat', 'l-ai', 'l-am', 'l-arăt', 'l-ascult',
+    'l-ascultau', 'l-au', 'l-aş', 'l-om', 'la-nceput', 'la-ncercări', 'lacrimile-o',
+    'lartă-ne', 'las-o', 'lasă-i', 'lasă-mă', 'le-a', 'le-acordăm', 'le-aduce', 'le-ai',
+    'le-am', 'le-arată', 'le-articulez', 'le-ascult', 'le-au', 'le-om', 'lili-ac',
+    'liniștea-ți', 'locu-i', 'lucra-n', 'lucra-vom', 'lucrarea-i', 'lume-n',
+    'lume-nainte', 'lumea-i', 'lumea-l', 'lumea-n', 'lumii-ntregi', 'lumina-i',
+    'lumina-n', 'lumina-ţi', 'lumina-ți', 'luminat-o', 'luminează-mi', 'luminează-ne',
+    'lumină-mi', 'lumină-n', 'lumină-ți', 'luptă-te', 'lâng-acel', 'lâng-al',
+    'lângă-al', 'lăcașu-mi', 'lăsaţi-i', 'lăudați-l', 'm-a', 'm-a-ndrumat',
+    'm-a-nălțat', 'm-ajută', 'm-ajuţi', 'm-ajuți', 'm-alini', 'm-alină', 'm-am',
+    'm-apără', 'm-ar', 'm-ardea', 'm-asculți', 'm-aș', 'm-așteaptă', 'ma-lo', 'mama-n',
+    'mare-e', 'mare-i', 'mare-nțelepciunea', 'marea-ți', 'mea-i', 'mer-si', 'merge-n',
+    'mi-a', 'mi-a-ncercat', 'mi-aduc', 'mi-ai', 'mi-alungă', 'mi-am', 'mi-amintesc',
+    'mi-apare', 'mi-arată', 'mi-arăt', 'mi-asigură', 'mi-aş', 'mi-ați', 'mi-e', 'mi-l',
+    'mi-o', 'mila-ți', 'mine-a', 'mine-i', 'minne-i', 'moare-ascultător', 'moartea-i',
+    'moartea-n', 'moartea-nfruntat', 'moroni-n-trecut', 'morții-a', 'multă-ntristare',
+    'mulțumindu-ți', 'muncă-n', 'munte-s', 'muritoarea-mi', 'mustră-mi', 'mâna-i',
+    'mângâietoru-ndrumă', 'mântuirea-i', 'mână-n', 'mă-nconjoară', 'mă-ncred',
+    'mă-ndoiesc', 'mă-ndrept', 'mă-ndruma', 'mă-ndrumi', 'mă-ndrumă', 'mă-nfrățesc',
+    'mă-ntreb', 'mă-ntăresc', 'mă-ntărește', 'mă-ntări', 'mă-nvaţă', 'mă-nvaƫă',
+    'mă-nvață', 'mă-nvănluie', 'mă-nșela', 'mărturie-ntr-adevăr', 'n-a', 'n-aduce',
+    'n-ai', 'n-am', 'n-are', 'n-au', 'n-avea', 'n-avem', 'n-aş', 'n-o', 'naintea-i',
+    'nalță-ți', 'ne-a', 'ne-a-nvăţat', 'ne-aduc', 'ne-aduce', 'ne-aduce-aproape',
+    'ne-aducă', 'ne-adunăm', 'ne-ai', 'ne-ajute', 'ne-ajută', 'ne-ajuți', 'ne-aline',
+    'ne-alină', 'ne-alunecă', 'ne-am', 'ne-amintim', 'ne-apar', 'ne-apropie',
+    'ne-arate', 'ne-arată', 'ne-arătat', 'ne-ascultă', 'ne-asigură', 'ne-au',
+    'ne-avântăm', 'ne-așteaptă', 'ne-mbarcăm', 'ne-mprejmuit', 'ne-mpărtăși',
+    'ne-mpărtășim', 'ne-nalță', 'ne-ncetat', 'ne-nconjoară', 'ne-ncredem', 'ne-ncântă',
+    'ne-ndoim', 'ne-ndreptăm', 'ne-ndrume', 'ne-ndrumi', 'ne-ndrumă', 'ne-nfricat',
+    'ne-nfricați', 'ne-ngrijim', 'ne-nsemnat', 'ne-nsemnate', 'ne-nsoțește',
+    'ne-nspăimântă', 'ne-ntrerupt', 'ne-ntâlnim', 'ne-nvaţă', 'ne-nvaƫă-n', 'ne-nvață',
+    'ne-nvețe', 'ne-nvăluie', 'ne-nălțăm', 'ne-o', 'ne-ocrotește', 'ne-om', 'ne-or',
+    'nechibzuitu-a', 'nefi-n', 'negat-o', 'nemărginita-ți', 'neprihănită-i',
+    'nesfârșită-i', 'nevoia-mi', 'ni-l', 'noaptea-i', 'noastre-i', 'noastră-i',
+    'nostru-n', 'nu-i', 'nu-l', 'nu-mi', 'nu-ncerca', 'nu-s', 'nu-ți', 'nume-a',
+    'nume-l', 'numele-i', 'numele-ți', 'numără-le', 'o-familie', 'oaia-i', 'oamenii-l',
+    'oare-a', 'ochii-i', 'ochii-nchidem', 'ochii-nchişi', 'odihn-o', 'opreștel-e',
+    'oriunde-ai', 'oriunde-am', 'oriunde-aș', 'pace-l', 'pace-n', 'pacea-mi', 'pacea-n',
+    'pacea-ți', 'palme-aşa', 'parca-i', 'partea-și', 'pași-mi', 'pe-a', 'pe-acea',
+    'pe-acest', 'pe-ai', 'pe-al', 'pe-altul', 'pe-alţii', 'pe-alții', 'pe-aridul',
+    'pe-aripi', 'pe-nserat', 'pe-ntregul', 'pe-ntuneric', 'pe-o', 'pe-oricine',
+    'pecetluit-a', 'pedeapsa-i', 'pentr-un', 'pentru-a', 'pentru-a-noastră',
+    'pentru-adevăr', 'pentru-al', 'pentru-alinare', 'perspectiva-i', 'picioare-i',
+    'pieptu-mi', 'pieptu-ți', 'pionieri-n', 'place-acea', 'planu-i', 'pleacă-ți',
+    'poarta-n', 'poate-n', 'poate-or', 'pocăiţi-vă', 'pocăiți-vă', 'poruncile-am',
+    'povara-mi', 'povara-n-seama', 'poveste-am', 'prea-nalt', 'preamărindu-l',
+    'preamăriți-l', 'preaslăviți-l', 'prezența-i', 'primi-va', 'primi-vei', 'primi-vom',
+    'primi-vor', 'primiţi-i', 'primăvară-n', 'privește-n', 'privirea-ți', 'priviți-l',
+    'proclamați-i', 'proclamă-i', 'profeţii-n', 'profeți-au', 'profeții-au',
+    'promise-n', 'promisiunea-i', 'promisiunea-ți', 'prânzu-mi', 'puterea-i',
+    'puterea-ți', 'puternică-i', 'pân-atunci', 'până-n', 'până-ntr-o', 'până-ntreaga',
+    'pământu-ntreg', 'părinții-au', 'păstoru-și', 'păzește-ne', 'pășunea-mi',
+    'radiază-ncredere', 'raze-aurii', 'recunoștința-mi', 'reflexe-argintii', 'rege-al',
+    'respectu-os', 'reverenţa-i', 'ridicați-vă', 'roagă-n', 'roagă-te',
+    'rostogolindu-se', 'ruga-i', 'ruga-mi', 'rugați-vă', 'rugându-ne', 'rugă-ți',
+    'rugăciunea-i', 'rupe-o', 'răsplata-i', 'războiu-ncetează', 's-a-mplinit',
+    's-a-ncălcat', 's-a-nfățișat', 's-a-nălțat', 's-admir', 's-aducă', 's-adune',
+    's-aflăm', 's-ajungem', 's-ajungă', 's-aleg', 's-alegem', 's-alegi', 's-aline',
+    's-alinăm', 's-alunge', 's-alungi', 's-ar', 's-arate', 's-aratăm', 's-arăt',
+    's-arătați', 's-arătăm', 's-ascult', 's-ascultați', 's-asculte', 's-ascultăm',
+    's-atingă', 's-aud', 's-avem', 's-o', 's-oferim', 's-or', 'sabatu-n', 'sacr-ai',
+    'schimbă-mi', 'schimbă-ţi', 'sculele-a', 'scutecele-a', 'se-aduce', 'se-adună',
+    'se-amplifică', 'se-aplică', 'se-arată', 'se-aud', 'se-audă', 'se-auzeau',
+    'se-așează', 'se-mplinește', 'se-nalță', 'se-ncheie', 'se-nchine', 'se-ncreadă',
+    'se-ncredea', 'se-ndreaptă', 'se-ngrijește', 'se-ntinde-n', 'se-ntindă',
+    'se-ntoarce', 'se-ntunecă', 'se-ntărește', 'se-nvârtesc', 'se-nălțau',
+    'se-oglindește', 'se-opresc', 'seara-n', 'seară-n', 'secretu-a', 'semnele-n',
+    'setea-m', 'sfinte-s', 'sfinții-s', 'sfânt-armură', 'sfânta-i', 'sfânta-ți',
+    'sfântă-n', 'simte-i', 'slabă-mi', 'slava-i', 'slava-ți', 'slavă-i', 'slavă-n',
+    'slova-i', 'slujindu-l', 'slujirea-mi', 'slăviți-l', 'soare-i', 'soare-n',
+    'soarele-i', 'soarele-n', 'soldați-au', 'speranţă-n', 'speranță-n', 'spiritu-mi',
+    'spiritu-nviorător', 'spiritu-ți', 'spre-a', 'spre-acel', 'spre-al', 'spre-o',
+    'spune-aşa', 'spune-mi', 'spune-n', 'spusă-n', 'steagu-i', 'strigă-ndată',
+    'străluci-n', 'suferință-i', 'sufletu-mi', 'sufletu-n', 'sufletu-ți', 'sânge-a',
+    'sângele-i', 'să-i', 'să-l', 'să-mi', 'să-mplinesc', 'să-mplinim', 'să-mpărtăşesc',
+    'să-mpărtăşim', 'să-naintăm', 'să-ncerci', 'să-ncercăm', 'să-ncânte',
+    'să-ndeplinești', 'să-ndurați', 'să-nflorească', 'să-nflorească-n', 'să-nfrunţi',
+    'să-nlătur', 'să-nlăture', 'să-ntâlnească', 'să-ntâlnim', 'să-ntăreasc-al',
+    'să-nveţe', 'să-nvețe', 'să-nvingem', 'să-nvățăm', 'să-nţeleg', 'să-şi', 'să-ţi',
+    'să-și', 'să-ți', 'ta-mpărăție', 'ta-nțelepciune', 'tare-bați', 'tare-l', 'tata-i',
+    'te-a', 'te-ai', 'te-ajută', 'te-alină', 'te-am', 'te-ascultă', 'te-ascultăm',
+    'te-au', 'te-aude', 'te-n-drume-n', 'te-nconjoară', 'te-ndoi', 'te-ndoiești',
+    'te-ndrume', 'te-ngrijesc', 'te-nvață', 'te-ocolesc', 'te-om', 'teama-mi',
+    'teama-nfruntăm', 'temple-mpreună', 'termina-voi', 'teroarea-i', 'tine-aduce',
+    'tine-avem', 'tine-i', 'tine-mi', 'toate-aceste', 'toate-au', 'toate-ncercările',
+    'toate-s', 'totu-i', 'totu-n', 'toții-n', 'trezește-te', 'treziți-vă', 'trimite-le',
+    'trimite-ne', 'trimite-ne-n', 'trimite-o', 'trupu-i', 'trăiește-al', 'tu-mi',
+    'tăcere-a', 'tălpile-n', 'tărie-mi', 'tărie-n', 'tărie-ți', 'u-ra', 'uite-a',
+    'unde-am', 'unde-i', 'unde-s', 'unge-mi', 'unii-mpingem', 'urmați-i', 'urmați-mă',
+    'urmează-l', 'urmează-mă', 'urmele-i', 'urmeze-n', 'urmându-i', 'urmându-și',
+    'urându-ți', 'v-aduc', 'v-adunați', 'v-am', 'v-amintiți', 'v-au', 'va-mplini',
+    'va-ncepe', 'va-nceta', 'va-ncheia', 'va-ncreți', 'va-ncuraja', 'va-ndruma',
+    'va-nsoți', 'va-ntări', 'va-nvinge', 'va-nălța', 'valu-a', 'vasta-ntindere',
+    'veche-ascunsă', 'vede-n', 'veghează-ne', 'veni-n', 'vestește-l', 'veșnice-i',
+    'viaţa-mi', 'viața-i', 'viața-l', 'viața-mi', 'viață-mi', 'viață-ți', 'vibrează-n',
+    'vine-n', 'vine-n-grabă', 'vino-n', 'vocea-ți', 'vocile-auzim', 'voi-nălța',
+    'voia-ți', 'vorbele-ți', 'vremea-i', 'vreodat-atât', 'vântu-a', 'vântu-i',
+    'vă-nconjoară', 'vă-ncredeți', 'vă-ndrume', 'vă-ntoarceți', 'vă-ntâmpină',
+    'vă-nvață', 'văzut-au', 'zeciuiala-i', 'zelu-n', 'zi-ntreagă', 'zile-nsorite',
+    'zilele-n', 'zilele-s', 'zâmbetu-ți', 'zâmbitoarea-ţi', 'împrejuru-i', 'împăratu-a',
+    'înainte-n', 'înaintea-celei', 'înalță-ne', 'început-o', 'închina-ți-i',
+    'încredere-n', 'încrederea-ți', 'îndrumă-ne', 'îngerii-n', 'îngeru-a', 'într-o',
+    'într-un', 'într-una', 'întărește-mă', 'întărește-ne', 'învață-mă', 'înălța-vom',
+    'înţeleptu-a', 'şi-a', 'şi-acum', 'şi-adevărat', 'şi-adevărul', 'şi-alţii', 'şi-am',
+    'şi-apoi', 'şi-atrimis', 'şi-au', 'şi-aur', 'şi-avea', 'şi-eu', 'şi-i', 'şi-ma-şu',
+    'şi-n', 'şi-o', 'şi-omul', 'ţi-am', 'ţi-aude', 'ș-avem', 'ș-inimă', 'și-a',
+    'și-acolo', 'și-adevărul', 'și-ajută', 'și-al', 'și-alta', 'și-am', 'și-ambiții',
+    'și-amintire-ai', 'și-apa', 'și-apoi', 'și-aproape', 'și-aproapelui', 'și-apă',
+    'și-ascultați', 'și-astfel', 'și-atuncea', 'și-atunci', 'și-au', 'și-aude',
+    'și-aurul', 'și-i', 'și-l', 'și-mi', 'și-n', 'și-ncălzești', 'și-ngustă',
+    'și-nsingurat', 'și-ntro', 'și-nviem', 'și-o', 'și-oricând', 'și-umbra', 'ști-n',
+    'țelu-ți', 'ți-a', 'ți-aducem', 'ți-ai', 'ți-am', 'ți-amintește', 'ți-au',
+    'ți-e-nălțat', 'ți-l', 'ți-o', 'țineți-vă',
+  ],
+  ru: [
+    'а-а', 'где-то', 'едва-едва', 'из-за', 'из-под', 'как-то', 'кем-то', 'когда-нибудь',
+    'когда-то', 'кто-то', 'м-м', 'о-о', 'оо-о', 'по-другому', 'самуилу-ламанийцу',
+    'тра-ля-ля-ля-ля-ля', 'тра-ля-ля-ля-ля-ля-ля', 'у-у', 'уу-у', 'чему-то',
+    'черно-белый', 'что-то', 'чудо-люди',
+  ],
+  sk: [
+    'abéd-nega', 'čo-to',
+  ],
+  sm: [
+    'don-ken', 'fanau-fouina', 'fefe-va-le', 'ie-s', 'kahn-shai', 'mah-loh',
+    'shee-mah-su',
+  ],
+  sq: [
+    'abed-negos', 'andej-këtej', 'dan-ken', 'gra-sias', 'mer-si', 'mjeri-met', 'mu-mm',
+    'nu-m’roj', 'pro-voi', 'ulje-ngritje',
+  ],
+  sv: [
+    'abed-nego',
+  ],
+  te: [
+    'నా-తోనడువుమను-న',
+  ],
+  th: [
+    'ถ้าฉันดำเนินตามพระองค์ดำรงในศรัท-ธา', 'พระองค์จะประทานพ-ลังดังที่ฉันต้องการ',
+    'โลก-สวรรค์พร',
+  ],
+  tl: [
+    'ao-y', 'araw-araw', 'balang-araw', 'bayad-sala', 'bigyang-liwanag',
+    'bigyang-saysay', 'bukang-liwayway', 'buntong-hininga', 'dan-ken', 'gra-syas',
+    'himig-tagumpay', 'hinding-hindi', 'ipasa-diyos', 'kagalang-galang',
+    'kagila-gilalas', 'kahanga-hanga', 'kahanga-hangang', 'kahn-sha', 'kanya-kanyang',
+    'kapit-bisig', 'kapitbahay-ko', 'karapat-dapat', 'kawalang-hanggan',
+    'kawalang-hangga’y', 'kay-aba', 'kay-amo', 'kay-inam', 'kaysaya-saya',
+    'lahat-lahat', 'mag-aalay', 'mag-alab', 'mag-alala', 'mag-alay', 'mag-alinlangan',
+    'mag-alo', 'mag-ambag', 'mag-anak', 'mag-aral', 'mag-aruga', 'mag-ina', 'mag-ingat',
+    'mag-isa', 'mag-isang', 'mag-isa’t', 'mag-uli', 'mag-usap', 'magbibigay-galak',
+    'magbibigay-lakas', 'magbibigay-sigla', 'magbigay-biyaya', 'magbigay-lakas',
+    'magbigay-ligaya', 'magkahawak-kamay', 'maglakas-loob', 'magsasama-sama',
+    'magsi-awit', 'magsipag-awit', 'magsipag-unat-unat', 'mah-lo', 'maka-diyos',
+    'mangilan-ngilan', 'may-ari', 'milyun-milyon', 'nag-aalab', 'nag-aanyaya',
+    'nag-aawitan', 'nag-alay', 'nag-aral', 'nag-awitan', 'nag-ayos', 'nag-iisa',
+    'nag-iisa’t', 'nagbabalik-loob', 'nagbibigay-buhay', 'nagkatawang-tao',
+    'namumukod-tangi', 'pag-aalabin', 'pag-aalala', 'pag-aalay', 'pag-aaralan',
+    'pag-aari’y', 'pag-aaruga', 'pag-alo', 'pag-asa', 'pag-asang', 'pag-asa’ng',
+    'pag-asa’t', 'pag-asa’y', 'pag-awit', 'pag-big', 'pag-ibig', 'pag-ingatan',
+    'pag-inom', 'pag-iwas', 'pag-unlad', 'pag-usapan', 'pag-uwi', 'pagbabayad-sala',
+    'pakitong-kitong', 'paligid-ligid', 'pambayad-sala', 'pang-unawa', 'paulit-ulit',
+    'pinag-aaralan', 'pulos-tinik', 'sama-samang', 'sang-ayunan', 'sari-sari',
+    'sari-saring', 'shee-ma-su', 'tag-araw', 'tag-init', 'taos-pusong', 'tulong-tulong',
+    'unti-unti', 'walang-hanggan', 'walang-hanggang',
+  ],
+  to: [
+    'anga-maʻá', 'anga-taʻetaau', 'anga-tonu', 'anga-tonú', 'don-ken', 'faka-ʻotua',
+    'faka-ʻotuá', 'grah-see-ahs', 'kahn-shah', 'loto-fakafetaʻí', 'loto-fakafiefia',
+    'loto-fiemālie', 'loto-foʻi', 'loto-hohaʻá', 'loto-laveá', 'loto-mafasiá',
+    'loto-mamahi', 'loto-mamahí', 'loto-maʻa', 'loto-maʻá', 'loto-mālohi',
+    'loto-mālohí', 'loto-māʻulalo', 'loto-nonga', 'loto-poto', 'loto-taha', 'loto-tahá',
+    'loto-toʻá', 'loto-tuiaki', 'loto-veiuá', 'mah-loh', 'maka-tuliki', 'maka-tulikí',
+    'mare-see', 'shee-mah-sue',
+  ],
+  tpi: [
+    'maun-ten', 'stret-im',
+  ],
+  tw: [
+    'sɛ’a-kwantu', 'wo-hwɛ',
+  ],
+  ty: [
+    'au-’ore-hia', 'bāpetizo-utuhi-hia', 'fa’ahuru-’ē-hia', 'fa’ahuru-’ē-’ore-hia',
+    'fa’atupu-ē-hia', 'fa’a’ere-mau-hia', 'fa’a’ite-pāpū-ra’a', 'fānau-ari’i-hia',
+    'fē-ra’o-ra’o', 'haere-’ē-hia', 'ha’amaita’i-noa-hia', 'hina’aro-mau-hia',
+    'hāmani-’ino-hia', 'hāmani-’ino-ra’a', 'hīmene-noa-hia', 'ite-fa’ahou-hia', 'iu-pī',
+    'mana-hope', 'na-’ō-hia', 'obede-nego', 'parau-’ore-hia', 'poi’ete-maita’i-hia',
+    'poro-haere-hia', 'tahe-noa-ra’a', 'ta’a-’ē-ra’a', 'ti’a-fa’ahou-ra’a',
+    'tohu-ātea-hia', 'tīa’i-maoro-hia',
+  ],
+  uk: [
+    'авед-неґо', 'бага-тьох', 'будь-де', 'будь-коли', 'будь-хто', 'будь-які',
+    'будь-якій', 'давним-давно', 'давно-давно', 'диво-дивне', 'ледве-ледь',
+    'матінко-земля', 'рути-м’яти', 'самуїл-пророк', 'хворогопід-няв', 'хлоп-хлоп',
+    'єгови-творця', 'ісус-немовлятко',
+  ],
+  war: [
+    'kagul-anan', 'kamakatarag-ob', 'mabag-o', 'mag-ampo', 'pagbag-o',
+    'pagkamahimayan-on',
+  ],
+  yap: [
+    'bur-ey', 'gi-nn’en', 'gu-ra', 'gum-’ircha', 'kir-baen', 'mach-albog', 'maga-won',
+    'may-ko', 'mu’-un', 'nga-lang', 'ngo-dad', 'ngo-med', 'pa’-ag', 'pinn-ing',
+    'pi’-in', 'powi’-iyem', 'tathap-eg', 'tham-ey',
   ],
 };
 
@@ -11527,6 +12571,10 @@ ChScore.prototype._patterns = {
   capoMark: /^capo\b[\s:.,-]*\d+[\s:.,-]*$/i,
   // A hymn/song number, optionally followed by a hyphen and/or letter
   standaloneNumber: /^\d+-?[A-Za-z]?$/,
+  // What separates a credit's label from the name after it, in _attributionWords: a colon,
+  // its fullwidth form, or Armenian's. The spacing form takes the space French puts before it.
+  creditLabel: /[:：՝]$/,
+  separatorSpacing: /\s+([:：՝])/g,
 
   // Round numbers and ostinato directions
   roundMarker: /^[➀-➈]$/,
@@ -11836,17 +12884,16 @@ ChScore.prototype._wordBuilder = function () {
 // counted in chord positions, so a dense accompaniment under two syllables can't defeat
 // it: "Gethsemane" spans 37 measures where a real pickup spans one.
 ChScore.prototype._isPickupFragment = function (run, next) {
-  // A pickup is sung in one unbroken span: a syllable outside the span so far (forward over a
-  // gap, or back over a jump) says the run is something else
-  let span = null;
+  // A pickup is sung in one unbroken range, recorded the way its stanza would be
+  const ranges = [];
   for (const syllable of run.syllables) {
-    for (const [start, end] of syllable.chordPositionRuns) {
-      if (span && (start < span.start || start > span.end)) return false;
-      span = span ? { start: span.start, end: Math.max(span.end, end) } : { start, end };
+    for (const chordPositionRun of syllable.chordPositionRuns) {
+      this._addChordPositionRun(ranges, chordPositionRun, syllable.lyricLineIds ?? [], []);
     }
   }
+  const [span] = ranges;
   const nextStart = next?.syllables[0]?.chordPositionRuns[0]?.[0];
-  if (!span || nextStart == null) return false;
+  if (ranges.length !== 1 || nextStart == null) return false;
 
   // Sung immediately before it, and only split off because playback jumped back into
   // the repeat to reach the words the fragment leads into

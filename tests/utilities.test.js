@@ -1938,6 +1938,22 @@ describe('an instruction that names the pass a lyric line is sung on', () => {
       expect(score._instructedPassNumber('Chorus after fourth verse:')).toBe(null);
       score._scoreData.scoreMetadata.lang = 'en';
     });
+
+    it('should read the number words of the score\'s own language, in any spelling', () => {
+      score._scoreData.scoreMetadata.lang = 'fr';
+      expect(score._instructedPassNumber('Refrain après le quatrième couplet :')).toBe(4);
+      expect(score._instructedPassNumber('(Première fois seulement)')).toBe(1);
+      score._scoreData.scoreMetadata.lang = 'pt';
+      expect(score._instructedPassNumber('(Segunda estrofe)')).toBe(2);
+      score._scoreData.scoreMetadata.lang = 'en';
+    });
+
+    it('should read a number of two words as itself, not the ordinal inside it', () => {
+      score._scoreData.scoreMetadata.lang = 'es';
+      expect(score._instructedPassNumber('Coro después de la décima primera estrofa')).toBe(11);
+      expect(score._instructedPassNumber('Coro después de la tercera estrofa')).toBe(3);
+      score._scoreData.scoreMetadata.lang = 'en';
+    });
   });
 
   describe('_lyricElementSoundingAt()', () => {
@@ -2305,11 +2321,14 @@ describe('_getScoreMetadata()', () => {
               '<rend fontweight="bold">Second verse sung a cappella</rend></pgHead>',
     }));
 
-    expect(metadata.textBlocks[0].html)
-      .toBe('<em>Words: Anon.</em>\n<em>Music: J. Battishill</em>');
-    expect(metadata.textBlocks[1].html).toBe('<strong>Second verse sung a cappella</strong>');
+    // Found by their words: the credit is an attribution, which sorts to the end of the blocks
+    const credit = metadata.textBlocks.find(block => block.text.startsWith('Words:'));
+    const note = metadata.textBlocks.find(block => block.text.startsWith('Second'));
+
+    expect(credit.html).toBe('<em>Words: Anon.</em>\n<em>Music: J. Battishill</em>');
+    expect(note.html).toBe('<strong>Second verse sung a cappella</strong>');
     // The same words, for reading rather than printing
-    expect(metadata.textBlocks[0].text).toBe('Words: Anon.\nMusic: J. Battishill');
+    expect(credit.text).toBe('Words: Anon.\nMusic: J. Battishill');
   });
 
   it('should mark a styled run inside a text block up where it sits', () => {
@@ -2354,6 +2373,16 @@ describe('_getScoreMetadata()', () => {
 
     expect(typed(metadata, 'stanza')).toEqual([]);
     expect(typed(metadata, 'footnote')).toEqual([note]);
+  });
+
+  it('should read a rights notice as an attribution across the line it is wrapped at', () => {
+    const metadata = score._getScoreMetadata(buildMei({
+      pgFoot: '<pgFoot><rend>This song may be copied for incidental,<lb/>' +
+              'noncommercial church or home use.</rend></pgFoot>',
+    }));
+
+    expect(typed(metadata, 'attribution')).toHaveLength(1);
+    expect(typed(metadata, 'stanza')).toEqual([]);
   });
 
   it('should not call a stanza wrapped where its printed lines are the tune’s', () => {
@@ -2779,6 +2808,46 @@ describe('_continuesOverGap()', () => {
 
   it('should not over more than a pickup', () => {
     expect(scoreWith([other])._continuesOverGap(1, 6, ['1.2'])).toBe(false);
+  });
+});
+
+// ============================================================
+// _addChordPositionRun
+// ============================================================
+describe('_addChordPositionRun()', () => {
+  const staves = [1, 2];
+  const add = (ranges, run, lines = ['1.1']) =>
+    Object.create(ChScore.prototype)._addChordPositionRun(ranges, run, lines, staves);
+
+  it('should grow the last range where a syllable starts where it ends', () => {
+    const ranges = [];
+    add(ranges, [0, 2]);
+    add(ranges, [2, 5]);
+    expect(ranges).toEqual([{ start: 0, end: 5, staffNumbers: staves, lyricLineIds: ['1.1'] }]);
+  });
+
+  it('should open a range where playback jumps back into a repeat', () => {
+    // Example: "Scatter Sunshine", whose chorus is sung twice from its own start
+    const ranges = [];
+    add(ranges, [17, 25]);
+    add(ranges, [17, 23]);
+    expect(ranges.map(range => [range.start, range.end])).toEqual([[17, 25], [17, 23]]);
+  });
+
+  it('should open a range where the stanza moves onto another lyric line', () => {
+    // Example: "For All the Saints", whose verses end on the line every verse sings
+    const ranges = [];
+    add(ranges, [0, 12], ['1.2']);
+    add(ranges, [12, 20], ['1.1']);
+    expect(ranges.map(range => range.lyricLineIds)).toEqual([['1.2'], ['1.1']]);
+  });
+
+  it('should open a range over a gap the stanza does not carry on over', () => {
+    // No score data, so no gap is carried over (see _continuesOverGap)
+    const ranges = [];
+    add(ranges, [0, 2]);
+    add(ranges, [3, 5]);
+    expect(ranges).toHaveLength(2);
   });
 });
 
