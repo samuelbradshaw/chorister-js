@@ -515,7 +515,7 @@ describe('_splitTwoPartFinalPass — a third ending the engraving did not classi
     // nothing, so on a score that labels its other verses the stanza is left unclassified --
     // and the together pass was built without it, while the same song read from supplied
     // words (whose text says [Verse 3]) built it with.
-    const sections = parts().concat(section('unknown', [{ start: 94, end: 114, lyricLineIds: ['1.1'] }]));
+    const sections = parts().concat(section('section', [{ start: 94, end: 114, lyricLineIds: ['1.1'] }]));
     twoPartScore(sections)._splitTwoPartFinalPass([]);
 
     expect(sections).toHaveLength(3);
@@ -534,18 +534,18 @@ describe('_splitTwoPartFinalPass — a third ending the engraving did not classi
 
   it('should leave a closing section that starts inside the music the parts share', () => {
     // Only where the last section begins past all of it are the parts singing it together
-    const sections = parts().concat(section('unknown', [{ start: 60, end: 114, lyricLineIds: ['1.1'] }]));
+    const sections = parts().concat(section('section', [{ start: 60, end: 114, lyricLineIds: ['1.1'] }]));
     twoPartScore(sections)._splitTwoPartFinalPass([]);
 
     expect(sections[2].chordPositionRanges).toEqual([{ start: 60, end: 114, lyricLineIds: ['1.1'] }]);
-    expect(sections[2].type).toBe('unknown');
+    expect(sections[2].type).toBe('section');
   });
 
   it('should leave a score whose parts are one lyric line alone', () => {
     const sections = [
       section('verse', [{ start: 16, end: 87, lyricLineIds: ['1.1'] }]),
       section('verse', [{ start: 16, end: 94, lyricLineIds: ['1.1'] }]),
-      section('unknown', [{ start: 94, end: 114, lyricLineIds: ['1.1'] }]),
+      section('section', [{ start: 94, end: 114, lyricLineIds: ['1.1'] }]),
     ];
     twoPartScore(sections)._splitTwoPartFinalPass([]);
 

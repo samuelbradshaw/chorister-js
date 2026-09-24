@@ -7312,12 +7312,15 @@ ChScore.prototype._addSectionId = function (element, sectionId) {
 // which is what lets a derived template rebuild the sections it came from.
 
 const CH_SECTION_CHAR_TO_TYPE = {
-  'I': 'introduction',
+  // Vocal sections
   'V': 'verse',
   'C': 'chorus',
   'B': 'bridge',
+  // Instrumental sections
+  'I': 'introduction',
   'N': 'interlude',
-  'U': 'unknown',
+  // Generic sections
+  'S': 'section',
 };
 const CH_SECTION_TYPE_TO_CHAR = Object.fromEntries(
   Object.entries(CH_SECTION_CHAR_TO_TYPE).map(([char, type]) => [type, char]));
@@ -7357,7 +7360,7 @@ ChScore.prototype._sectionIdentity = function (type, number) {
 // name and pause depend on the finished list rather than on the section alone, so they are
 // left for the passes at the end of _normalizeSections to settle -- which is why no
 // generator below bothers to make them up.
-ChScore.prototype._newSection = function ({ type = 'unknown', marker = null,
+ChScore.prototype._newSection = function ({ type = 'section', marker = null,
   placement = 'inline', chordPositionRanges = [], lyricsText = null, lyricsAnnotated = null,
   lyricWords = null }) {
   return {
@@ -7463,15 +7466,15 @@ ChScore.prototype._reportTemplates = function () {
 ChScore.prototype._buildSectionsFromTemplate = function (sectionsTemplate, staffNumbers, numChordPositions) {
   const normalizedSectionsTemplate = (
     sectionsTemplate.replace(/\s/g, '') // Remove whitespace
-    .replaceAll('Introduction', 'I')
     .replaceAll('Verse', 'V')
     .replaceAll('Chorus', 'C')
     .replaceAll('Bridge', 'B')
+    .replaceAll('Introduction', 'I')
     .replaceAll('Interlude', 'N')
-    .replaceAll('Unknown', 'U')
+    .replaceAll('Section', 'S')
   );
 
-  // A section is its character (defaulting to unknown) plus any number of '(…)' ranges;
+  // A section is its character (defaulting to a plain section) plus any number of '(…)' ranges;
   // a range is 'start-end', '[staffNumbers]', and ':lyricLocation', each optional but
   // written in that order
   const sectionPattern = /^([A-Z]?)((?:\([^)]*\))*)$/;
@@ -7497,9 +7500,9 @@ ChScore.prototype._buildSectionsFromTemplate = function (sectionsTemplate, staff
       continue;
     }
     if (sectionChar && !(sectionChar in CH_SECTION_CHAR_TO_TYPE)) {
-      console.warn(`Unrecognized section character "${sectionChar}" in sections template; reading it as unknown.`);
+      console.warn(`Unrecognized section character "${sectionChar}" in sections template; reading it as a plain section.`);
     }
-    const type = CH_SECTION_CHAR_TO_TYPE[sectionChar] ?? 'unknown';
+    const type = CH_SECTION_CHAR_TO_TYPE[sectionChar] ?? 'section';
 
     // A section with no '(…)' at all covers the whole song, which is what an empty range
     // spells out anyway, so it reads as a single default range
@@ -8010,7 +8013,17 @@ ChScore.prototype._normalizeSections = function () {
   // when the song opens with one, and the id and name follow from the type and the number.
   // Sections the caller supplied keep their own.
   if (!hasPrebuiltSections) {
-    for (const section of this._scoreData.sections) section.type ||= 'unknown';
+    for (const section of this._scoreData.sections) section.type ||= 'section';
+
+    // Nothing is sung anywhere in the score, so the verse the simple-score generator always
+    // reaches for is a guess about words that aren't there: the passage is a plain section.
+    // Set rather than defaulted, since that verse crowds out the default above. A template's
+    // types are its own, and the instrumental types (introduction, interlude) already fit.
+    if (!hasTemplateSections && !this._scoreData.features.hasLyrics) {
+      for (const section of this._scoreData.sections) {
+        if (!CH_INSTRUMENTAL_SECTION_TYPES.includes(section.type)) section.type = 'section';
+      }
+    }
 
     // Music before anyone sings is the introduction, wherever the sections came from. Asked of
     // the earliest position ANY lyric line sings, not of the first stanza: lines can begin at
@@ -8059,6 +8072,11 @@ ChScore.prototype._normalizeSections = function () {
     this._fillSectionGaps(this._scoreData.sections, this._scoreData.numChordPositions);
     // Before the numbering just below, so a verse it adds is named like the rest
     this._splitTwoPartFinalPass(lyricChordPositionRanges);
+    // After the gap fill, which is what hands a section the trailing music in the first place,
+    // and after the pass above, so a together pass it broke out is asked the same question.
+    // Before the numbering, which is what names the interludes, and before the pause rule,
+    // which reads where each section now ends.
+    if (!hasTemplateSections) this._splitTrailingInterludes(this._scoreData.sections);
     const numbers = this._numberSections(this._scoreData.sections.map(section => section.type));
     const usedSectionIds = new Set();
     let previousVerseNumber = 0;
@@ -8118,6 +8136,132 @@ ChScore.prototype._normalizeSections = function () {
 
 }
 
+// Music at the end of a section that nobody sings over is an interlude of its own: the measures
+// between a chorus and the verse after it ("Follow the Prophet"), or the ones a verse rests
+// through ("Were You There?"). It runs from where the last word stops sounding, and is broken
+// off only when a whole measure long and a section with music of its own follows.
+ChScore.prototype._splitTrailingInterludes = function (sections) {
+  // Nothing is sung anywhere in the score, so every section is already the music itself
+  if (!this._scoreData.features.hasLyrics) return;
+  // Music after the last section with any is how the song ends, not a passage into anything
+  let lastWithMusic = -1;
+  for (let i = sections.length - 1; i >= 0; i--) {
+    if ((sections[i].chordPositionRanges ?? []).length > 0) { lastWithMusic = i; break; }
+  }
+  if (lastWithMusic < 1) return;
+
+  const chordPositions = this._scoreData.chordPositions ?? [];
+  // Each chord position a word is sung on, and where that word stops sounding. Any lyric line on
+  // any staff counts, including a refrain every verse joins in on ("For All the Saints" closes
+  // each verse with an alleluia written on verse 1's line). A melisma sings through every note
+  // its underscore covers, so it is walked out rather than read off the one it is written on.
+  const sungThroughQ = new Map();
+  const sungThrough = (chordPosition, throughQ) => sungThroughQ.set(
+    chordPosition, Math.max(sungThroughQ.get(chordPosition) ?? 0, throughQ));
+  // Held syllables are tracked per voice rather than per staff: an underscore belongs to the
+  // line someone is singing, and a rest in the other voice on the same staff does not end it.
+  const heldByVoice = new Map();
+  for (const event of this._scoreData.meiParsed.querySelectorAll('staff :is(note, chord, rest)')) {
+    if (event.parentElement.closest('chord')) continue;
+    const voice = `${event.closest('staff').getAttribute('n')}/${event.closest('layer')?.getAttribute('n')}`;
+    if (!heldByVoice.has(voice)) heldByVoice.set(voice, new Map());
+    // Where each of this voice's lines sang the syllable its underscore is still carrying
+    const held = heldByVoice.get(voice);
+    // Nobody sings through a rest, whatever the underscore does after it
+    if (event.matches('rest')) { held.clear(); continue; }
+    const chordPosition = Number.parseInt(event.getAttribute('ch-chord-position'));
+    if (Number.isNaN(chordPosition)) continue;
+    // The last syllable with words, not the first: several can share a note where a language
+    // elides them, and it is the last one's @con that says what follows. Help text isn't sung.
+    const sylsByLine = new Map();
+    for (const lyricElement of event.children) {
+      if (!lyricElement.matches('verse:not([ch-help-text])')) continue;
+      sylsByLine.set(lyricElement.getAttribute('n'), [...lyricElement.querySelectorAll(
+        'syl:not(:empty):not([ch-help-text])')].at(-1) ?? null);
+    }
+    if (held.size === 0 && sylsByLine.size === 0) continue;
+
+    const throughQ = chordPositions[chordPosition].startQ + (this._wholeNotesOf(event) ?? 0) * 4;
+    // A held syllable sings through this note too, unless the line takes it back here -- with
+    // the next syllable, or with the empty stub that closes the underscore
+    for (const [lineNumber, heldAt] of held) {
+      if (sylsByLine.has(lineNumber)) held.delete(lineNumber);
+      else sungThrough(heldAt, throughQ);
+    }
+    for (const [lineNumber, syl] of sylsByLine) {
+      if (!syl) continue;
+      sungThrough(chordPosition, throughQ);
+      if (syl.getAttribute('con') === 'u') held.set(lineNumber, chordPosition);
+    }
+  }
+  if (sungThroughQ.size === 0) return;
+
+  const added = [];
+  for (const [index, section] of sections.entries()) {
+    if (index >= lastWithMusic) continue;
+    const ranges = section.chordPositionRanges ?? [];
+    if (ranges.length === 0) continue;
+    // A section that is already the music itself has no words to trail off from, and its
+    // ranges can cover music a verse sings elsewhere -- an introduction replayed under one
+    if (CH_INSTRUMENTAL_SECTION_TYPES.includes(section.type)) continue;
+
+    // Back from the section's end to the last word sung in it, in the order its ranges are
+    // played, so a stretch running on over a range boundary is found whole
+    let lastRange = -1;
+    let lastSung = -1;
+    for (let r = ranges.length - 1; r >= 0 && lastSung < 0; r--) {
+      for (let cp = ranges[r].end - 1; cp >= ranges[r].start; cp--) {
+        if (sungThroughQ.has(cp)) { lastRange = r; lastSung = cp; break; }
+      }
+    }
+    // Nothing sung in it at all: the section is already the music itself
+    if (lastSung < 0) continue;
+
+    // The interlude opens where the last word stops sounding, which is not the next chord
+    // position: the accompaniment goes on striking chords under a note still being held.
+    // Music in a later range is somewhere else in the score, so the note is over by then.
+    const stopsQ = sungThroughQ.get(lastSung);
+    let splitIndex = -1;
+    let start = -1;
+    for (let cp = lastSung + 1; cp < ranges[lastRange].end; cp++) {
+      if (chordPositions[cp].startQ >= stopsQ) { splitIndex = lastRange; start = cp; break; }
+    }
+    for (let r = lastRange + 1; splitIndex < 0 && r < ranges.length; r++) {
+      if (ranges[r].end > ranges[r].start) { splitIndex = r; start = ranges[r].start; }
+    }
+    if (splitIndex < 0) continue;
+
+    // A whole bar of it at least, measured in the time signature rather than in the measure as
+    // engraved: the short bar a song with a pickup ends on is one note held, not a passage
+    const [beats, beatUnit] = this._scoreData
+      .measures[chordPositions[start].measureIndex]?.timeSignature ?? [];
+    if (!beats || !beatUnit) continue;
+    let playedQ = 0;
+    for (let r = splitIndex; r < ranges.length; r++) {
+      const from = r === splitIndex ? start : ranges[r].start;
+      if (ranges[r].end > from) {
+        playedQ += chordPositions[ranges[r].end - 1].endQ - chordPositions[from].startQ;
+      }
+    }
+    if (playedQ < beats * (4 / beatUnit)) continue;
+
+    // Nothing is sung over any of it, so no range it takes names a lyric line
+    const kept = ranges.slice(0, splitIndex);
+    if (ranges[splitIndex].start < start) kept.push({ ...ranges[splitIndex], end: start });
+    const moved = ranges.slice(splitIndex).map(range => ({ ...range, lyricLineIds: [] }));
+    moved[0].start = start;
+
+    section.chordPositionRanges = kept;
+    added.push({ after: section, ranges: moved });
+  }
+
+  for (const { after, ranges } of added) {
+    sections.splice(sections.indexOf(after) + 1, 0, this._newSection({
+      type: 'interlude', placement: after.placement, chordPositionRanges: ranges,
+    }));
+  }
+}
+
 // A two-part song sings verse 1, then verse 2, then both parts together. That third pass is a
 // verse of its own even though it sings no words the other two haven't, and it needs a section
 // of its own to be written down and handed back; left as a second range on verse 2 it reads as
@@ -8167,7 +8311,7 @@ ChScore.prototype._splitTwoPartFinalPass = function (lyricChordPositionRanges = 
   // A section with no type yet counts, since types are settled after this runs and this is the
   // passage the engraving says least about: "Love Is Spoken Here" prints "(3rd ending)" over
   // its closing words, which numbers nothing, so the stanza is left unclassified.
-  const unclassified = (section) => !section.type || section.type === 'unknown';
+  const unclassified = (section) => !section.type || section.type === 'section';
   const verses = sections.filter(section =>
     (section.type === 'verse' || unclassified(section))
     && (section.chordPositionRanges?.length ?? 0) > 0);
@@ -12728,7 +12872,7 @@ ChScore.prototype._stavesPlayingIn = function (verseNumber) {
     .filter(staffNumber => (entersAt.get(staffNumber) ?? 1) <= (Number.isNaN(verse) ? 1 : verse));
 }
 
-// What a stanza is called: "Verse 2", "Chorus", or "Unknown" where the score says
+// What a stanza is called: "Verse 2", "Chorus", or "Section" where the score says
 // nothing. Settles what the name is read from as it goes — a numbered lyric line is a
 // verse even with no verse@label, and a marker keeps only its digits. Stanza or section.
 ChScore.prototype._stanzaName = function (stanza) {
@@ -12749,7 +12893,7 @@ ChScore.prototype._stanzaName = function (stanza) {
     return `Verse ${stanza.marker || this._verseLineNumber(stanza.lyricLineIds?.[0]) || ''}`.trim();
   }
   // Types are stored lowercase ("chorus", "bridge") and displayed capitalized
-  return stanza.type ? stanza.type.charAt(0).toUpperCase() + stanza.type.slice(1) : 'Unknown';
+  return stanza.type ? stanza.type.charAt(0).toUpperCase() + stanza.type.slice(1) : 'Section';
 }
 
 // A verse number as engraved carries the punctuation that goes with it: "2.", "(3."

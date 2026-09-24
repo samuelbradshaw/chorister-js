@@ -415,12 +415,12 @@ section is a section character followed by the chord position ranges it covers, 
 parentheses:
 
 Section characters:
-- I = introduction
 - V = verse
 - C = chorus
 - B = bridge
+- I = introduction
 - N = interlude
-- U = unknown (the default, if no section character is given)
+- S = section (the default, if no section character is given)
 
 Inside each pair of parentheses:
 - **Chord position range** – `start-end` (exclusive end). Default: the whole song (`0` to the end).
@@ -430,12 +430,12 @@ Inside each pair of parentheses:
 A lyric location standing on its own, with no chord position range in front of it, marks a section the score never plays – `V(:below)` is a verse printed under the music, and it gets no chord position ranges at all. With a chord position range in front of it the section still has its music: `C(0-37:none)` is played inline with nothing sung over it.
 
 Normalizations:
-- Introduction –> I
 - Verse –> V
 - Chorus –> C
 - Bridge –> B
+- Introduction –> I
 - Interlude –> N
-- Unknown –> U
+- Section –> S
 
 Notes:
 - A section with no parentheses includes the whole song – for example, `V` is a single verse that includes all of the chord positions and staves in the sheet music.
@@ -545,7 +545,7 @@ score whose measure 9 begins at chord position 32.
 
 Properties:
 - **sectionId** – Any unique ID for the part. String.
-- **type** – Section type. Valid values: "introduction", "verse", "chorus", "bridge", "interlude", "unknown".
+- **type** – Section type. Valid section types: "verse", "chorus", "bridge", "introduction", "interlude", "section". "section" is the plain one, used wherever the score says nothing more about a passage than where it is – including every section of a score with nothing sung in it. Where a section ends with at least a whole measure of music that nothing is sung over, and another section follows, that music is broken off as an "interlude", starting where the last word stops sounding.
 - **name** – Section name that may be visible to users. String.
 - **marker** – Verse number or similar sequential marker. String. Optional.
 - **placement** – Placement of the section in the score. Valid values: "inline" (inline with the music), "below" (below the music), "none" (not placed in the score).

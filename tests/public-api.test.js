@@ -28,6 +28,29 @@ setupStandardHooks();
 // ============================================================
 // load()
 // ============================================================
+const MINIMAL_MUSICXML = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>1</divisions>
+        <key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef>
+      </attributes>
+      <direction placement="above">
+        <direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type>
+      </direction>
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>4</duration><type>whole</type>
+      </note>
+      <barline location="right"><bar-style>light-heavy</bar-style></barline>
+    </measure>
+  </part>
+</score-partwise>`;
+
 describe('load()', () => {
   it('should load a score and return scoreData', async () => {
     const score = new ChScore('#score-container');
@@ -813,30 +836,8 @@ describe('Edge Cases', () => {
   });
 
   it('should handle a minimal single-measure MusicXML score', async () => {
-    const minimalMusicXml = `<?xml version="1.0" encoding="UTF-8"?>
-<score-partwise version="4.0">
-  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
-  <part id="P1">
-    <measure number="1">
-      <attributes>
-        <divisions>1</divisions>
-        <key><fifths>0</fifths></key>
-        <time><beats>4</beats><beat-type>4</beat-type></time>
-        <clef><sign>G</sign><line>2</line></clef>
-      </attributes>
-      <direction placement="above">
-        <direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type>
-      </direction>
-      <note>
-        <pitch><step>C</step><octave>4</octave></pitch>
-        <duration>4</duration><type>whole</type>
-      </note>
-      <barline location="right"><bar-style>light-heavy</bar-style></barline>
-    </measure>
-  </part>
-</score-partwise>`;
     const score = new ChScore('#score-container');
-    const scoreData = await score.load('musicxml', { scoreContent: minimalMusicXml });
+    const scoreData = await score.load('musicxml', { scoreContent: MINIMAL_MUSICXML });
     expect(scoreData).toBeDefined();
     expect(scoreData.measures.length).toBe(1);
     expect(scoreData.chordPositions.length).toBe(1);
@@ -894,6 +895,128 @@ describe('_normalizeSections() — Section generation', () => {
       expect(section).toHaveProperty('placement');
       expect(section).toHaveProperty('chordPositionRanges');
     }
+  });
+
+  it('should call the one section of a score with no lyrics a plain section', async () => {
+    const score = new ChScore('#score-container');
+    ChScore.prototype._drawScore = function() {};
+    await score.load('musicxml', { scoreContent: MINIMAL_MUSICXML });
+    ChScore.prototype._drawScore = origDrawScore;
+
+    expect(score._scoreData.features.hasLyrics).toBe(false);
+    expect(score._scoreData.sections.map(section => section.type)).toEqual(['section']);
+  });
+
+  // ── a trailing instrumental stretch becomes an interlude ──
+  //
+  // Bars of four quarter notes, `sungBeats` of them carrying words. Two lyric lines, so
+  // there is a second verse for the music between them to lead into.
+  const barsMusicXml = (sungBeats, bars) => {
+    const measures = [];
+    for (let bar = 0; bar < bars; bar++) {
+      const notes = [];
+      for (let beat = 0; beat < 4; beat++) {
+        const words = bar * 4 + beat < sungBeats
+          ? '<lyric number="1"><syllabic>single</syllabic><text>la</text></lyric>'
+            + '<lyric number="2"><syllabic>single</syllabic><text>lo</text></lyric>'
+          : '';
+        notes.push('<note><pitch><step>C</step><octave>4</octave></pitch>'
+          + `<duration>1</duration><type>quarter</type>${words}</note>`);
+      }
+      const attributes = bar === 0
+        ? '<attributes><divisions>1</divisions><key><fifths>0</fifths></key>'
+          + '<time><beats>4</beats><beat-type>4</beat-type></time>'
+          + '<clef><sign>G</sign><line>2</line></clef></attributes>' : '';
+      measures.push(`<measure number="${bar + 1}">${attributes}${notes.join('')}</measure>`);
+    }
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Voice</part-name></score-part></part-list>
+  <part id="P1">${measures.join('')}</part>
+</score-partwise>`;
+  };
+
+  const sectionsOf = async (musicXml) => {
+    const score = new ChScore('#score-container');
+    ChScore.prototype._drawScore = function() {};
+    await score.load('musicxml', { scoreContent: musicXml });
+    ChScore.prototype._drawScore = origDrawScore;
+    return score._scoreData.sections;
+  };
+  const typesOf = (sections) => sections.map(section => section.type);
+  const rangesOf = (section) => section.chordPositionRanges.map(range => [range.start, range.end]);
+
+  it('should break a whole wordless bar off the end of a section as an interlude', async () => {
+    // Two bars sung, two played over nothing
+    expect(typesOf(await sectionsOf(barsMusicXml(8, 4)))).toEqual(['verse', 'interlude', 'verse']);
+  });
+
+  it('should leave a wordless stretch shorter than a bar with the section', async () => {
+    // Half a bar of it, so there is no whole measure to hand over
+    expect(typesOf(await sectionsOf(barsMusicXml(10, 3)))).not.toContain('interlude');
+  });
+
+  it('should open the interlude where the last word stops sounding', async () => {
+    // Two and a half bars sung, so the passage begins partway through the third bar rather
+    // than at the bar line after it
+    const sections = await sectionsOf(barsMusicXml(10, 4));
+    expect(typesOf(sections)).toEqual(['verse', 'interlude', 'verse']);
+    expect(rangesOf(sections[0])).toEqual([[0, 10]]);
+    expect(rangesOf(sections[1])).toEqual([[10, 16]]);
+  });
+
+  // A voice over an accompaniment, so the singers can rest while the music plays on. The voice
+  // sings the first five notes and rests through bars 3-4; the fifth carries an underscore over
+  // the three after it, which is how a score writes a melisma.
+  const voiceAndAccompanimentMusicXml = () => {
+    const attributes = (sign, line) => '<attributes><divisions>1</divisions>'
+      + '<key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time>'
+      + `<clef><sign>${sign}</sign><line>${line}</line></clef></attributes>`;
+    const voice = [];
+    const accompaniment = [];
+    for (let bar = 0; bar < 4; bar++) {
+      const sung = [];
+      const played = [];
+      for (let beat = 0; beat < 4; beat++) {
+        const note = bar * 4 + beat;
+        if (note < 5) {
+          const extend = note === 4 ? '<extend type="start"/>' : '';
+          const words = ['1', '2'].map(line =>
+            `<lyric number="${line}"><syllabic>single</syllabic>`
+            + `<text>${line === '1' ? 'la' : 'lo'}</text>${extend}</lyric>`).join('');
+          sung.push('<note><pitch><step>C</step><octave>5</octave></pitch>'
+            + `<duration>1</duration><type>quarter</type>${words}</note>`);
+        } else if (note < 8) {
+          // Carried under the underscore, with no words of its own
+          sung.push('<note><pitch><step>D</step><octave>5</octave></pitch>'
+            + '<duration>1</duration><type>quarter</type></note>');
+        } else {
+          sung.push('<note><rest/><duration>1</duration><type>quarter</type></note>');
+        }
+        played.push('<note><pitch><step>C</step><octave>3</octave></pitch>'
+          + '<duration>1</duration><type>quarter</type></note>');
+      }
+      voice.push(`<measure number="${bar + 1}">`
+        + `${bar === 0 ? attributes('G', 2) : ''}${sung.join('')}</measure>`);
+      accompaniment.push(`<measure number="${bar + 1}">`
+        + `${bar === 0 ? attributes('F', 4) : ''}${played.join('')}</measure>`);
+    }
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list>
+    <score-part id="P1"><part-name>Voice</part-name></score-part>
+    <score-part id="P2"><part-name>Piano</part-name></score-part>
+  </part-list>
+  <part id="P1">${voice.join('')}</part>
+  <part id="P2">${accompaniment.join('')}</part>
+</score-partwise>`;
+  };
+
+  it('should keep a melisma’s notes with the section that sings it', async () => {
+    // The passage starts where the held syllable's notes end, not where the word was written
+    const sections = await sectionsOf(voiceAndAccompanimentMusicXml());
+    expect(typesOf(sections)).toEqual(['verse', 'interlude', 'verse']);
+    expect(rangesOf(sections[1])).toEqual([[8, 16]]);
   });
 
   it('should generate verse sections based on inline verse numbers', async () => {
@@ -956,7 +1079,7 @@ describe('_normalizeSections() — Section generation', () => {
   });
 
   // ── generateDefaultSection path (no lyrics, no pre-built sections) ──
-  it('should fall back to unknown section type for score without lyrics text', async () => {
+  it('should fall back to a plain section type for score without lyrics text', async () => {
     // Load HGW MusicXML without lyrics text → no lyric stanzas extracted
     // and without pre-built sections → triggers generateDefaultSection
     const score = new ChScore('#score-container');
@@ -965,7 +1088,7 @@ describe('_normalizeSections() — Section generation', () => {
     ChScore.prototype._drawScore = origDrawScore;
 
     // HGW has inline verse labels → generates sections from simple score
-    // But a score with no lyrics at all would get 'unknown'
+    // But a score with no lyrics at all would get 'section'
     // We can verify the path by checking the structure exists
     expect(score._scoreData.sections.length).toBeGreaterThan(0);
     expect(score._scoreData.sectionsById).toBeDefined();
@@ -2050,7 +2173,7 @@ describe('load() — ABC content cleanup', () => {
 // ============================================================
 // Section types
 // ============================================================
-describe('load() — section types: bridge, interlude, unknown', () => {
+describe('load() — section types: bridge, interlude, section', () => {
   it('should accept sections with type=bridge', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
     ChScore.prototype._drawScore = function() {};
@@ -2103,15 +2226,15 @@ describe('load() — section types: bridge, interlude, unknown', () => {
     expect(interlude.pauseAfter).toBe(true);
   });
 
-  it('should accept sections with type=unknown', async () => {
+  it('should accept sections with type=section', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
     ChScore.prototype._drawScore = function() {};
     const score = new ChScore('#score-container');
 
     const sectionsInput = [{
-      sectionId: 'unknown-1',
-      type: 'unknown',
-      name: 'Unknown Section',
+      sectionId: 'section-1',
+      type: 'section',
+      name: 'Plain Section',
       marker: null,
       placement: 'inline',
       pauseAfter: false,
@@ -2123,9 +2246,9 @@ describe('load() — section types: bridge, interlude, unknown', () => {
     });
     ChScore.prototype._drawScore = origDrawScore;
 
-    const unknown = scoreData.sections.find(s => s.sectionId === 'unknown-1');
-    expect(unknown).toBeDefined();
-    expect(unknown.type).toBe('unknown');
+    const plain = scoreData.sections.find(s => s.sectionId === 'section-1');
+    expect(plain).toBeDefined();
+    expect(plain.type).toBe('section');
   });
 });
 
@@ -3329,11 +3452,11 @@ describe('load() — sectionsTemplate', () => {
       .toEqual(['introduction', 'verse', 'chorus']);
   });
 
-  it('should default a section with no character to unknown', async () => {
+  it('should default a section with no character to a plain section', async () => {
     const scoreData = await loadWithTemplate('(0-37)');
-    expect(scoreData.sections[0].sectionId).toBe('unknown-1');
-    expect(scoreData.sections[0].type).toBe('unknown');
-    expect(scoreData.sections[0].name).toBe('Unknown');
+    expect(scoreData.sections[0].sectionId).toBe('section-1');
+    expect(scoreData.sections[0].type).toBe('section');
+    expect(scoreData.sections[0].name).toBe('Section');
   });
 
   it('should drop staff numbers the score does not have', async () => {
@@ -3349,7 +3472,7 @@ describe('load() — sectionsTemplate', () => {
 
   it('should number ids for every type but put a number in the name only for verses', async () => {
     const scoreData = await loadWithTemplate(
-      'I(0-4); V(4-8); C(8-12); V(12-16); C(16-20); B(20-24); N(24-28); I(28-32); U(32-37)');
+      'I(0-4); V(4-8); C(8-12); V(12-16); C(16-20); B(20-24); N(24-28); I(28-32); S(32-37)');
     expect(scoreData.sections.map(section => [section.sectionId, section.name, section.marker]))
       .toEqual([
         // The first introduction keeps the plain id the hideSectionIds option documents
@@ -3361,7 +3484,7 @@ describe('load() — sectionsTemplate', () => {
         ['bridge-1', 'Bridge', null],
         ['interlude-1', 'Interlude', null],
         ['introduction-2', 'Introduction', null],
-        ['unknown-1', 'Unknown', null],
+        ['section-1', 'Section', null],
       ]);
   });
 
