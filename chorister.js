@@ -1963,6 +1963,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
       // Excluding them breaks that match ("What God Calls Us To", "Close as a Quiet Prayer").
       isAudible: !(isRest || isTiedNote),
       partIds: [], // Added later
+      staffPartIndex: null, // Added later
       expandedChordPositions: [], // Added later
       isMelody: null, // Added later
       startQ: null, // Added later. Q = time in quarter notes.
@@ -2548,6 +2549,12 @@ ChScore.prototype._annotateFromTimemap = function (vrvTimemap, elementsById) {
   this._scoreData.chordPositions = []
   this._scoreData.audibleChordPositions = [];
   const staffPartIdsCache = new Map();
+  // Which note a tied continuation carries on from; the records hold the tie the other way
+  const tiedFrom = new Map();
+  for (const elementId in this._scoreData.notesAndRestsById) {
+    const tiedNoteId = this._scoreData.notesAndRestsById[elementId].tiedNoteId;
+    if (tiedNoteId) tiedFrom.set(tiedNoteId, elementId);
+  }
   // Durations up front, from the on/off pairs in the timemap. The sort below needs them
   // while a chord position is being built, which is before the note's own off entry is
   // reached and elementInfo.durationQ is filled in.
@@ -2604,40 +2611,213 @@ ChScore.prototype._annotateFromTimemap = function (vrvTimemap, elementsById) {
       let melodyNote = null;
       const numNotesByChord = {};
       const chordSizes = {};
+
+      // What the engraver drew on each staff here, which is what says whether the staff is
+      // carrying more lines than it has parts, and how its layers are stemmed
+      const pitched = notesAndRests.filter(note => !note.isRest);
+      const notesByStaff = this._groupBy(pitched, note => note.staffNumber);
+      const stemByNote = new Map(pitched.map(note => [note,
+        note.meiElement.getAttribute('stem.dir')
+        ?? note.meiChordElement?.getAttribute('stem.dir')
+        ?? (note.layerNumber % 2 !== 0 ? 'up' : 'down')]));
+
+      // The parts on a staff only change where the parts do, so they are read once per staff
+      // here rather than once per note. `padding` is what a note none of them can take is
+      // called: the score's own whole-score part, or the name _buildPartsFromTemplate pads with.
+      const partsByStaff = new Map();
+      const staffPartsOf = (staffNumber) => {
+        if (!partsByStaff.has(staffNumber)) {
+          const [staffPartIds, melodyPartIds, fullPartIds] = this._staffPartIds(
+            staffNumber, chordPositionCounter, this._scoreData.parts, staffPartIdsCache);
+          partsByStaff.set(staffNumber, { staffPartIds, melodyPartIds,
+            padding: fullPartIds.length ? fullPartIds
+              : [this._scoreData.features.hasLyrics ? 'accompaniment' : 'instrumental'] });
+        }
+        return partsByStaff.get(staffNumber);
+      };
+
+      // A staff sounding more notes than it has parts is carrying one that is none of them:
+      // a cue-size note the accompaniment plays and nobody sings, like the Ab2 under the bass
+      // in "The Star-Spangled Banner". Cue size also marks a note that is sung but optional,
+      // so the words under it are what tell the two apart.
+      const setAside = new Set();
+      const setAsidePerChord = {};
+      const deepStaffIndex = new Map();
+      const sungLayersByStaff = new Map();
+      const tiedHold = new Map();
+      const reservedByStaff = new Map();
+      const isUnsungCue = (note) => note.isCue && !chChild(note.meiElement, 'verse');
+      const countOutOfChord = (note) => {
+        const chordId = note.meiChordElement?.getAttribute('xml:id');
+        if (chordId) setAsidePerChord[chordId] = (setAsidePerChord[chordId] ?? 0) + 1;
+      };
+      const setAsideNote = (note) => { setAside.add(note); countOutOfChord(note); };
+      // A staff part index counts from the end when negative; this is the place it names
+      const slotOf = (index, length) => index < 0 ? length + index : index;
+
+      // A cue note chorded with a sung one is an alternative for that part rather than a line
+      // of its own: the small C5 over "chil-dren" in "How Dear to God Are Little Children" is
+      // a higher note for whoever can reach it. It takes the part of the note it is written
+      // against, and is counted out of the chord so it can't push that note down a place.
+      const optionalCue = new Map();
+      for (const note of pitched) {
+        if (!note.isCue || !note.meiChordElement) continue;
+        const mates = (notesByStaff.get(note.staffNumber) ?? []).filter(other =>
+          other !== note && other.meiChordElement === note.meiChordElement && !other.isCue);
+        if (!mates.length) continue;
+        optionalCue.set(note, mates.reduce((nearest, other) =>
+          Math.abs(other.pitch - note.pitch) < Math.abs(nearest.pitch - note.pitch) ? other : nearest));
+        countOutOfChord(note);
+      }
+      for (const [staffNumber, staffNotes] of notesByStaff) {
+        const { staffPartIds: partIds } = staffPartsOf(staffNumber);
+        const sung = staffNotes.filter(note => !note.isCue).map(note => note.pitch);
+
+        // A voice of nothing but wordless cue notes is an accompaniment line sharing the
+        // singers' staff, however much room the staff's parts have left -- the small chords
+        // under the sopranos in "God of Our Fathers, Whose Almighty Hand". All of it goes,
+        // not just what the staff has no room for.
+        if (sung.length) {
+          for (const layer of this._groupBy(staffNotes, note => note.layerNumber).values()) {
+            if (layer.every(isUnsungCue)) for (const note of layer) setAsideNote(note);
+          }
+        }
+
+        // Then however many spare places are left, outermost cue note first and lowest after,
+        // since an extra note is usually written under the voicing
+        const spare = staffNotes.filter(note =>
+          !optionalCue.has(note) && !setAside.has(note)).length - partIds.length;
+        if (spare > 0) {
+          const lowest = Math.min(...sung, Infinity);
+          const highest = Math.max(...sung, -Infinity);
+          const outside = (note) => sung.length
+            ? Math.max(lowest - note.pitch, note.pitch - highest, 0) : 0;
+          staffNotes.filter(note => isUnsungCue(note) && !setAside.has(note))
+            .sort((a, b) => (outside(b) - outside(a)) || (a.pitch - b.pitch))
+            .slice(0, spare).forEach(setAsideNote);
+        }
+
+        // A note tied from an earlier position is the same note still sounding, so it keeps the
+        // part it already had and holds that place against the others. The melody held across
+        // the last bar of "I'll Walk with You" is voice 3, and the fresh voice 1 note above it
+        // is the accompaniment rather than a second melody.
+        for (const note of staffNotes) {
+          if (!note.isTiedNote) continue;
+          const origin = this._scoreData.notesAndRestsById[tiedFrom.get(note.elementId)];
+          if (!origin || origin.staffPartIndex === null) continue;
+          tiedHold.set(note, origin);
+          if (!reservedByStaff.has(staffNumber)) reservedByStaff.set(staffNumber, new Set());
+          reservedByStaff.get(staffNumber).add(slotOf(origin.staffPartIndex, partIds.length));
+        }
+
+        // Which of the staff's layers hold a note that is actually sung, by stem direction.
+        // A cue note doesn't: the one over the final chord of "Rise Up, O Men of God" (Men's
+        // Choir) is optional, so the chord under it is free to be both tenors.
+        const sounding = staffNotes.filter(note => !setAside.has(note) && !optionalCue.has(note));
+        const sungLayers = { up: new Set(), down: new Set() };
+        for (const note of sounding) {
+          if (note.isCue) continue;
+          sungLayers[stemByNote.get(note) === 'up' ? 'up' : 'down'].add(note.layerNumber);
+        }
+        sungLayersByStaff.set(staffNumber, sungLayers);
+
+        // Two layers can say which is which by stem direction alone, but a third has no
+        // direction left, and layer numbers need not run top down -- "What God Calls Us To"
+        // writes its bass in voice 1, stems down. So past two layers the notes are ranked
+        // within their direction: stems up from the top part, stems down from the bottom.
+        if (new Set(sounding.map(note => note.layerNumber)).size <= 2) continue;
+        const up = sounding.filter(note => stemByNote.get(note) === 'up').sort((a, b) => b.pitch - a.pitch);
+        const down = sounding.filter(note => stemByNote.get(note) !== 'up').sort((a, b) => a.pitch - b.pitch);
+        up.forEach((note, index) => deepStaffIndex.set(note, index));
+        down.forEach((note, index) =>
+          deepStaffIndex.set(note, Math.max(partIds.length - 1 - index, up.length)));
+      }
+      // Everything a settled note carries, so the four ways of settling one can't drift apart
+      const assignPart = (note, partIds, staffPartIndex = null) => {
+        note.partIds = partIds;
+        note.staffPartIndex = staffPartIndex;
+        note.meiElement.setAttribute('ch-part-id', partIds.join(' '));
+      };
       for (const note of notesAndRests.slice().reverse()) {
-        let positionInChord = null;
+        if (optionalCue.has(note)) continue; // Takes its mate's part, once that is settled
         const layerNumber = note.layerNumber;
         const staffNumber = note.staffNumber;
 
-        if (note.meiChordElement) {
-          const chordId = note.meiChordElement.getAttribute('xml:id');
+        if (tiedHold.has(note)) {
+          const origin = tiedHold.get(note);
+          assignPart(note, [...origin.partIds], origin.staffPartIndex);
+          note.isMelody = origin.isMelody;
+          if (note.isMelody) {
+            note.meiElement.setAttribute('ch-melody', '');
+            this._scoreData.features.hasMelodyInfo = true;
+            if (!melodyNote) melodyNote = note;
+          }
+          continue;
+        }
+
+        const { staffPartIds, melodyPartIds, padding } = staffPartsOf(staffNumber);
+        if (setAside.has(note)) {
+          // Counted out of the chord below too, so it can't shift the parts the others get
+          assignPart(note, [...padding]);
+          note.isMelody = false;
+          continue;
+        }
+
+        let positionInChord = null;
+        const chordId = note.meiChordElement?.getAttribute('xml:id');
+        if (chordId) {
           if (!(chordId in numNotesByChord)) {
             numNotesByChord[chordId] = 0;
-            chordSizes[chordId] = note.meiChordElement.querySelectorAll('note').length;
+            chordSizes[chordId] = note.meiChordElement.querySelectorAll('note').length
+              - (setAsidePerChord[chordId] ?? 0);
           }
           positionInChord = numNotesByChord[chordId];
           numNotesByChord[chordId] += 1;
         }
 
         // Calculate staff part index
-        // TODO: This doesn't work correctly when a lower part temporarily goes above the upper part. Example: last few Tenor 2 notes in "High On the Mountain Top" (Men's Choir, 1985 Hymns #333).
-        // TODO: Logic will fail if there are more than two layers on the staff. However, three or four parts can be on a staff if they're chorded and placed into a maximum of two layers. Example: "Love at Home" (Women, 1985 Hymns #318).
         let staffPartIndex;
-        if (layerNumber % 2 !== 0) {
+        if (deepStaffIndex.has(note)) {
+          // Ranked by stem direction above, because the staff carries more than two layers
+          staffPartIndex = deepStaffIndex.get(note);
+        } else if (layerNumber % 2 !== 0) {
           // Odd layer (stems up) – staff part index should be positive
           staffPartIndex = positionInChord || 0;
         } else {
           // Even layer (stems down) – staff part index should be negative
-          if (note.meiChordElement) {
-            staffPartIndex = positionInChord - chordSizes[note.meiChordElement.getAttribute('xml:id')];
-          } else {
-            staffPartIndex = -1;
-          }
+          staffPartIndex = chordId ? positionInChord - chordSizes[chordId] : -1;
         }
 
-        const [staffPartIds, melodyPartIds] = this._staffPartIds(staffNumber, chordPositionCounter, this._scoreData.parts, staffPartIdsCache);
-        note.partIds = staffPartIds.length > Math.abs(staffPartIndex) ? staffPartIds.at(staffPartIndex) : [];
-        note.meiElement.setAttribute('ch-part-id', note.partIds.join(' '));
+        // A chord fills the parts from its own end -- stems up from the top, stems down from
+        // the bottom -- reaching the far end only where no other layer's sung note holds it.
+        // Past that it doubles back onto the last part it can reach, the one singing it:
+        // "Reverently and Meekly Now" writes the soprano over a G4+Bb4, which is the alto
+        // divided. Anything else past the last part takes the padding name.
+        let within = staffPartIds.length > Math.abs(staffPartIndex);
+        if (chordId) {
+          // A staff whose own notes are all rests here has no layer holding either end
+          const far = sungLayersByStaff.get(staffNumber)?.[stemByNote.get(note) === 'up' ? 'down' : 'up'];
+          const farHeld = !!far && (far.size > 1 || (far.size === 1 && !far.has(layerNumber)));
+          const room = (farHeld ? staffPartIds.length - 1 : staffPartIds.length)
+            - (staffPartIndex < 0 ? 0 : 1);
+          within = room >= (staffPartIndex < 0 ? 1 : 0);
+          if (within) {
+            staffPartIndex = staffPartIndex < 0
+              ? Math.max(staffPartIndex, -room) : Math.min(staffPartIndex, room);
+          }
+        }
+        // A place a tie is holding is taken; this note fills on past it. The walk stops inside
+        // the list, so the index is still in range when it ends.
+        const reserved = reservedByStaff.get(staffNumber);
+        if (within && reserved) {
+          const step = staffPartIndex < 0 ? -1 : 1;
+          const length = staffPartIds.length;
+          while (reserved.has(slotOf(staffPartIndex, length))
+            && slotOf(staffPartIndex + step, length) >= 0
+            && slotOf(staffPartIndex + step, length) < length) staffPartIndex += step;
+        }
+        assignPart(note, within ? [...staffPartIds.at(staffPartIndex)] : [...padding],
+          within ? staffPartIndex : null);
 
         if (melodyPartIds.length && note.partIds.some(partId => melodyPartIds.includes(partId))) {
           // Two-part songs have multiple melodies (example: A Child’s Prayer). Tag notes from both melodies, but choose the first for melodyNote, which is expected to be singular downstream.
@@ -2648,6 +2828,14 @@ ChScore.prototype._annotateFromTimemap = function (vrvTimemap, elementsById) {
         } else {
           note.isMelody = false;
         }
+      }
+
+      // Now that every sung note has its part, the cue notes written against them take the
+      // same one. Not melodyNote, which stays the note the words are actually under.
+      for (const [note, mate] of optionalCue) {
+        assignPart(note, [...mate.partIds]);
+        note.isMelody = mate.isMelody;
+        if (note.isMelody) note.meiElement.setAttribute('ch-melody', '');
       }
 
       if (chordPositionIsAudible) this._scoreData.audibleChordPositions.push(chordPositionCounter);
@@ -3254,13 +3442,19 @@ ChScore.prototype._renumberMeasures = function (meiParsed) {
 }
 
 
+// Soprano, alto, tenor or bass, numbered where the part divides ('soprano-1')
+const CH_SATB_PART = /^(soprano|alto|tenor|bass)(-\d+)?$/;
+// The parts that play the whole score rather than sitting at one staff part index
+const CH_WHOLE_SCORE_PARTS = ['instrumental', 'accompaniment'];
+
 // The parts sounding on a staff at a chord position, as a list of lists indexed by staff
-// part index, plus whichever of them carry the tune. `cache` is supplied by the caller and
-// keyed by chord position and staff, since the answer only changes where the parts do.
+// part index, whichever of them carry the tune, and whichever play the whole score rather
+// than sitting at one index. `cache` is supplied by the caller and keyed by chord position
+// and staff, since the answer only changes where the parts do.
 ChScore.prototype._staffPartIds = function (staffNumber, chordPosition, parts, cache) {
   const cacheKey = `${chordPosition}:${staffNumber}`;
   const cached = cache.get(cacheKey);
-  if (cached) return [cached[0].map(staffPartIds => [...staffPartIds]), cached[1]];
+  if (cached) return [cached[0].map(staffPartIds => [...staffPartIds]), cached[1], cached[2]];
 
   const partIdsDict = { 1: [], 2: [], 3: [], 4: [] };
   const fullPartIds = [];
@@ -3289,7 +3483,7 @@ ChScore.prototype._staffPartIds = function (staffNumber, chordPosition, parts, c
     } else if (part.placement === 'full') {
       fullPartIds.push(partId);
     } else if (part.placement === 'auto') {
-      if (['instrumental', 'accompaniment'].includes(partId)) {
+      if (CH_WHOLE_SCORE_PARTS.includes(partId)) {
         fullPartIds.push(partId);
       } else {
         partIdsDict[autoPlacementCounter].push(partId);
@@ -3299,16 +3493,34 @@ ChScore.prototype._staffPartIds = function (staffNumber, chordPosition, parts, c
     if (chordPositionRefInfo.isMelody) melodyPartIds.push(partId);
   }
 
-  for (const fullPartId of fullPartIds) {
-    for (const key in partIdsDict) partIdsDict[key].push(fullPartId);
+  // Convert part IDs dict to a list of lists, and remove empty lists at the end
+  const partIds = Object.values(partIdsDict);
+
+  // A four-part hymn printed on two staves has no accompaniment of its own: the keyboard
+  // plays the voices, so every note on such a staff is the accompaniment as well as its own
+  // part. Asked per staff, so the SA and TB staves under a descant still get it while the
+  // descant's own staff does not, but skipped wherever the score writes an accompaniment on
+  // staves of its own. Emptied of its trailing places first, so the staff keeps the length
+  // its part indexes are written for.
+  const allSatb = partIds.some(ids => ids.length)
+    && partIds.every(ids => ids.every(id => CH_SATB_PART.test(id)))
+    && !parts.some(part => part.placement === 'full'
+      || CH_WHOLE_SCORE_PARTS.includes(part.partId));
+  if (allSatb) {
+    while (partIds.length > 1 && partIds.at(-1).length === 0) partIds.pop();
+    fullPartIds.push(this._scoreData.features.hasLyrics ? 'accompaniment' : 'instrumental');
   }
 
-  // Convert part IDs dict to a list of lists, and remove empty lists at the end
-  let partIds = Object.values(partIdsDict);
+  // Both passes are needed: the append between them gives the second one different lists
+  for (const fullPartId of fullPartIds) {
+    for (const staffPartIds of partIds) staffPartIds.push(fullPartId);
+  }
   while (partIds.length > 1 && partIds.at(-1).length === 0) partIds.pop();
 
-  cache.set(cacheKey, [partIds, melodyPartIds]);
-  return [partIds.map(cachedPartIds => [...cachedPartIds]), melodyPartIds];
+  // Only the first is copied; the other two are the cached arrays themselves, so a caller
+  // that pushed into either would poison every later hit
+  cache.set(cacheKey, [partIds, melodyPartIds, fullPartIds]);
+  return [partIds.map(cachedPartIds => [...cachedPartIds]), melodyPartIds, fullPartIds];
 }
 
 // Mark help text and settle verse numbers on the score's lyric elements. One walk over the
