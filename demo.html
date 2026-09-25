@@ -209,6 +209,12 @@
           </label>
         </div>
         <div>
+          <label>
+            <h3>Sections template (optional)</h3>
+            <input type="text" name="sectionsTemplate">
+          </label>
+        </div>
+        <div>
           <button type="button" id="load-score-btn">Load Score</button>
         </div>
       </form>
@@ -409,6 +415,7 @@
         const scoreContentInput = customScoreForm.querySelector('[name="scoreContent"]');
         const lyricsTextInput = customScoreForm.querySelector('[name="lyricsText"]');
         const partsTemplateInput = customScoreForm.querySelector('[name="partsTemplate"]');
+        const sectionsTemplateInput = customScoreForm.querySelector('[name="sectionsTemplate"]');
         
         scoreContainer.style.display = 'none';
         
@@ -418,6 +425,7 @@
           demoScores['custom-score'].scoreContent = scoreContentInput.value;
           demoScores['custom-score'].lyricsText = lyricsTextInput.value;
           demoScores['custom-score'].partsTemplate = partsTemplateInput.value;
+          demoScores['custom-score'].sectionsTemplate = sectionsTemplateInput.value;
           if (scoreContentInput.value) {
             scoreContainer.style.display = 'flex';
             loadScore('custom-score');
@@ -863,6 +871,7 @@
             scoreContent: null,
             lyricsText: null,
             partsTemplate: null,
+            sectionsTemplate: null,
           },
         };
         

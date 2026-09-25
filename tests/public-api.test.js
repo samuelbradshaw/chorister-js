@@ -3384,6 +3384,46 @@ describe('load() — sectionsTemplate', () => {
     expect(scoreData.templates.sectionsTemplateCp).toBe('I(0-12); V(12-37)');
   });
 
+  // ── /force ──
+  // The flag says the template is the authority, not the engraving. It is read in load() and
+  // stripped before parsing, so it never reads as a section of its own, and echoed back on the
+  // reported template so feeding that in again reproduces the same reading.
+  it('should not read /force as a section, and should echo it back', async () => {
+    const scoreData = await loadWithTemplate('I(0-12); V(12-37) /force');
+    expect(scoreData.sections.map(section => section.sectionId))
+      .toEqual(['introduction', 'verse-1']);
+    expect(scoreData.templates.sectionsTemplateCp).toBe('I(0-12); V(12-37) /force');
+  });
+
+  it('should not echo /force on a template that did not ask for it', async () => {
+    const scoreData = await loadWithTemplate('I(0-12); V(12-37)');
+    expect(scoreData.templates.sectionsTemplateCp).toBe('I(0-12); V(12-37)');
+  });
+
+  // A two-part song's verses sung together is a playthrough the engraving has no way to
+  // write when the music is printed once. A forced template can claim it; an unforced one
+  // still gets the sections, but the expansion stays at what the score said.
+  it('should let a forced template claim more playthroughs than the engraving writes', async () => {
+    const passes = (scoreData) => scoreData.meiParsed
+      .querySelector('expansion[plist]')?.getAttribute('plist').trim().split(/\s+/).length ?? 0;
+    const template = 'I(0-12); V(12-37); V(12-37); V(12-37); V(12-37); V(12-37)';
+    const plain = await loadWithTemplate(template);
+    const forced = await loadWithTemplate(`${template} /force`);
+    expect(forced.sections.filter(section => section.type === 'verse').length).toBe(5);
+    expect(passes(forced)).toBe(5);
+    expect(passes(forced)).toBeGreaterThan(passes(plain));
+  });
+
+  it('should build the same sections with or without /force where the score agrees', async () => {
+    const plain = await loadWithTemplate('I(0-12); V(12-37); C(12-37); V(12-37)');
+    const forced = await loadWithTemplate('I(0-12); V(12-37); C(12-37); V(12-37) /force');
+    const shape = (scoreData) => scoreData.sections.map(section =>
+      `${section.sectionId}|${section.type}|${section.placement}|` +
+      section.chordPositionRanges.map(range => `${range.start}-${range.end}`).join(','));
+    expect(forced.sections.length).toBe(plain.sections.length);
+    expect(shape(forced)).toEqual(shape(plain));
+  });
+
   it('should build sections in template order, with ids, names, and markers', async () => {
     const scoreData = await loadWithTemplate('I(0-12); V(12-37); C(12-37); V(12-37)');
     expect(scoreData.sections.map(section => section.sectionId))

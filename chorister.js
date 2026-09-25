@@ -404,6 +404,9 @@ ChScore.prototype.load = async function (format, {
     sections: sectionsTemplate ?? null,
     lyricLines: lyricLinesTemplate ?? null,
   };
+  // '/force' says the sections template is the authority and the engraving is not: what it
+  // names is what the song has, whatever the score's own verse numbers and leftover words say.
+  this._forcedSections = CH_FORCE_FLAG.test(sectionsTemplate ?? '');
 
   // Process MEI, draw SVG, and load MIDI
   this._parseAndAnnotateMei(scoreId, lang);
@@ -3756,16 +3759,17 @@ ChScore.prototype._normalizeLyricLineNumbers = function () {
       }
     }
 
-    // A staff with no melody (a descant) numbers its own lines from 1. Beside the melody, the
-    // parts' words keep their rows: they're on other notes, so they share none, and the row
-    // says which verse an echo belongs to ("Stand by Me" engraves each verse's echo on that
-    // verse's row).
+    // A staff numbers its own lines from 1, whether or not it carries the tune: a staff that
+    // does has rows spoken for, so the words beside it come down only to the first rows the
+    // melody isn't using. The shift is uniform, so a gap the engraving made survives it.
     for (const staff of new Set(lines.map(line => line.staff))) {
       const secondary = lines.filter(line => line.staff === staff && line.secondary && line.sungAt.size > 0);
-      if (secondary.length === 0 || melody.some(line => line.staff === staff)) continue;
+      if (secondary.length === 0) continue;
       const rowNow = (line) => rowOf.get(line.elements[0]) ?? line.row;
-      const shift = Math.min(...secondary.map(rowNow)) - 1;
-      for (const line of secondary) setRow(line.elements, rowNow(line) - shift);
+      const taken = new Set(melody.filter(line => line.staff === staff).map(rowNow));
+      let shift = Math.min(...secondary.map(rowNow)) - 1;
+      while (shift > 0 && secondary.some(line => taken.has(rowNow(line) - shift))) shift -= 1;
+      if (shift > 0) for (const line of secondary) setRow(line.elements, rowNow(line) - shift);
     }
 
     carried = new Map(melody.map(line => {
@@ -6288,6 +6292,9 @@ ChScore.prototype._normalizeParts = function (chordPositionIndex) {
 // way at both ends by the helpers below, which is what lets a derived template rebuild the
 // parts it came from.
 
+// The sections-template flag that makes the template authoritative over the engraving
+const CH_FORCE_FLAG = /\/force\b/;
+
 const CH_PART_CHAR_TO_ID = {
   'M': 'melody',
   'S': 'soprano',
@@ -7108,6 +7115,19 @@ ChScore.prototype._buildPartsFromTemplate = function (partsTemplate, staffNumber
       }
       partInfoByPartId[partId].chordPositionRefs[chordPosition].staffNumbers.push(staffNumber);
     }
+
+    // A part this segment doesn't name has stopped playing here. Unsaid, it goes on:
+    // _staffPartIds holds the last ref at or before a chord position for the rest of the song,
+    // so a descant the voicing drops would keep claiming a voice. An empty staff list is how a
+    // part says it has stopped, and _staffPartIds already passes over a ref naming no staff.
+    for (const partInfo of Object.values(partInfoByPartId)) {
+      if (chordPosition in partInfo.chordPositionRefs) continue;
+      partInfo.chordPositionRefs[chordPosition] = {
+        isMelody: false,
+        staffNumbers: [],
+        lyricLineIds: null,
+      };
+    }
   }
 
   // Build parts list
@@ -7412,10 +7432,10 @@ ChScore.prototype._fillSectionGaps = function (sections, numChordPositions) {
   }
 }
 
-// Whether a short pause follows each section, for the whole list at once. An introduction
-// the score brackets is followed by one. Anything else pauses only where the music wraps
-// back for another playthrough, and only when the song ends on a note too short to breathe
-// in -- a rest, an unsung note, or one longer than a quarter already gives them the breath.
+// Whether a short pause follows each section, for the whole list at once. An introduction the
+// score brackets is followed by one. Anything else pauses only where the next section starts
+// the sheet over from its first chord position -- the traditional hymn shape, where nothing is
+// written in to breathe in -- and only when the song ends on a note too short to breathe in.
 ChScore.prototype._getPauseAfters = function (sections, hasIntroBrackets = null) {
   hasIntroBrackets ??= this._getIntroBrackets(this._scoreData.meiParsed).length > 0;
   const lastElement = this._scoreData.meiParsed.querySelector(
@@ -7428,9 +7448,7 @@ ChScore.prototype._getPauseAfters = function (sections, hasIntroBrackets = null)
     if (section.type === 'introduction') return hasIntroBrackets;
     const nextSection = sections[index + 1];
     if (!nextSection || !songEndsOnShortSungNote) return false;
-    const end = section.chordPositionRanges.at(-1)?.end;
-    const nextStart = nextSection.chordPositionRanges[0]?.start;
-    return end != null && nextStart != null && nextStart < end;
+    return nextSection.chordPositionRanges[0]?.start === 0;
   });
 }
 
@@ -7443,6 +7461,8 @@ ChScore.prototype._reportTemplates = function () {
   const cp = 'chord-position';
   const mb = 'measure-beat';
   const supplied = this._suppliedTemplates;
+  // Echoed so the reported template reproduces this reading when it is fed in again
+  const forced = this._forcedSections ? ' /force' : '';
   this._scoreData.templates = {
     // Handed back untouched, in whichever form it was written: a caller who wants to know
     // what they asked for should not have to tell it apart from what the score answered
@@ -7450,8 +7470,8 @@ ChScore.prototype._reportTemplates = function () {
     partsTemplateCp: this._convertPartsToTemplate(this._scoreData.parts, cp),
     partsTemplateMb: this._convertPartsToTemplate(this._scoreData.parts, mb),
     sectionsTemplateInput: supplied.sections,
-    sectionsTemplateCp: this._convertSectionsToTemplate(this._scoreData.sections, cp),
-    sectionsTemplateMb: this._convertSectionsToTemplate(this._scoreData.sections, mb),
+    sectionsTemplateCp: this._convertSectionsToTemplate(this._scoreData.sections, cp) + forced,
+    sectionsTemplateMb: this._convertSectionsToTemplate(this._scoreData.sections, mb) + forced,
     lyricLinesTemplateInput: supplied.lyricLines,
     lyricLinesTemplateCp: this._convertLyricLinesToTemplate(this._scoreData.lyricLineBreaks, cp),
     lyricLinesTemplateMb: this._convertLyricLinesToTemplate(this._scoreData.lyricLineBreaks, mb),
@@ -7465,7 +7485,8 @@ ChScore.prototype._reportTemplates = function () {
 // a measure or chord position this score hasn't got: the template describes another engraving.
 ChScore.prototype._buildSectionsFromTemplate = function (sectionsTemplate, staffNumbers, numChordPositions) {
   const normalizedSectionsTemplate = (
-    sectionsTemplate.replace(/\s/g, '') // Remove whitespace
+    sectionsTemplate.replace(new RegExp(CH_FORCE_FLAG, 'g'), '') // The flag, read in load()
+    .replace(/\s/g, '') // Remove whitespace
     .replaceAll('Verse', 'V')
     .replaceAll('Chorus', 'C')
     .replaceAll('Bridge', 'B')
@@ -7672,10 +7693,35 @@ ChScore.prototype._normalizeSections = function () {
   const verseNumbers = stackedVerseLines.length > labelledVerseNumbers.length
     ? stackedVerseLines : labelledVerseNumbers;
   const hasIntroBrackets = this._getIntroBrackets(this._scoreData.meiParsed).length > 0;
+  // A forced template says how many playthroughs the song has: how many sections cover the
+  // most-covered chord position, so a verse and its chorus divide one while two verses over
+  // the same music are two. Built here rather than at step 2, because the expansion below
+  // comes first and would otherwise be a pass short; kept so step 2 doesn't rebuild it.
+  const numChordPositions = this._scoreData.numChordPositions;
+  let forcedTemplateSections = null;
+  let templatePasses = 0;
+  if (!hasPrebuiltSections && this._forcedSections && this._suppliedTemplates.sections) {
+    forcedTemplateSections = this._buildSectionsFromTemplate(
+      this._suppliedTemplates.sections, this._scoreData.staffNumbers, numChordPositions) ?? [];
+    const covers = new Array(numChordPositions).fill(0);
+    for (const section of forcedTemplateSections) {
+      if (section.type === 'introduction') continue;
+      // Counted per section rather than per range, so a section replaying part of itself is
+      // still one playthrough
+      const covered = new Set();
+      for (const range of section.chordPositionRanges ?? []) {
+        for (let cp = Math.max(0, range.start ?? 0);
+          cp < Math.min(numChordPositions, range.end ?? numChordPositions); cp++) covered.add(cp);
+      }
+      for (const cp of covered) covers[cp] += 1;
+    }
+    templatePasses = covers.reduce((most, count) => count > most ? count : most, 0);
+  }
+
   const [hasComplexSections, hasInitialChorus, expansionIds] = this._updateExpansionElement(
-    this._scoreData.meiParsed, verseNumbers.length, hasIntroBrackets,
+    this._scoreData.meiParsed, Math.max(verseNumbers.length, templatePasses), hasIntroBrackets,
     this._scoreData.features.hasRepeatOrJump,
-    { stackedLines: stackedVerseLines, numChordPositions: this._scoreData.numChordPositions },
+    { stackedLines: stackedVerseLines, numChordPositions: numChordPositions },
     melodyLyricElements);
 
   // ---- 2. Where the sections come from ----
@@ -7703,10 +7749,8 @@ ChScore.prototype._normalizeSections = function () {
   // sections still get numbered and gap-filled below; only the caller's are left alone.
   let hasTemplateSections = false;
   if (!hasPrebuiltSections && this._suppliedTemplates.sections) {
-    const templateSections = this._buildSectionsFromTemplate(
-      this._suppliedTemplates.sections, this._scoreData.staffNumbers,
-      this._scoreData.numChordPositions
-    ) ?? [];
+    const templateSections = forcedTemplateSections ?? this._buildSectionsFromTemplate(
+      this._suppliedTemplates.sections, this._scoreData.staffNumbers, numChordPositions) ?? [];
     this._scoreData.sections = templateSections;
     hasTemplateSections = templateSections.length > 0;
   }
@@ -7836,6 +7880,10 @@ ChScore.prototype._normalizeSections = function () {
       nameLyricElements(section, lyricStanza);
       if (foundByPosition) si = pi + 1;
     } else if (!section) {
+      // A forced template has already said what the sections are, so a stanza pairing with
+      // none of them is the engraving disagreeing. Passed over rather than broken out of, so
+      // the stanzas after it still find their own sections.
+      if (this._forcedSections) continue;
       // Not sung from the staff: a lyric line playback never reached, or a verse printed
       // under the music. It stays 'below' even when the stanza carries real chord positions
       // -- the full-score expansion replays what the sections describe and has no section
@@ -10018,7 +10066,10 @@ ChScore.prototype._syllableStanzaRuns = function (syllables) {
       // this same section's own second range coming past its own written positions, which is a
       // two-part song's third pass reading the engraved "2." again. The number has to be this
       // run's *own* again: a different one inside one section is a second stanza.
-      || (Boolean(syllable.label) && !(sameSection && syllable.label === current.label))
+      // Not under a forced template, where the section's own bounds are the only ones: a
+      // number engraved partway down a line is a word there, not the start of a verse.
+      || (!this._forcedSections
+        && Boolean(syllable.label) && !(sameSection && syllable.label === current.label))
       || (!sameSection && syllable.chordPositions[0] < current.lastChordPosition);
 
     const changesLine = !startsNewRun && ((!sameSection && (!this._continuesLyricLine(current.lyricLineId, lyricLineId)

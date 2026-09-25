@@ -294,19 +294,24 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
 
   // ── ch-part-id — multiple part IDs ──
   describe('ch-part-id — part assignments', () => {
-    it('should have 5 distinct part IDs', () => {
+    // The score's own five, plus the accompaniment id _staffPartIds synthesizes: the SA and
+    // TB staves have no accompaniment of their own, so the keyboard plays the voices and each
+    // of those notes is named for both. Synthesized rather than declared, so it is not in
+    // _scoreData.parts -- the descant's own staff doesn't get it.
+    it('should have 6 distinct part IDs', () => {
       const allPartIds = new Set();
       for (const note of score._scoreData.meiParsed.querySelectorAll('note[ch-part-id]')) {
         for (const id of note.getAttribute('ch-part-id').split(' ')) {
           if (id) allPartIds.add(id);
         }
       }
-      expect(allPartIds.size).toBe(5);
+      expect(allPartIds.size).toBe(6);
       expect(allPartIds).toContain('descant');
       expect(allPartIds).toContain('soprano');
       expect(allPartIds).toContain('alto');
       expect(allPartIds).toContain('tenor');
       expect(allPartIds).toContain('bass');
+      expect(allPartIds).toContain('accompaniment');
     });
   });
 

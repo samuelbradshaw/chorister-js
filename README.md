@@ -440,6 +440,11 @@ Normalizations:
 Notes:
 - A section with no parentheses includes the whole song – for example, `V` is a single verse that includes all of the chord positions and staves in the sheet music.
 - A section can name more than one range in parentheses – for example, an introduction that includes the first and last part of the song would be `I(0-25)(57-65)`.
+- `/force` anywhere in the template says the template is the authority and the engraving is not: the sections it names are the sections the song has. Without it, the score still speaks for itself where it disagrees – a verse number engraved as a sung syllable partway down a lyric line starts a new verse there, and words no section accounts for are added back as a verse printed below the music. With it, a section’s own bounds are the only place a verse begins, and a stanza that matches no section is passed over. For a score whose lyrics are engraved wrongly, this is how a caller says it already knows.
+- `/force` also says how many times the song is played. The sections covering the most-covered chord position are counted as playthroughs – two verses over the same music are two, while a verse and the chorus after it divide one between them – and the expansion is extended to match where the sections ask for more than the engraving writes. This is how a two-part song's verses sung together become a third playthrough on a score whose music is printed once, with no repeat to say so.
+- The reported templates (`sectionsTemplateCp` and `sectionsTemplateMb`) carry `/force` back whenever it was supplied, so feeding one in again reproduces this reading.
+
+Example: `I(0-13[2,3,4,5]); V(13-77[2,3]:2.1); V(16-77[1,2,3]:2.2) /force`
 
 Everything a section carries that the template doesn’t spell out is inferred:
 
@@ -447,7 +452,7 @@ Everything a section carries that the template doesn’t spell out is inferred:
 - **marker** – only verses have one, and it’s that number. A number the score prints for itself (a verse engraved “5.” below the music) is kept instead.
 - **sectionId** and **name** follow from the type and the number: `verse-2` / “Verse 2”, `chorus-1` / “Chorus”. The first introduction keeps the plain id `introduction`.
 - **placement** – `inline` where the section has music, `below` where its words are printed under the music, `none` where it isn’t placed in the score at all.
-- **pauseAfter** – true after an introduction the score brackets, and after a section the music wraps back from for another playthrough when the song ends too short to breathe in.
+- **pauseAfter** – true after an introduction the score brackets, and after a section the next one starts the sheet over from for another playthrough, when the song ends too short to breathe in. An arrangement whose next section re-enters partway — past a pickup, or into a repeat with its own endings — already has that room written in, so it takes no pause.
 
 Examples:
 - `I(0-12); V(12-42); C(42-63)` – An introduction, a verse, and a chorus, each over its own range.

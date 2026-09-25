@@ -137,7 +137,11 @@ describe('MEI annotations — SA+TB shared load', () => {
     });
 
     it('should contain valid part ID strings matching known part names', () => {
-      const knownPartIds = score._scoreData.parts.map(p => p.partId);
+      // A four-part score printed on two staves has no accompaniment part of its own, so
+      // _staffPartIds synthesizes that id and names every note with it as well as with its
+      // own part. It is deliberately not one of _scoreData.parts, so it is allowed here.
+      const knownPartIds = [...score._scoreData.parts.map(p => p.partId),
+        'accompaniment', 'instrumental'];
       const notesWithPartId = score._scoreData.meiParsed.querySelectorAll('note[ch-part-id]');
       for (const note of notesWithPartId) {
         const partIds = note.getAttribute('ch-part-id').split(' ');
@@ -167,7 +171,9 @@ describe('MEI annotations — SA+TB shared load', () => {
           if (id) allPartIds.add(id);
         }
       }
-      expect(allPartIds.size).toBe(4);
+      // SA+TB, plus the accompaniment the voices double as (see above)
+      expect(allPartIds.size).toBe(5);
+      expect(allPartIds).toContain('accompaniment');
     });
   });
 
@@ -378,6 +384,10 @@ describe('ch-part-id — without partsTemplate or parts', () => {
 
     const derived = new Set(score._scoreData.parts.map(part => part.partId));
     expect(derived.size).toBeGreaterThan(0);
+    // Named on the notes but never declared: the id _staffPartIds synthesizes where the
+    // voices are the accompaniment as well (lyrics) or the whole of it (no lyrics)
+    derived.add('accompaniment');
+    derived.add('instrumental');
     for (const note of notesWithPartId) {
       for (const id of note.getAttribute('ch-part-id').split(' ')) {
         if (id) expect(derived.has(id)).toBe(true);
