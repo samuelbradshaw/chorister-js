@@ -289,7 +289,8 @@ ChScore.prototype.load = async function (format, {
     lyricsText = null, lyricLinesTemplate = null,
     parts = null, partsTemplate = null,
     sections = null, sectionsTemplate = null,
-    chordSets = null, fermatas = null, hyphenatedWords = null
+    chordSets = null, fermatas = null, hyphenatedWords = null,
+    injectedSyllables = null
   }, options = this._defaultOptions) {
   this._container.dataset.chStatus = 'preparing';
   if (!format || !(scoreUrl || scoreContent)) {
@@ -397,6 +398,7 @@ ChScore.prototype.load = async function (format, {
     trebleClefStaffNumbersSelector: '',
     fermatas: fermatas ?? [],
     hyphenatedWords: hyphenatedWords ?? [],
+    injectedSyllables: injectedSyllables ?? [],
   };
 
   this._suppliedTemplates = {
@@ -1940,6 +1942,14 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   }
   this._scoreData.tempos = this._normalizeTempos(tempoElements);
 
+  // Rendered from the score as loaded, which nothing in this function changes, so it serves
+  // both the syllables injected here and the chord positions annotated further down
+  const vrvTimemap = this._vrvToolkit.renderToTimemap({ includeRests: true, includeMeasures: true, });
+
+  // Before anything reads the lyrics, so injected syllables are treated like engraved ones
+  // from here on: verse numbers, melisma ends, melody detection and sections
+  this._injectSyllables(vrvTimemap);
+
   // Correct syllables that carry a verse number before anything reads them, starting
   // with the syllable text gathered below. Help text is marked first, so a lyric line
   // that isn't sung doesn't count as one when the numbers are read.
@@ -2047,7 +2057,6 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   // The timemap is read before anything is annotated from it, so the sub-measure records come
   // out complete and the measures they make up are settled straight away -- in time for the
   // templates, which resolve `measure@beat` positions against them.
-  const vrvTimemap = this._vrvToolkit.renderToTimemap({ includeRests: true, includeMeasures: true, });
   if (!vrvTimemap || vrvTimemap.length === 0) {
     console.error('Error: Verovio returned an empty or invalid timemap. The score data may be malformed.');
     return;
@@ -2099,8 +2108,8 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   this._normalizeLyricLineNumbers();
   for (const lyricElement of this._scoreData.meiParsed.querySelectorAll('verse')) {
     if (lyricElement.textContent.trim() === '') {
-      // Keep empty syllables used to mark the end of a melisma underscore
-      if (!lyricElement.querySelector('[ch-end-underscore]')) lyricElement.remove();
+      // Keep empty syllables used to mark the end of a melisma extender
+      if (!lyricElement.querySelector('[ch-extender-end]')) lyricElement.remove();
       continue;
     }
     const staffNumber = lyricElement.closest('staff').getAttribute('n');
@@ -2192,8 +2201,165 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   this._updateMei();
 }
 
-// Fix unterminated melisma underscores, by appending a stub <verse> holding an empty
-// syllable to the event where the underscore should stop.
+// Add injectedSyllables to the MEI as if engraved: a verse printed below the music, or a fix
+// replacing an engraved syllable (its label kept). Rows of chordPosition, text, connector and
+// optional staffNumber, layerNumber, lineNumber, as objects or TSV with a header row. See the
+// README's "Injected syllables", and _syllableConnectors for what each connector does.
+ChScore.prototype._injectSyllables = function (vrvTimemap) {
+  let rows = this._scoreData.injectedSyllables;
+  if (typeof rows === 'string') {
+    const lines = rows.split(/\r?\n/).filter(line => line.trim());
+    const columns = lines.shift()?.split('\t').map(cell => cell.trim()) ?? [];
+    if (lines.length && !columns.includes('chordPosition')) {
+      console.warn('Ignoring injectedSyllables: a TSV string starts with a header row naming its columns, including chordPosition.');
+      return;
+    }
+    rows = lines.map(line => {
+      const cells = line.split('\t');
+      return Object.fromEntries(columns.map((column, index) => [column, cells[index]]));
+    });
+  }
+  if (!rows?.length) return;
+  const meiParsed = this._scoreData.meiParsed;
+  const number = (value) => (value == null || String(value).trim() === '') ? null : Number.parseInt(value);
+
+  // The notes sounding at each chord position, numbered as _indexChordPositions numbers them
+  const notesById = new Map([...meiParsed.querySelectorAll('note')].map(note => [note.getAttribute('xml:id'), note]));
+  const notesByChordPosition = (vrvTimemap ?? [])
+    .map(entry => (entry.on ?? []).concat(entry.restsOn ?? []))
+    .filter(onIds => onIds.length > 0)
+    .map(onIds => onIds.map(id => notesById.get(id)).filter(Boolean));
+  const noteAt = (chordPosition, staffNumber, layerNumber) => notesByChordPosition[chordPosition]?.find(note =>
+    this._staffNumberOf(note) === staffNumber && this._layerNumberOf(note) === layerNumber);
+
+  // The lines each staff engraves. A row with no staff goes on the first staff with lyrics.
+  const engravedLinesByStaff = new Map();
+  for (const lyricElement of meiParsed.querySelectorAll('verse[n]')) {
+    const staffNumber = this._staffNumberOf(lyricElement);
+    if (!engravedLinesByStaff.has(staffNumber)) engravedLinesByStaff.set(staffNumber, new Set());
+    engravedLinesByStaff.get(staffNumber).add(Number.parseInt(lyricElement.getAttribute('n')));
+  }
+  const firstStaffNumber = Math.min(...engravedLinesByStaff.keys());
+  const defaultStaffNumber = Number.isFinite(firstStaffNumber) ? firstStaffNumber
+    : Number.parseInt(meiParsed.querySelector('staffDef')?.getAttribute('n') ?? '1');
+  rows = rows.map(row => {
+    let connector = String(row.connector ?? '').trim().toUpperCase() || 'SPACE';
+    if (!this._syllableConnectors[connector]) {
+      console.warn(`Injected syllable "${row.text}" has an unknown connector "${connector}"; reading it as SPACE.`);
+      connector = 'SPACE';
+    }
+    return {
+      chordPosition: number(row.chordPosition),
+      text: String(row.text ?? '').trim(),
+      connector: this._syllableConnectors[connector],
+      staffNumber: number(row.staffNumber) ?? defaultStaffNumber,
+      layerNumber: number(row.layerNumber) ?? 1,
+      lineNumber: number(row.lineNumber),
+    };
+  });
+
+  // A row with no line goes on the staff's first unused one. Lines numbered past the engraved
+  // ones follow straight on from them (and that default), in order, so line 10 can mean "after
+  // the verses" without leaving 5-9 empty; a line within the engraved ones is kept.
+  for (const staffNumber of new Set(rows.map(row => row.staffNumber))) {
+    const staffRows = rows.filter(row => row.staffNumber === staffNumber);
+    const engraved = engravedLinesByStaff.get(staffNumber) ?? new Set();
+    const highest = Math.max(0, ...engraved);
+    let defaultLine = 1;
+    while (engraved.has(defaultLine)) defaultLine++;
+    let next = highest + 1;
+    if (staffRows.some(row => row.lineNumber == null) && defaultLine === next) next++;
+    const renumbered = new Map([...new Set(staffRows.map(row => row.lineNumber).filter(line => line > highest))]
+      .sort((a, b) => a - b).map((line, index) => [line, next + index]));
+    for (const row of staffRows) row.lineNumber = row.lineNumber == null ? defaultLine : renumbered.get(row.lineNumber) ?? row.lineNumber;
+  }
+
+  // Each lyric line in sung order, so a syllable's place in its word can be read off its neighbours
+  const rowsByLine = new Map();
+  for (const row of rows) {
+    if (row.chordPosition == null) continue;
+    const key = `${row.staffNumber}.${row.layerNumber}.${row.lineNumber}`;
+    if (!rowsByLine.has(key)) rowsByLine.set(key, []);
+    rowsByLine.get(key).push(row);
+  }
+  for (const lineRows of rowsByLine.values()) {
+    lineRows.sort((a, b) => a.chordPosition - b.chordPosition);
+    const { staffNumber, layerNumber, lineNumber } = lineRows[0];
+    // The line's element on a note, engraved or new: on the chord, or on a note inside it
+    const lyricElementOn = (note) => {
+      const target = note.closest('chord') ?? note;
+      const engraved = [target, ...target.querySelectorAll('note')]
+        .flatMap(element => [...element.children])
+        .find(child => child.tagName === 'verse' && child.getAttribute('n') === String(lineNumber));
+      if (engraved) return engraved;
+      const lyricElement = this._createMeiElement(meiParsed, 'verse');
+      lyricElement.setAttribute('n', lineNumber);
+      target.appendChild(lyricElement);
+      return lyricElement;
+    };
+
+    let previous = null; // The connector before this syllable
+    for (const { chordPosition, text, connector } of lineRows) {
+      const note = noteAt(chordPosition, staffNumber, layerNumber);
+      if (!note) {
+        console.warn(`Injected syllable "${text}" has no note to go on at chord position ${chordPosition}, staff ${staffNumber}, layer ${layerNumber}.`);
+        continue;
+      }
+      if (text) {
+        const lyricElement = lyricElementOn(note);
+        for (const syl of lyricElement.querySelectorAll('syl')) syl.remove();
+        // @wordpos: i(nitial), m(edial), t(erminal) or s(ingle), from the connectors either side
+        const startsWord = previous?.endsWord ?? true;
+        const wordpos = startsWord ? (connector.endsWord ? 's' : 'i') : (connector.endsWord ? 't' : 'm');
+        const syl = this._createMeiElement(meiParsed, 'syl');
+        syl.setAttribute('con', connector.con);
+        syl.setAttribute('wordpos', wordpos);
+        syl.setAttribute('ch-injected', '');
+        for (const attribute of connector.attributes ?? []) syl.setAttribute(attribute, '');
+        syl.textContent = text;
+        lyricElement.appendChild(syl);
+        previous = connector;
+      }
+
+      // The extender stops at the next note on this staff and layer
+      if (connector.endsExtender) {
+        let nextNote = null;
+        for (let at = chordPosition + 1; !nextNote && at < notesByChordPosition.length; at++) {
+          nextNote = noteAt(at, staffNumber, layerNumber);
+        }
+        const lyricElement = nextNote && lyricElementOn(nextNote);
+        if (lyricElement && !lyricElement.querySelector('syl')) this._appendExtenderEnd(lyricElement);
+      }
+    }
+  }
+}
+
+// End a melisma's extender here: an empty syllable, which is how MEI marks where it stops
+ChScore.prototype._appendExtenderEnd = function (lyricElement) {
+  const syl = this._createMeiElement(this._scoreData.meiParsed, 'syl');
+  syl.setAttribute('con', 's');
+  syl.setAttribute('ch-extender-end', '');
+  lyricElement.appendChild(syl);
+}
+
+// What follows an injected syllable: its MEI @con, whether it ends the word, and the attributes
+// that carry what it adds to the lyrics text (read into the syllable records in _gatherSyllables)
+ChScore.prototype._syllableConnectors = {
+  NONE: { con: 's', endsWord: false }, // Nothing between syllables: languages written without spaces
+  SPACE: { con: 's', endsWord: true },
+  SPACE_TAB: { con: 's', endsWord: true, attributes: ['ch-wbr'] }, // A <wbr>, where a line may divide
+  SPACE_NEWLINE: { con: 's', endsWord: true, attributes: ['ch-line-end'] },
+  HYPHEN: { con: 'd', endsWord: false, attributes: ['ch-hyphen'] }, // A hyphen the word is spelled with
+  HYPHEN_SOFT: { con: 'd', endsWord: false },
+  EXTENDER: { con: 'u', endsWord: true },
+  // The last syllable held by an extender, as MusicXML's extend@type="stop"
+  EXTENDER_END: { con: 'u', endsWord: true, endsExtender: true },
+  TIE_OVER: { con: 't', endsWord: true },
+  TIE_UNDER: { con: 't', endsWord: true },
+};
+
+// Fix unterminated melisma extenders, by appending a stub <verse> holding an empty
+// syllable to the event where the extender should stop.
 ChScore.prototype._fixUnterminatedMelismas = function () {
   // One walk over the events, bucketed by the staff number holding them, rather than a
   // document query per staff. A staff number spans every measure, so it is the bucket key
@@ -2221,10 +2387,7 @@ ChScore.prototype._fixUnterminatedMelismas = function () {
           const label = realLyricElements[0].getAttribute('label');
           if (label) stubLyricElement.setAttribute('label', label);
           // Syllable is left empty to not interfere with lyric line counting
-          const stubSyl = this._createMeiElement(this._scoreData.meiParsed, 'syl');
-          stubSyl.setAttribute('con', 's');
-          stubSyl.setAttribute('ch-end-underscore', '');
-          stubLyricElement.appendChild(stubSyl);
+          this._appendExtenderEnd(stubLyricElement);
           event.appendChild(stubLyricElement);
           activeLineNumbers.delete(lineNumber);
         }
@@ -2233,7 +2396,11 @@ ChScore.prototype._fixUnterminatedMelismas = function () {
       for (const [lineNumber, lyricElement] of lyricElementsByLine) {
         // The last syllable with words, not the first (so the right @con is used for elisions where there are multiple syllables on a note (common in languages like Spanish)
         const syl = Array.from(lyricElement.querySelectorAll('syl:not(:empty)')).at(-1);
-        if (!syl) continue;
+        if (!syl) {
+          // An extender's end already written here closes it
+          if (lyricElement.querySelector('syl[ch-extender-end]')) activeLineNumbers.delete(lineNumber);
+          continue;
+        }
         if (syl.getAttribute('con') === 'u') activeLineNumbers.add(lineNumber);
         else activeLineNumbers.delete(lineNumber);
       }
@@ -3821,7 +3988,7 @@ ChScore.prototype._normalizeLyricLineNumbers = function () {
     const label = lyricElement.getAttribute('label');
     if (shared.has(lyricElement) && (!label || label === 'verse')) lyricElement.setAttribute('label', 'chorus');
   }
-  // A melisma's closing stub on the row a line moved to, on the same note, ends the underscore
+  // A melisma's closing stub on the row a line moved to, on the same note, ends the extender
   // that line's own syllable now ends; two lyric elements can't share one row
   for (const lyricElement of moved) {
     if (lyricElement.textContent.trim() === '') continue;
@@ -5987,7 +6154,7 @@ ChScore.prototype._defaultVerovioOptions = {
     'chord@ch-chord-position', 'note@ch-chord-position', 'rest@ch-chord-position',
     'dir@ch-chord-position', 'harm@ch-chord-position', 'fermata@ch-chord-position',
     'verse@ch-lyric-line-id',
-    'dir@ch-intro-bracket', 'dir@ch-round-marker', 'rend@ch-superscript', 'syl@ch-end-underscore',
+    'dir@ch-intro-bracket', 'dir@ch-round-marker', 'rend@ch-superscript', 'syl@ch-extender-end',
     'verse@ch-help-text', 'syl@ch-help-text',
     // Chorister.js advanced attributes (based on parts and sections data)
     'chord@ch-expanded-chord-position', 'note@ch-expanded-chord-position', 'rest@ch-expanded-chord-position',
@@ -8233,20 +8400,20 @@ ChScore.prototype._splitTrailingInterludes = function (sections) {
   // Each chord position a word is sung on, and where that word stops sounding. Any lyric line on
   // any staff counts, including a refrain every verse joins in on ("For All the Saints" closes
   // each verse with an alleluia written on verse 1's line). A melisma sings through every note
-  // its underscore covers, so it is walked out rather than read off the one it is written on.
+  // its extender covers, so it is walked out rather than read off the one it is written on.
   const sungThroughQ = new Map();
   const sungThrough = (chordPosition, throughQ) => sungThroughQ.set(
     chordPosition, Math.max(sungThroughQ.get(chordPosition) ?? 0, throughQ));
-  // Held syllables are tracked per voice rather than per staff: an underscore belongs to the
+  // Held syllables are tracked per voice rather than per staff: an extender belongs to the
   // line someone is singing, and a rest in the other voice on the same staff does not end it.
   const heldByVoice = new Map();
   for (const event of this._scoreData.meiParsed.querySelectorAll('staff :is(note, chord, rest)')) {
     if (event.parentElement.closest('chord')) continue;
     const voice = `${event.closest('staff').getAttribute('n')}/${event.closest('layer')?.getAttribute('n')}`;
     if (!heldByVoice.has(voice)) heldByVoice.set(voice, new Map());
-    // Where each of this voice's lines sang the syllable its underscore is still carrying
+    // Where each of this voice's lines sang the syllable its extender is still carrying
     const held = heldByVoice.get(voice);
-    // Nobody sings through a rest, whatever the underscore does after it
+    // Nobody sings through a rest, whatever the extender does after it
     if (event.matches('rest')) { held.clear(); continue; }
     const chordPosition = Number.parseInt(event.getAttribute('ch-chord-position'));
     if (Number.isNaN(chordPosition)) continue;
@@ -8262,7 +8429,7 @@ ChScore.prototype._splitTrailingInterludes = function (sections) {
 
     const throughQ = chordPositions[chordPosition].startQ + (this._wholeNotesOf(event) ?? 0) * 4;
     // A held syllable sings through this note too, unless the line takes it back here -- with
-    // the next syllable, or with the empty stub that closes the underscore
+    // the next syllable, or with the empty stub that closes the extender
     for (const [lineNumber, heldAt] of held) {
       if (sylsByLine.has(lineNumber)) held.delete(lineNumber);
       else sungThrough(heldAt, throughQ);
@@ -9211,7 +9378,7 @@ ChScore.prototype._melodyLyricElementIndex = function () {
   const lyricElements = [];
   const byChordPosition = new Map();
   const linesBySection = new Map();
-  // A verse with nothing sung in it is the stub closing a melisma underscore, which is
+  // A verse with nothing sung in it is the stub closing a melisma extender, which is
   // there to be drawn, not sung. Left in, it reads as a lyric line of its own and cuts
   // the stanza at the note it sits on ("For Health and Strength", "Faith").
   for (const lyricElement of meiParsed.querySelectorAll(
@@ -9360,7 +9527,7 @@ ChScore.prototype._stackedLyricElementsAt = function (chordPosition, melodyLyric
 // _hasStackedMelodyLyrics), but extraction scopes it to a range and expansion to a section.
 ChScore.prototype._lyricElementSoundingAt = function (lyricElements, passNumber, isSingleLine) {
   const engraved = Array.from(lyricElements);
-  // Skip lyric elements with empty syllables (melisma underscore end), and ones that are help
+  // Skip lyric elements with empty syllables (melisma extender end), and ones that are help
   // text rather than words to sing
   const sungIndices = engraved
     .map((lyricElement, index) => index)
@@ -9556,6 +9723,11 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
           wordpos: syl.getAttribute('wordpos'),
           italic: syl.getAttribute('fontstyle') === 'italic',
           bold: syl.getAttribute('fontweight') === 'bold',
+          // From injectedSyllables (see _syllableConnectors)
+          injected: syl.hasAttribute('ch-injected'),
+          lineEnd: syl.hasAttribute('ch-line-end'),
+          wordBreak: syl.hasAttribute('ch-wbr'),
+          hyphen: syl.hasAttribute('ch-hyphen'),
         })),
         // lyric@name="chorus" says every verse sings these words, a chorus and a refrain alike,
         // so it's a flag rather than a type (see _normalizeLyricLineNumbers)
@@ -10680,9 +10852,10 @@ ChScore.prototype._getLyricsFromSyllables = function (syllables) {
       // The marker names the syllable, so it goes on the first syl only -- the rest are
       // the same syllable's remaining text
       for (const [sylIndex, syl] of syls.entries()) {
-        builder.add(syl.text, syl.wordpos, syl.italic, syl.bold, sylIndex === 0 ? marker : null);
+        builder.add(syl.text, syl.wordpos, syl.italic, syl.bold, sylIndex === 0 ? marker : null, syl.hyphen);
       }
     }
+    if (syls.some(syl => syl.wordBreak)) builder.addWordBreak();
 
     // A label reached mid-stanza names the stanza; it doesn't start a new one
     if (label && !current.marker) current.marker = label;
@@ -11644,6 +11817,22 @@ ChScore.prototype._printedBreaksForRun = function (run) {
   return breaks;
 }
 
+// Where injected syllables said a line ends (SPACE_NEWLINE), as break indices into this run, or
+// null where none did. `complete` says every syllable in the run was injected, so those breaks
+// are all of its lines; otherwise they're added to the ones the engraved words get.
+ChScore.prototype._injectedBreaksForRun = function (run) {
+  const breaks = [];
+  let complete = true;
+  let previousEndsLine = false;
+  for (const [index, syllable] of run.syllables.entries()) {
+    const syls = syllable.syls ?? [];
+    if (!syls.some(syl => syl.injected)) complete = false;
+    if (previousEndsLine && index > 0 && this._syllableStartsWord(syllable)) breaks.push(index);
+    previousEndsLine = syls.some(syl => syl.lineEnd);
+  }
+  return breaks.length ? { breaks: breaks, complete: complete } : null;
+}
+
 // Where the lines break, written down so a caller can store it and hand it back -- the same
 // bargain partsTemplate and sectionsTemplate make. A semicolon-separated list of positions,
 // each one either a chord position or `<measureNumber>@<beat>`:
@@ -11858,6 +12047,7 @@ ChScore.prototype._getPhraseStartsByStaff = function (syllables, runs = null,
   const byLine = new Map();
   const askedByLine = new Map();
   const templatedByLine = new Map();
+  const injectedWholeLines = new Set();
   const scoresByLine = new Map();
   const openInAllLines = new Map();
   let breakCost = this._weights().breakCost;
@@ -11873,6 +12063,7 @@ ChScore.prototype._getPhraseStartsByStaff = function (syllables, runs = null,
     for (const [lyricLineId, templated] of segmented.templatedByLine) {
       templatedByLine.set(lyricLineId, templated);
     }
+    for (const lyricLineId of segmented.injectedWholeLines) injectedWholeLines.add(lyricLineId);
     for (const [lyricLineId, lineScores] of segmented.scoresByLine) {
       scoresByLine.set(lyricLineId, lineScores);
     }
@@ -11881,7 +12072,8 @@ ChScore.prototype._getPhraseStartsByStaff = function (syllables, runs = null,
     }
   }
   return { byLine: byLine, askedByLine: askedByLine, openInAllLines: openInAllLines,
-    templatedByLine: templatedByLine, scoresByLine: scoresByLine, breakCost: breakCost };
+    templatedByLine: templatedByLine, injectedWholeLines: injectedWholeLines,
+    scoresByLine: scoresByLine, breakCost: breakCost };
 }
 
 // The staff's phrase starts, moved onto syllables this stanza can actually break at.
@@ -11905,6 +12097,8 @@ ChScore.prototype._alignPhraseStartsToRun = function (phraseStarts, run) {
   // A break the caller's template asked for, tracked through the move below so the rules
   // that weigh candidates against each other can tell instruction from evidence
   const templated = phraseStarts.templatedByLine?.get(run.lyricLineId ?? '') ?? null;
+  // A stanza injected whole, with its own line ends, takes those and none offered by others
+  const injectedWhole = phraseStarts.injectedWholeLines?.has(run.lyricLineId ?? '') ?? false;
 
   const chosen = [];
   for (const [index, syllable] of run.syllables.entries()) {
@@ -11916,7 +12110,7 @@ ChScore.prototype._alignPhraseStartsToRun = function (phraseStarts, run) {
     // on a line. Only where this verse is silent -- any real signal of its own and it keeps
     // the break, which is what verses reinforcing each other means.
     if (asked && !asked.has(syllable.chordPositions[0])
-      && (lineScores.get(syllable.chordPositions[0]) ?? 0) < vetoBelow) continue;
+      && (injectedWhole || (lineScores.get(syllable.chordPositions[0]) ?? 0) < vetoBelow)) continue;
 
     if (!opensWord(syllable)) {
       // The break cannot stand inside a word -- emission would drop it, leaving this verse a
@@ -12129,23 +12323,35 @@ ChScore.prototype._segmentRuns = function (syllables, runs, applyTemplate = fals
   // instruction rather than evidence: _alignPhraseStartsToRun may move one by a syllable,
   // but nothing may drop it (see the neighbourhood collapse there).
   const templatedByLine = new Map();
+  // Lines whose stanzas were injected whole, with their own line ends: they take no others'
+  const injectedWholeLines = new Set();
   for (const run of runs) {
     const key = run.lyricLineId ?? '';
     if (!askedByLine.has(key)) askedByLine.set(key, new Set());
     if (!templatedByLine.has(key)) templatedByLine.set(key, new Set());
     // A caller's template is explicit instruction, so it comes before the printed verses --
-    // a fact about the score being parsed -- which in turn come before anything inferred
+    // a fact about the score being parsed -- which in turn come before anything inferred.
+    // Line ends given with injected syllables are instruction too, just after the template.
     const templated = applyTemplate ? this._lyricLineBreaksForRun(run, sungChordPositions) : null;
-    const breaks = templated ?? this._printedBreaksForRun(run) ?? segment(run, targetLength);
+    const injected = applyTemplate && !templated ? this._injectedBreaksForRun(run) : null;
+    const instructed = new Set(templated ?? injected?.breaks ?? []);
+    let breaks = templated;
+    if (!breaks && injected?.complete) {
+      breaks = injected.breaks;
+      injectedWholeLines.add(key);
+    }
+    breaks ??= [...new Set([...instructed, ...(this._printedBreaksForRun(run) ?? segment(run, targetLength))])]
+      .sort((a, b) => a - b);
     for (const at of breaks) {
       const chordPosition = run.syllables[at].chordPositions[0];
       shared.add(chordPosition);
       askedByLine.get(key).add(chordPosition);
-      if (templated) templatedByLine.get(key).add(chordPosition);
+      if (instructed.has(at)) templatedByLine.get(key).add(chordPosition);
     }
   }
   return { starts: shared, askedByLine: askedByLine, openInAllLines: openInAllLines,
-    templatedByLine: templatedByLine, breakCost: breakCost, scoresByLine: scoresByLine };
+    templatedByLine: templatedByLine, injectedWholeLines: injectedWholeLines,
+    breakCost: breakCost, scoresByLine: scoresByLine };
 }
 
 // Walk the song in sung order — through repeats, endings and jumps — yielding one entry
@@ -12653,7 +12859,7 @@ ChScore.prototype._wordBuilder = function () {
   // _insertKnownHyphens puts back -- so a word reads the same however it was engraved.
   // A score's own printed text is left alone: that is a copy of the page, not lyrics.
   const anyHyphen = new RegExp(`[${self._hyphenCharacters}]`, 'g');
-  // { text, segments, italic, bold, endsLine }. `segments` is the word's syllables, each
+  // { text, segments, italic, bold, endsLine, endsWithWordBreak }. `segments` is the word's syllables, each
   // with the marker saying where it is sung, so the same word can be rendered plain or
   // annotated. Styling is merged into <em>/<strong> spans when rendering.
   const words = [];
@@ -12673,7 +12879,9 @@ ChScore.prototype._wordBuilder = function () {
     // word, and the offer is refused rather than spelling the word in a way nothing sings.
     const boundaries = syllableBoundaries(segments);
     const { trimmed, leadingPunctuation, offsets: known, source } = self._knownHyphens(plain);
-    const offsets = known.filter(offset => boundaries.includes(offset));
+    // A hyphen injected after its syllable (HYPHEN) is the word's own, whatever a list says
+    const injected = boundaries.filter((_, index) => segments[index].hyphen);
+    const offsets = [...new Set([...known.filter(offset => boundaries.includes(offset)), ...injected])];
     // The clitic decides its own hyphen, whichever way a word list voted: it is the only
     // reader here that can see the capital the two spellings differ by.
     const clitic = self._cliticAt(trimmed, leadingPunctuation);
@@ -12707,7 +12915,7 @@ ChScore.prototype._wordBuilder = function () {
       boundaries: boundaries,
       hyphenOffsets: new Set(offsets),
       hyphens: [...engraved, ...offsets.map(offset => ({
-        offset, source: offset === ruledOffset ? 'rule' : source,
+        offset, source: offset === ruledOffset ? 'rule' : injected.includes(offset) ? 'injected' : source,
       }))].sort((a, b) => a.offset - b.offset),
     };
   };
@@ -12718,13 +12926,13 @@ ChScore.prototype._wordBuilder = function () {
   let partialBold = false;
 
   return {
-    add(text, wordpos, italic, bold, marker = null) {
+    add(text, wordpos, italic, bold, marker = null, hyphen = false) {
       const syllable = text.replace(trailingHyphen, '').replace(anyHyphen, '-');
       if (!syllable) return;
       complete = null;
       if (wordpos === 'i' || wordpos === 'm') {
         partial += syllable;
-        partialSegments.push({ marker: marker, text: syllable });
+        partialSegments.push({ marker: marker, text: syllable, hyphen: hyphen });
         partialItalic = partialItalic || italic;
         partialBold = partialBold || bold;
       } else if (partial) {
@@ -12750,13 +12958,15 @@ ChScore.prototype._wordBuilder = function () {
         });
       }
     },
-    // End the current line. Marked on the last word rather than pushed as its own entry,
-    // so a break can't land inside a word still being assembled in `partial`.
-    breakLine() {
+    // End the current line, or (addWordBreak) allow it to divide there, written as <wbr>.
+    // Marked on the last word rather than pushed as its own entry, so a break can't land
+    // inside a word still being assembled in `partial`.
+    breakLine(flag = 'endsLine') {
       complete = null;
       const last = words.at(-1);
-      if (last && !partial) last.endsLine = true;
+      if (last && !partial) last[flag] = true;
     },
+    addWordBreak() { this.breakLine('endsWithWordBreak'); },
     // A round marker stands on its own before the word it marks, and is never styled
     // with it
     addRoundMarker(text) {
@@ -12806,6 +13016,10 @@ ChScore.prototype._wordBuilder = function () {
     render(annotated) {
       const all = this.all();
 
+      // A space between words, or ' <wbr>' where the line may divide (SPACE_TAB).
+      // TODO: Space Japanese half-lines apart at a <wbr>, as printed, not only allow a break
+      const space = (word) => word.endsWithWordBreak ? ' <wbr>' : ' ';
+
       // A styling change doesn't happen mid-word, so consecutive words with the
       // same styling are one <em>/<strong> span — "one, two, three." stays a
       // single run instead of three, matching how it's engraved. A run never
@@ -12814,11 +13028,11 @@ ChScore.prototype._wordBuilder = function () {
       for (const word of all) {
         const wordText = annotated ? self._annotatedWord(word) : word.text;
         const current = runs.at(-1);
-        if (current && !current.endsLine && current.italic === word.italic && current.bold === word.bold) {
-          current.text += ` ${wordText}`;
-          current.endsLine = word.endsLine ?? false;
+        if (current && !current.lastWord.endsLine && current.italic === word.italic && current.bold === word.bold) {
+          current.text += `${space(current.lastWord)}${wordText}`;
+          current.lastWord = word;
         } else {
-          runs.push({ text: wordText, italic: word.italic, bold: word.bold, endsLine: word.endsLine ?? false });
+          runs.push({ text: wordText, italic: word.italic, bold: word.bold, lastWord: word });
         }
       }
 
@@ -12827,7 +13041,7 @@ ChScore.prototype._wordBuilder = function () {
         let piece = run.text;
         if (run.bold) piece = `<strong>${piece}</strong>`;
         if (run.italic) piece = `<em>${piece}</em>`;
-        text += piece + (run.endsLine ? '\n' : ' ');
+        text += piece + (run.lastWord.endsLine ? '\n' : space(run.lastWord));
       }
       return text.trim();
     },

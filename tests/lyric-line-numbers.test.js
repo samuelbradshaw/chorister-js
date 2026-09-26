@@ -247,7 +247,7 @@ describe('_normalizeLyricLineNumbers()', () => {
   });
 
   it('removes a melisma\'s closing stub on the row a line moves onto', () => {
-    // The verses' underscores end on the note the shared words start on
+    // The verses' extenders end on the note the shared words start on
     const verses = normalize([{ notes: [
       ...stacked([1, 2], 0),
       { cp: 4, verses: { 1: '', 2: '', 3: 'shared' } },

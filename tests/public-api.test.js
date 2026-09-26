@@ -966,7 +966,7 @@ describe('_normalizeSections() — Section generation', () => {
   });
 
   // A voice over an accompaniment, so the singers can rest while the music plays on. The voice
-  // sings the first five notes and rests through bars 3-4; the fifth carries an underscore over
+  // sings the first five notes and rests through bars 3-4; the fifth carries an extender over
   // the three after it, which is how a score writes a melisma.
   const voiceAndAccompanimentMusicXml = () => {
     const attributes = (sign, line) => '<attributes><divisions>1</divisions>'
@@ -987,7 +987,7 @@ describe('_normalizeSections() — Section generation', () => {
           sung.push('<note><pitch><step>C</step><octave>5</octave></pitch>'
             + `<duration>1</duration><type>quarter</type>${words}</note>`);
         } else if (note < 8) {
-          // Carried under the underscore, with no words of its own
+          // Carried under the extender, with no words of its own
           sung.push('<note><pitch><step>D</step><octave>5</octave></pitch>'
             + '<duration>1</duration><type>quarter</type></note>');
         } else {

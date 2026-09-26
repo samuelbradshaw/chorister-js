@@ -175,6 +175,7 @@ Input data is provided to Chorister.js when loading the score (see “Methods”
 - **chordSets** – Chord sets object (more details below). Optional.
 - **fermatas** – Fermatas object (more details below). Optional.
 - **hyphenatedWords** – Array of hyphenated words for this score's language, e.g. `['pag-ibig', 'latter-day']` (more details below). Optional.
+- **injectedSyllables** – Syllables to add to the score before it's read, as TSV or an array of objects: a verse printed below the music, or corrections to engraved syllables (more details below). Optional.
 - **lang** – Language code (e.g. `'en'`) selecting the built-in dictionary of known hyphenated words used when extracting lyrics from the score's own syllables. Built-in dictionaries exist for `en`, `es`, `fr` and `pt`; for any other language, supply `hyphenatedWords`. Optional, defaults to `'en'`. A score's own printed title/lyrics (if present) are also used and take priority, regardless of `lang`.
 
 `scoreUrl`, `midiUrl`, and `lyricsUrl` may be subject to [CORS restrictions](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS) depending on where the files are hosted.
@@ -238,6 +239,66 @@ Note that a dictionary is not a complete answer: much of what goes missing is mo
 than vocabulary. Indonesian's `dari-Nya` and `berkat-Mu`, French's `dis-nous` and `sauve-moi`, and
 Cebuano's `nag-ampo` are inflected forms no dictionary lists, so a language with heavy clitic or
 affix hyphenation may need its own rules on top.
+
+#### <a name="injected-syllables"></a>Injected syllables
+
+A verse printed below the music has no notes of its own, so it can't be highlighted or played
+along with. `injectedSyllables` places such a verse on the staff, syllable by syllable, before
+Chorister.js reads the score — from then on it's treated exactly like an engraved lyric line:
+verse numbers, melisma extenders, melody detection and sections all see it. It also fixes an
+engraved syllable: one injected where a syllable is already engraved on the same line replaces it,
+keeping any verse label engraved with it.
+
+Give one row per syllable, as a TSV string or as an array of objects with the same properties:
+
+| column | meaning |
+| --- | --- |
+| `chordPosition` | Chord position of the note the syllable is sung on. Required. |
+| `text` | The syllable. A verse number written before the first syllable (`5. Re`) becomes the verse's label, as an engraved one does. |
+| `connector` | What follows the syllable (below). Defaults to `SPACE`. |
+| `staffNumber` | Optional. Defaults to the first staff with lyrics. |
+| `layerNumber` | Optional. Defaults to the first layer. |
+| `lineNumber` | Lyric line (MEI `verse/@n`). Optional: defaults to the staff's first unused line. Lines past the staff's engraved ones follow straight on from them, in order, so `10` and `11` on a staff engraving four verses become lines 5 and 6; a line within the engraved ones is kept. |
+
+A TSV string starts with a header row naming its columns, in any order; optional columns can be
+left out.
+
+| connector | MEI `syl/@con` | in the lyrics |
+| --- | --- | --- |
+| `NONE` | `s` | nothing — the next syllable carries on the word (languages written without spaces) |
+| `SPACE` | `s` | a space |
+| `SPACE_TAB` | `s` | a space and a `<wbr>`: where the line may divide, as between the two halves of a line of Japanese lyrics |
+| `SPACE_NEWLINE` | `s` | a new lyric line |
+| `HYPHEN` | `d` | a hyphen the word is spelled with (`soul-cheering`) |
+| `HYPHEN_SOFT` | `d` | nothing — a syllable break |
+| `EXTENDER` | `u` | nothing (the word ends) |
+| `EXTENDER_END` | `u` | nothing (the word ends). Marks the last syllable held by an extender, as MusicXML's `extend@type="stop"`; the extender stops at the next note |
+| `TIE_OVER`, `TIE_UNDER` | `t` | nothing (the word ends; an elision joining two words) |
+
+```js
+score.load('musicxml', {
+  scoreUrl: 'redeemer-of-israel.musicxml',
+  injectedSyllables: 'chordPosition\ttext\tconnector\n'
+    + '0\t5. Re\tHYPHEN_SOFT\n'
+    + '1\tstore,\tSPACE\n'
+    + '3\tmy\tSPACE\n',
+});
+
+// Fix "child" + "dren", engraved on the second lyric line at chord positions 14 and 15
+score.load('musicxml', {
+  scoreUrl: 'called-to-serve.musicxml',
+  injectedSyllables: [
+    { chordPosition: 14, text: 'chil', connector: 'HYPHEN_SOFT', lineNumber: 2 },
+    { chordPosition: 15, text: 'dren', connector: 'SPACE', lineNumber: 2 },
+  ],
+});
+```
+
+A syllable's place in its word is worked out from the injected syllables on its line alone, so
+inject a whole word when fixing part of one. A syllable whose chord position has no note on its
+staff and layer is skipped with a warning. Where the lyrics are read from the score rather than
+handed in as `lyricsText`, `SPACE_NEWLINE` breaks the line after its syllable; a supplied
+`lyricLinesTemplate` still decides first.
 
 #### Examples
 
