@@ -1658,6 +1658,37 @@ ChScore.prototype._getScoreMetadata = function (meiParsed, scoreId, lang) {
   const attributionWords = [...this._attributionWords._any, ...(this._attributionWords[lang] ?? [])];
   const attributionLabels = attributionWords.filter(phrase => this._patterns.creditLabel.test(phrase));
   const attributionPhrases = attributionWords.filter(phrase => !this._patterns.creditLabel.test(phrase));
+
+  // A credit printing a footnote above its attributions arrives as one block where the engraving
+  // wrote no blank line between them ("Latter-day Prophets", 1989 CSB), and the leading '*' would
+  // type the attributions as footnote too. Split at the first line opening with a credit label so
+  // each half is classified as what it is; a footnote with nothing under it is left whole.
+  const opensWithCreditLabel = (line) => {
+    const opening = line.toLowerCase().replace(this._patterns.separatorSpacing, '$1').trimStart();
+    return attributionLabels.some(label => opening.startsWith(label));
+  };
+  for (let index = textBlocks.length - 1; index >= 0; index--) {
+    const block = textBlocks[index];
+    if (!isFootnoteBlock(block)) continue;
+    const lines = block.text.split('\n');
+    const htmlLines = block.html.split('\n');
+    // Never the first line: that one is the footnote the '*' opened
+    const at = lines.findIndex((line, line1) => line1 > 0 && opensWithCreditLabel(line));
+    if (at < 1 || htmlLines.length !== lines.length) continue;
+    // Styling can run across the line the split falls on, so the footnote closes what it leaves
+    // open and the attributions open it again
+    const headHtml = htmlLines.slice(0, at).join('\n');
+    const open = [];
+    for (const [, closing, tag] of headHtml.matchAll(/<(\/?)(em|strong)>/g)) {
+      if (!closing) open.push(tag);
+      else if (open.includes(tag)) open.splice(open.lastIndexOf(tag), 1);
+    }
+    textBlocks.splice(index, 1,
+      { ...block, text: lines.slice(0, at).join('\n'),
+        html: headHtml + [...open].reverse().map(tag => `</${tag}>`).join('') },
+      { ...block, text: lines.slice(at).join('\n'),
+        html: open.map(tag => `<${tag}>`).join('') + htmlLines.slice(at).join('\n') });
+  }
   const looksLikeAttributions = block => {
     if (contributors.some(({ name }) => name && block.text.includes(name))) return true;
     // French and Spanish typography puts a space before a colon ("Paroles : ..."), so

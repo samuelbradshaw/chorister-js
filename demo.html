@@ -317,6 +317,7 @@
       let scoreId = (new URLSearchParams(window.location.search).get('scoreId')) ?? 'how-great-the-wisdom-and-the-love';
       const demoScores = getDemoScores();
       let scaleControlsActive = false;
+      let controlsListeners;
       
       // Elements
       const dynamicStylesheet = document.getElementById('dynamic-stylesheet');
@@ -351,6 +352,12 @@
       titleArea.textContent = demoScores[scoreId].title;
       
       async function loadScore(scoreId) {
+        // The controls outlive the score they were set for, so put them back to their markup
+        // defaults before the new one draws -- the scoredraw event syncs the scale sliders after.
+        controlsArea.reset();
+        document.body.dataset.sectionId = '';
+        tapDetailsArea.textContent = 'N/A';
+        
         // Initialize and load score
         const format = demoScores[scoreId].format;
         const inputData = demoScores[scoreId];
@@ -362,7 +369,12 @@
         chScore = new ChScore('#score-container');
         scoreData = await chScore.load(format, inputData, options);
         
-        titleArea.textContent = demoScores[scoreId].title ?? scoreData?.scoreMetadata?.title ?? 'Untitled';
+        const title = demoScores[scoreId].title ?? scoreData?.scoreMetadata?.title ?? 'Untitled';
+        const subtitles = (scoreData?.scoreMetadata?.textBlocks ?? [])
+          .filter(textBlock => textBlock.type === 'subtitle')
+          .map(textBlock => `<br><small>${textBlock.html.replaceAll('\n', '<br>')}</small>`)
+          .join('');
+        titleArea.innerHTML = `${title}${subtitles}`;
         if (!demoScores[scoreId].credits) {
           const credits = (scoreData?.scoreMetadata?.textBlocks ?? [])
             .filter(textBlock => ['footnote', 'attribution'].includes(textBlock.type))
@@ -436,6 +448,12 @@
       }
       
       function loadControls(chScore, scoreData) {
+        // Each load binds these again, so the previous score's listeners are dropped first --
+        // left in place they would go on calling setOptions on a score that is no longer drawn.
+        controlsListeners?.abort();
+        controlsListeners = new AbortController();
+        const { signal } = controlsListeners;
+        
         // Set scale
         const setScale = (event) => {
           scaleControlsActive = event?.target != null;
@@ -459,10 +477,10 @@
           }
           scaleControlsActive = false;
         }
-        scaleToFitToggle.addEventListener('change', setScale);
-        scaleSlider.addEventListener('input', setScale);
-        minScaleSlider.addEventListener('input', setScale);
-        maxScaleSlider.addEventListener('input', setScale);
+        scaleToFitToggle.addEventListener('change', setScale, { signal });
+        scaleSlider.addEventListener('input', setScale, { signal });
+        minScaleSlider.addEventListener('input', setScale, { signal });
+        maxScaleSlider.addEventListener('input', setScale, { signal });
         
         // Transpose picker
         transposePicker.innerHTML = '';
@@ -480,17 +498,17 @@
         }
         transposePicker.addEventListener('change', event => {
           chScore.setOptions({ keySignatureId: event.target.value });
-        });
+        }, { signal });
         
         // Layout picker
         layoutPicker.addEventListener('change', (event) => {
           chScore.setOptions({ layout: event.target.value });
-        });
+        }, { signal });
         
         // Expand score picker
         expandScorePicker.addEventListener('change', (event) => {
           chScore.setOptions({ expandScore: event.target.value });
-        });
+        }, { signal });
         
         // Chord set picker
         chordSetPicker.innerHTML = '<option value="">None</option>';
@@ -502,19 +520,19 @@
         chordSetPicker.addEventListener('change', event => {
           chordSetImagesToggle.disabled = !scoreData.chordSetsById[event.target.value]?.svgSymbolsUrl;
           chScore.setOptions({ showChordSet: event.target.value || false });
-        });
+        }, { signal });
         
         // Chord set images toggle
         chordSetImagesToggle.disabled = true;
         chordSetImagesToggle.addEventListener('change', (event) => {
           chScore.setOptions({ showChordSetImages: event.target.checked });
-        });
+        }, { signal });
         
         // Fingering marks toggle
         if (scoreData.features.hasFingeringMarks) {
           fingeringMarksToggle.addEventListener('change', (event) => {
             chScore.setOptions({ showFingeringMarks: event.target.checked });
-          });
+          }, { signal });
         } else {
           fingeringMarksToggle.disabled = true;
         }
@@ -522,13 +540,13 @@
         // Measure numbers toggle
         measureNumbersToggle.addEventListener('change', (event) => {
           chScore.setOptions({ showMeasureNumbers: event.target.checked });
-        });
+        }, { signal });
         
         // Melody only toggle
         if (scoreData.features.hasMelodyInfo) {
           melodyOnlyToggle.addEventListener('change', (event) => {
             chScore.setOptions({ showMelodyOnly: event.target.checked });
-          });
+          }, { signal });
         } else {
           melodyOnlyToggle.disabled = true;
         }
@@ -550,12 +568,12 @@
           sectionToggle.addEventListener('change', (event) => {
             const hideSectionIds = Array.from(sectionTogglesDiv.querySelectorAll('input:not(:checked)')).map(toggle => toggle.value);
             chScore.setOptions({ hideSectionIds: hideSectionIds });
-          });
+          }, { signal });
           sectionToggle.parentElement.addEventListener('mouseenter', (event) => {
             document.body.dataset.sectionId = sectionInfo.sectionId;
-          });
+          }, { signal });
         }
-        sectionTogglesDiv.addEventListener('mouseleave', (event) => { document.body.dataset.sectionId = ''; })
+        sectionTogglesDiv.addEventListener('mouseleave', (event) => { document.body.dataset.sectionId = ''; }, { signal })
         dynamicStylesheet.textContent = sectionStyles;
         
         // Shapes and labels
@@ -568,7 +586,7 @@
               }
             }
             chScore.setOptions({ drawForegroundShapes: foregroundShapes });
-          });
+          }, { signal });
         }
       }
       
