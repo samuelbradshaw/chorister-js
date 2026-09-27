@@ -9465,6 +9465,26 @@ ChScore.prototype._melodyLayerByStaffAndChordPosition = function () {
     }
     melodyLayers.set(staffNumber, filled);
   }
+
+  // A tune on a staff without words of its own sings the words of the nearest staff above
+  // that has them ('SS+A#A' in "The Lord Is My Shepherd" (Women), whose melody staff is
+  // bare). Every voice there counts as above the tune, so a layer of Infinity. Only a bare
+  // staff hands its words up: a descant over a melody with words stays the descant's.
+  const worded = new Set();
+  for (const lyricElement of this._scoreData.meiParsed.querySelectorAll(
+    ':is(note, chord) verse:not([ch-help-text]):has(syl:not(:empty):not([ch-help-text]))')) {
+    worded.add(this._staffNumberOf(lyricElement));
+  }
+  for (const [staffNumber, filled] of [...melodyLayers]) {
+    if (worded.has(staffNumber)) continue;
+    const standIn = Math.max(...[...worded].filter(n => n < staffNumber));
+    if (!Number.isFinite(standIn)) continue;
+    if (!melodyLayers.has(standIn)) melodyLayers.set(standIn, new Map());
+    const standInLayers = melodyLayers.get(standIn);
+    for (const chordPosition of filled.keys()) {
+      if (!standInLayers.has(chordPosition)) standInLayers.set(chordPosition, Infinity);
+    }
+  }
   return melodyLayers;
 }
 
