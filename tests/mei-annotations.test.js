@@ -625,6 +625,22 @@ describe("ch-melody — with partsTemplate 'Two-Part'", () => {
     }
   });
 
+  it('should number each part\'s own lyric line 1 on its staff, as verse 1 and verse 2', () => {
+    // Part 2's words are engraved as line 2; each staff numbers its own lines from 1
+    const lineIdsByStaff = new Map();
+    for (const verse of score._scoreData.meiParsed.querySelectorAll('verse[ch-lyric-line-id]')) {
+      const staff = verse.closest('staff').getAttribute('n');
+      expect(verse.getAttribute('ch-lyric-line-id')).toBe(`${staff}.${verse.getAttribute('n')}`);
+      if (!lineIdsByStaff.has(staff)) lineIdsByStaff.set(staff, new Set());
+      lineIdsByStaff.get(staff).add(verse.getAttribute('ch-lyric-line-id'));
+    }
+    expect([...lineIdsByStaff.get('1')]).toEqual(['1.1']);
+    expect([...lineIdsByStaff.get('2')]).toEqual(['2.1']);
+    // Still told apart as verses, as the engraved rows had them
+    expect(score._verseLineNumber('1.1')).toBe(1);
+    expect(score._verseLineNumber('2.1')).toBe(2);
+  });
+
   it('should keep chordPositionInfo.melodyNote singular (first found)', () => {
     for (const chordPositionInfo of score._scoreData.chordPositions) {
       if (chordPositionInfo.melodyNote) {

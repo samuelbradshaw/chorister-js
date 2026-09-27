@@ -433,7 +433,7 @@ describe('Two-part together pass — invented section survives a redraw', { time
     const sections = score._scoreData.sections;
     const together = sections.at(-1);
     expect(together.type).toBe('verse');
-    expect(together.chordPositionRanges[0].lyricLineIds).toEqual(['1.1', '2.2']);
+    expect(together.chordPositionRanges[0].lyricLineIds).toEqual(['1.1', '2.1']);
     // The two before it are one part each
     for (const section of sections.slice(0, -1)) {
       expect(section.chordPositionRanges[0].lyricLineIds).toHaveLength(1);
@@ -448,7 +448,7 @@ describe('Two-part together pass — invented section survives a redraw', { time
   it('should name the together pass in both forms of the sections template', () => {
     for (const form of ['chord-position', 'measure-beat']) {
       expect(score._convertSectionsToTemplate(score._scoreData.sections, form))
-        .toMatch(/:1\.1,2\.2/);
+        .toMatch(/:1\.1,2\.1/);
     }
   });
 
@@ -466,7 +466,7 @@ describe('Two-part together pass — invented section survives a redraw', { time
     await rebuilt.load('musicxml', {
       scoreContent: sampleMusicXmlTwoPart,
       partsTemplate: 'Two-Part',
-      sectionsTemplate: 'V(:1.1); V(:2.2); V(:1.1,2.2)',
+      sectionsTemplate: 'V(:1.1); V(:2.1); V(:1.1,2.1)',
     });
     expect(rebuilt._scoreData.sections).toHaveLength(3);
     expect(() => rebuilt.setOptions({ expandScore: 'full-score' })).not.toThrow();

@@ -3811,9 +3811,9 @@ ChScore.prototype._markHelpTextLyrics = function (lyricElementsByStaffAndLine) {
 }
 
 // Which verse each row is, counting help text out: a verse under a pronunciation guide on row 2
-// is on row 3 and is verse 2. Ranked over the score's rows rather than each staff's, since a
-// two-part score gives each part its own staff and row ("2.2" is the second part's verse 2).
-ChScore.prototype._rankVerseLines = function (lyricElements) {
+// is on row 3 and is verse 2. Ranked over the score's rows rather than each staff's.
+// `verseNumbersByLineId` names lines the rows can't: see _normalizeLyricLineNumbers.
+ChScore.prototype._rankVerseLines = function (lyricElements, verseNumbersByLineId = null) {
   const sungRows = new Set();
   for (const lyricElement of lyricElements) {
     if (lyricElement.hasAttribute('ch-help-text')) continue;
@@ -3822,12 +3822,15 @@ ChScore.prototype._rankVerseLines = function (lyricElements) {
   }
   this._verseNumbersByLineNumber = new Map([...sungRows]
     .sort((a, b) => a - b).map((row, index) => [row, index + 1]));
+  this._verseNumbersByLineId = verseNumbersByLineId;
 }
 
 // Which verse a lyric line is, by its id: its row ("1.3", under a pronunciation guide on row
-// 2), ranked with help text counted out (verse 2). A row the ranking hasn't seen keeps its
-// number; a missing id gives NaN.
+// 2), ranked with help text counted out (verse 2), unless the id is named outright. A row the
+// ranking hasn't seen keeps its number; a missing id gives NaN.
 ChScore.prototype._verseLineNumber = function (lyricLineId) {
+  const verseNumber = this._verseNumbersByLineId?.get(lyricLineId);
+  if (verseNumber !== undefined) return verseNumber;
   const lineNumber = Number.parseInt(String(lyricLineId ?? '').split('.')[1]);
   return this._verseNumbersByLineNumber?.get(lineNumber) ?? lineNumber;
 }
@@ -3905,55 +3908,63 @@ ChScore.prototype._normalizeLyricLineNumbers = function (melodyLayers = this._me
   for (const key of [...linesByStretch.keys()].sort((a, b) => a - b)) {
     const lines = [...linesByStretch.get(key).values()];
     const melody = lines.filter(isMelody);
-    const stacked = new Set(melody.filter(line => melody.some(other => other !== line && overlaps(line, other))));
+    // Each staff numbers its own lines: lines on different staves are never drawn one above
+    // the other (a two-part song engraves part 2's words as line 2)
+    const linesByStaff = this._groupBy(lines, line => line.staff);
+    const melodyStaves = new Set(melody.map(line => line.staff));
+    for (const melodyStaff of melodyStaves) {
+      const staffLines = linesByStaff.get(melodyStaff);
+      const staffMelody = staffLines.filter(isMelody);
+      const stacked = new Set(staffMelody.filter(line => staffMelody.some(other => other !== line && overlaps(line, other))));
 
-    if (stacked.size > 0) {
-      const shift = Math.min(...lines.map(line => line.row)) - 1;
-      for (const line of lines) setRow(line.elements, line.row - shift);
-      for (const line of melody) if (!stacked.has(line)) setRow(line.elements, 1, true);
+      if (stacked.size > 0) {
+        const shift = Math.min(...staffLines.map(line => line.row)) - 1;
+        for (const line of staffLines) setRow(line.elements, line.row - shift);
+        for (const line of staffMelody) if (!stacked.has(line)) setRow(line.elements, 1, true);
 
-      // One line singing alone for a while, outside the endings. Only on one staff: a two-part
-      // song's parts take turns singing alone without either being everyone's words.
-      if (new Set(melody.map(line => line.staff)).size === 1) {
-        const singing = new Map();
-        for (const line of melody) {
-          for (const lyricElement of line.elements) {
-            const chordPosition = chordPositionOf.get(lyricElement);
-            if (!line.sungAt.has(chordPosition) || inEnding.has(lyricElement)) continue;
-            if (!singing.has(chordPosition)) singing.set(chordPosition, new Set());
-            singing.get(chordPosition).add(line);
+        // One line singing alone for a while, outside the endings. Only on one staff: a two-part
+        // song's parts take turns singing alone without either being everyone's words.
+        if (melodyStaves.size === 1) {
+          const singing = new Map();
+          for (const line of staffMelody) {
+            for (const lyricElement of line.elements) {
+              const chordPosition = chordPositionOf.get(lyricElement);
+              if (!line.sungAt.has(chordPosition) || inEnding.has(lyricElement)) continue;
+              if (!singing.has(chordPosition)) singing.set(chordPosition, new Set());
+              singing.get(chordPosition).add(line);
+            }
           }
+          // The chord positions one line sings alone in a row, and that line
+          let run = [];
+          let runLine = null;
+          const closeRun = () => {
+            if (runLine && stacked.has(runLine)) {
+              const [from, to] = [run[0], run.at(-1)];
+              const inRun = runLine.elements.filter(lyricElement => !inEnding.has(lyricElement)
+                && chordPositionOf.get(lyricElement) >= from && chordPositionOf.get(lyricElement) <= to);
+              const first = inRun.find(lyricElement => chordPositionOf.get(lyricElement) === from
+                && lyricElement.textContent.trim() !== '');
+              if (this._isSharedRun(run.length, first)) setRow(inRun, 1, true);
+            }
+            run = [];
+            runLine = null;
+          };
+          for (const chordPosition of [...singing.keys()].sort((a, b) => a - b)) {
+            const here = singing.get(chordPosition);
+            const alone = here.size === 1 ? here.values().next().value : null;
+            if (alone !== runLine) closeRun();
+            if (alone) {
+              run.push(chordPosition);
+              runLine = alone;
+            }
+          }
+          closeRun();
         }
-        // The chord positions one line sings alone in a row, and that line
-        let run = [];
-        let runLine = null;
-        const closeRun = () => {
-          if (runLine && stacked.has(runLine)) {
-            const [from, to] = [run[0], run.at(-1)];
-            const inRun = runLine.elements.filter(lyricElement => !inEnding.has(lyricElement)
-              && chordPositionOf.get(lyricElement) >= from && chordPositionOf.get(lyricElement) <= to);
-            const first = inRun.find(lyricElement => chordPositionOf.get(lyricElement) === from
-              && lyricElement.textContent.trim() !== '');
-            if (this._isSharedRun(run.length, first)) setRow(inRun, 1, true);
-          }
-          run = [];
-          runLine = null;
-        };
-        for (const chordPosition of [...singing.keys()].sort((a, b) => a - b)) {
-          const here = singing.get(chordPosition);
-          const alone = here.size === 1 ? here.values().next().value : null;
-          if (alone !== runLine) closeRun();
-          if (alone) {
-            run.push(chordPosition);
-            runLine = alone;
-          }
+      } else {
+        for (const line of staffMelody) {
+          const before = carried.get(line.id);
+          setRow(line.elements, before?.row ?? 1, before?.shared ?? false);
         }
-        closeRun();
-      }
-    } else {
-      for (const line of melody) {
-        const before = carried.get(line.id);
-        setRow(line.elements, before?.row ?? 1, before?.shared ?? false);
       }
     }
 
@@ -3981,8 +3992,17 @@ ChScore.prototype._normalizeLyricLineNumbers = function (melodyLayers = this._me
     }));
   }
 
+  // A two-part song tells its verses apart by the engraved row (part 2's words on line 2), which
+  // each staff now numbering from 1 loses, so a line keeps the verse its engraved row was. Not
+  // part N as verse N: a part's staff can stack verses ('PC+PC' in "Jesus, Lover of My Soul").
+  const isTwoPart = this._scoreData.features?.hasTwoPartMelody;
+  const verseNumbersByLineId = isTwoPart ? new Map() : null;
   const moved = [];
   for (const [lyricElement, row] of rowOf) {
+    if (isTwoPart && !lyricElement.hasAttribute('ch-help-text')) {
+      const staff = this._staffNumberOf(lyricElement);
+      verseNumbersByLineId.set(`${staff}.${row}`, this._verseLineNumber(`${staff}.${lyricElement.getAttribute('n')}`));
+    }
     if (String(row) !== lyricElement.getAttribute('n')) {
       lyricElement.setAttribute('n', row);
       moved.push(lyricElement);
@@ -4003,7 +4023,7 @@ ChScore.prototype._normalizeLyricLineNumbers = function (melodyLayers = this._me
     }
   }
 
-  this._rankVerseLines(this._scoreData.meiParsed.querySelectorAll('verse'));
+  this._rankVerseLines(this._scoreData.meiParsed.querySelectorAll('verse'), verseNumbersByLineId);
 }
 
 // Clean up verse numbers that were engraved as part of a lyric syllable
@@ -13203,7 +13223,7 @@ ChScore.prototype._verseLabelNumber = function (lyricElement) {
 // printed on verse 1's line is the pickup case.
 ChScore.prototype._pickupVerseNumber = function (lyricElement) {
   const labelNumber = this._verseLabelNumber(lyricElement);
-  return labelNumber === Number.parseInt(lyricElement.getAttribute('n')) ? null : labelNumber;
+  return labelNumber === this._verseLineNumber(lyricElement.getAttribute('ch-lyric-line-id')) ? null : labelNumber;
 }
 
 // The staves that play in a given verse -- accompaniment included, so "playing", not
