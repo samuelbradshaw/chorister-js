@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import './setup.js';
 import { initChScore, setupStandardHooks, resetScoreState } from './helpers.js';
-import { sampleMusicXmlHGW as sampleMusicXml } from './song-data.js';
+import { sampleMusicXmlHGW as sampleMusicXml, sampleMusicXmlTwoPartIntro, sampleMusicXmlDescant } from './song-data.js';
 
 let ChScore, origDrawScore;
 
@@ -519,6 +519,139 @@ describe('showMelodyOnly — MEI verification', () => {
       const staffNumbers = new Set(Array.from(staves).map(s => s.getAttribute('data-n')));
       expect(staffNumbers.size).toBe(1);
     }
+  });
+});
+
+// ============================================================
+// showMelodyOnly: two melody parts over a piano with its own introduction
+// ============================================================
+describe('showMelodyOnly — two-part melody with piano introduction', () => {
+  let score;
+
+  // The container's default width lays out one measure per system, so the two intro
+  // measures each fill a system with no melody in it
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXmlTwoPartIntro });
+  });
+
+  afterEach(() => {
+    score.setOptions({ showMelodyOnly: false });
+  });
+
+  const introMeasures = () => Array.from(score._scoreData.meiParsed.querySelectorAll('measure')).slice(0, 2);
+
+  it('should load as a two-part melody with the tempo on the piano staff', () => {
+    expect(score._scoreData.twoPartMelodyPartIds).toEqual(['part-1', 'part-2']);
+    expect(score._scoreData.meiParsed.querySelector('tempo').getAttribute('staff')).toBe('3');
+  });
+
+  it('should draw a system of rests without throwing', () => {
+    expect(() => score.setOptions({ showMelodyOnly: true })).not.toThrow();
+  });
+
+  it('should keep only the two melody staves', () => {
+    score.setOptions({ showMelodyOnly: true });
+    for (const measure of score._scoreData.meiParsed.querySelectorAll('measure')) {
+      const staffNumbers = Array.from(measure.querySelectorAll('staff'), staff => staff.getAttribute('n'));
+      expect(staffNumbers).toEqual(['1', '2']);
+    }
+  });
+
+  it('should fill each melody staff in the introduction with a whole-measure rest', () => {
+    score.setOptions({ showMelodyOnly: true });
+    for (const measure of introMeasures()) {
+      for (const staff of measure.querySelectorAll('staff')) {
+        expect(staff.querySelectorAll('layer > *').length).toBe(1);
+        expect(staff.querySelector('layer > mRest')).not.toBeNull();
+      }
+    }
+  });
+
+  it('should turn condensing off while on, and back on after', () => {
+    score.setOptions({ showMelodyOnly: true });
+    expect(score._vrvToolkit.getOptions().condense).toBe('none');
+    score.setOptions({ showMelodyOnly: false });
+    expect(score._vrvToolkit.getOptions().condense).toBe('auto');
+  });
+
+  it('should draw both melody staves in every system', () => {
+    score.setOptions({ showMelodyOnly: true });
+    const measures = score._container.querySelectorAll('svg .measure');
+    expect(measures.length).toBe(4);
+    for (const measure of measures) {
+      const staffNumbers = Array.from(measure.querySelectorAll('.staff'), staff => staff.getAttribute('data-n'));
+      expect(staffNumbers).toEqual(['1', '2']);
+    }
+  });
+
+  it('should move the tempo onto the top melody staff and draw it', () => {
+    score.setOptions({ showMelodyOnly: true });
+    expect(score._scoreData.meiParsed.querySelector('tempo').getAttribute('staff')).toBe('1');
+    const tempo = score._container.querySelector('svg .tempo');
+    expect(tempo?.textContent).toContain('Gently');
+  });
+
+  it('should restore the piano staves and the tempo\'s staff when turned off', () => {
+    score.setOptions({ showMelodyOnly: true });
+    score.setOptions({ showMelodyOnly: false });
+    expect(introMeasures()[0].querySelectorAll('staff').length).toBe(4);
+    expect(score._scoreData.meiParsed.querySelector('tempo').getAttribute('staff')).toBe('3');
+    expect(score._scoreData.meiParsed.querySelectorAll('mRest[*|id$="-mrest"]').length).toBe(0);
+  });
+});
+
+// ============================================================
+// showMelodyOnly: which words stay with the melody
+// ============================================================
+describe('showMelodyOnly — lyrics kept with the melody', () => {
+  beforeAll(() => { ChScore.prototype._drawScore = function() {}; });
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  const lyricLineIds = (score) => Array.from(
+    score._scoreData.meiParsed.querySelectorAll('verse'), verse => verse.getAttribute('ch-lyric-line-id'));
+  const melodyNotesWithoutWords = (score) => Array.from(score._scoreData.meiParsed.querySelectorAll('note[ch-melody]'))
+    .filter(note => !(note.closest('chord') ?? note).querySelector('verse'));
+
+  it('should drop a descant\'s words when the melody has its own', async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXmlDescant });
+    expect(score._scoreData.parts.map(part => part.partId)).toContain('descant');
+    expect(lyricLineIds(score)).toContain('1.1');
+
+    score.setOptions({ showMelodyOnly: true });
+    const lineIds = lyricLineIds(score);
+    expect(lineIds).not.toContain('1.1');
+    expect(lineIds.filter(id => id === '2.1')).toHaveLength(9);
+    expect(lineIds.filter(id => id === '2.2')).toHaveLength(9);
+  });
+
+  it('should number a descant\'s chorus as line 1, under its stacked verses', async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXmlDescant });
+    const descantLines = Array.from(score._scoreData.meiParsed.querySelectorAll('staff[n="1"] verse'),
+      verse => `${verse.getAttribute('ch-lyric-line-id')} ${verse.textContent.trim()}`);
+    expect(descantLines).toEqual(['1.1 Ring,', '1.2 Chime,', '1.1 bells!', '1.2 bells!', '1.1 Ring!']);
+  });
+
+  it('should keep the words engraved above a lower voice carrying the tune (SATB#A)', async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent: sampleMusicXml, partsTemplate: 'SATB#A' });
+    const verseCount = score._scoreData.meiParsed.querySelectorAll('verse').length;
+    // The soprano and alto sing the same words, engraved on the soprano only
+    const sopranoVerses = Array.from(score._scoreData.meiParsed.querySelectorAll('verse'))
+      .filter(verse => !score._carriesMelody(verse.closest('note, chord')));
+    expect(sopranoVerses.length).toBeGreaterThan(0);
+    expect(sopranoVerses.filter(verse => verse.hasAttribute('ch-secondary'))).toHaveLength(0);
+
+    score.setOptions({ showMelodyOnly: true });
+    // The soprano's words move onto the alto; none are lost
+    expect(score._scoreData.meiParsed.querySelectorAll('verse').length).toBe(verseCount);
+    expect(melodyNotesWithoutWords(score).length).toBeLessThanOrEqual(2);
   });
 });
 

@@ -513,6 +513,9 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
   if (this._currentOptions.showMelodyOnly) {
     verovioOptions.spacingSystem += 5;
     verovioOptions.pageMarginBottom += 20;
+    // Condensing hides staves holding only rests, so a system of them (a piano introduction)
+    // would be drawn with no staves at all
+    if (this._scoreData?.features.hasMelodyInfo) verovioOptions.condense = 'none';
   }
 
   // Transpose
@@ -2105,7 +2108,8 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   // as engraved, which is what one selector over both ids used to give.
   const lyricElementIndex = new Map();
   const documentOrder = new Map();
-  this._normalizeLyricLineNumbers();
+  const melodyLayers = this._melodyLayerByStaffAndChordPosition();
+  this._normalizeLyricLineNumbers(melodyLayers);
   for (const lyricElement of this._scoreData.meiParsed.querySelectorAll('verse')) {
     if (lyricElement.textContent.trim() === '') {
       // Keep empty syllables used to mark the end of a melisma extender
@@ -2130,7 +2134,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
       }
     }
     // Mark secondary lyrics (examples: "It Is Well with My Soul"; "Were You There?")
-    if (!parentNoteOrChord.hasAttribute('ch-melody') && !parentNoteOrChord.querySelector('[ch-melody]')) {
+    if (!this._singsMelodyWords(parentNoteOrChord, melodyLayers)) {
       lyricElement.setAttribute('ch-secondary', '');
     }
   }
@@ -3836,7 +3840,7 @@ ChScore.prototype._verseLineNumber = function (lyricLineId) {
 //   the endings, is printed centered: line 1, labelled a chorus over any name but "verse"
 // - in a stretch with nothing stacked, a line keeps the number and label it had just before,
 //   or starts at 1; a staff with no melody numbers its own lines from 1
-ChScore.prototype._normalizeLyricLineNumbers = function () {
+ChScore.prototype._normalizeLyricLineNumbers = function (melodyLayers = this._melodyLayerByStaffAndChordPosition()) {
   // Each measure's stretch of music: an MEI section together with the endings that follow it
   const stretchOf = new Map();
   let stretch = -1;
@@ -3849,7 +3853,6 @@ ChScore.prototype._normalizeLyricLineNumbers = function () {
     }
     stretchOf.set(measure, stretch);
   }
-  const melodyLayers = this._melodyLayerByStaffAndChordPosition();
   // Each lyric element's chord position, and whether it is in an ending, read once
   const chordPositionOf = new Map();
   const inEnding = new Set();
@@ -3867,10 +3870,7 @@ ChScore.prototype._normalizeLyricLineNumbers = function () {
     chordPositionOf.set(lyricElement, Number.parseInt(noteOrChord?.getAttribute('ch-chord-position')));
     if (lyricElement.closest('ending')) inEnding.add(lyricElement);
     const help = lyricElement.hasAttribute('ch-help-text');
-    // The melody's words are the ones _melodyLyricElementIndex reads: on the voice carrying
-    // the tune, or engraved on a voice above it
-    const secondary = !help && Boolean(noteOrChord) && !this._carriesMelody(noteOrChord)
-      && !this._isAboveMelody(noteOrChord, melodyLayers);
+    const secondary = !help && Boolean(noteOrChord) && !this._singsMelodyWords(noteOrChord, melodyLayers);
     if (!linesByStretch.has(key)) linesByStretch.set(key, new Map());
     const lines = linesByStretch.get(key);
     const id = `${staff}.${row}${help ? 'h' : secondary ? 's' : ''}`;
@@ -3965,9 +3965,14 @@ ChScore.prototype._normalizeLyricLineNumbers = function () {
       if (secondary.length === 0) continue;
       const rowNow = (line) => rowOf.get(line.elements[0]) ?? line.row;
       const taken = new Set(melody.filter(line => line.staff === staff).map(rowNow));
-      let shift = Math.min(...secondary.map(rowNow)) - 1;
-      while (shift > 0 && secondary.some(line => taken.has(rowNow(line) - shift))) shift -= 1;
-      if (shift > 0) for (const line of secondary) setRow(line.elements, rowNow(line) - shift);
+      // On a staff of its own, a line never stacked beside another is printed on line 1, as a
+      // melody line is (a descant's chorus under its verses in "Mary's Lullaby")
+      const alone = new Set(taken.size > 0 ? [] : secondary.filter(line => !secondary.some(other => other !== line && overlaps(line, other))));
+      for (const line of alone) setRow(line.elements, 1);
+      const shifted = secondary.filter(line => !alone.has(line));
+      let shift = Math.min(...shifted.map(rowNow)) - 1;
+      while (shift > 0 && shifted.some(line => taken.has(rowNow(line) - shift))) shift -= 1;
+      if (shift > 0) for (const line of shifted) setRow(line.elements, rowNow(line) - shift);
     }
 
     carried = new Map(melody.map(line => {
@@ -4073,8 +4078,8 @@ ChScore.prototype._normalizeLyricVerseNumbers = function (meiParsed, lyricElemen
 
 // Move the melody's words onto the melody itself, for showMelodyOnly to keep when it strips
 // everything else away: a lower voice carrying the tune ('SATB#A') keeps its words engraved
-// on the voice above, which is about to go. Which verses are the melody's is
-// _melodyLyricElementIndex' question, asked here too so rendering and extraction agree.
+// on the voice above, which is about to go. Those are the verses not marked secondary that
+// sit off the melody.
 ChScore.prototype._moveMelodyLyricsOntoMelody = function () {
   const melodyByChordPosition = new Map();
   const melodyRests = new Set();
@@ -4088,18 +4093,14 @@ ChScore.prototype._moveMelodyLyricsOntoMelody = function () {
 
   const melodyLayers = this._melodyLayerByStaffAndChordPosition();
   const lyricElementsByChordPosition = new Map();
-  for (const lyricElement of this._scoreData.meiParsed.querySelectorAll(':is(note, chord) verse')) {
+  for (const lyricElement of this._scoreData.meiParsed.querySelectorAll(':is(note, chord) verse:not([ch-secondary])')) {
     const holder = lyricElement.closest('note, chord');
     if (this._carriesMelody(holder)) continue;
-    // Extraction reads a verse above the melody on the melody's own staff, since words below
-    // it there are a second voice's. Rendering removes whole staves too, so the same
-    // convention applies a level up: a staff above the tune's holds its words ('SS+A#A').
+    // A melisma's closing stub is never marked, so it is asked what its words were: it goes
+    // with them when they are the melody's
+    const isStub = !lyricElement.hasAttribute('ch-lyric-line-id') && !lyricElement.hasAttribute('ch-help-text');
+    if (isStub && !this._isAboveMelody(holder, melodyLayers)) continue;
     const chordPosition = Number.parseInt(holder.getAttribute('ch-chord-position'));
-    // One staff lookup for the holder, shared with _isAboveMelody, and the melody's staff
-    // only where the first test did not already settle it
-    const staffNumber = this._staffNumberOf(holder);
-    if (!this._isAboveMelody(holder, melodyLayers, staffNumber)
-      && !(staffNumber < this._staffNumberOf(melodyByChordPosition.get(chordPosition)))) continue;
     if (!lyricElementsByChordPosition.has(chordPosition)) lyricElementsByChordPosition.set(chordPosition, []);
     lyricElementsByChordPosition.get(chordPosition).push(lyricElement);
   }
@@ -4114,9 +4115,6 @@ ChScore.prototype._moveMelodyLyricsOntoMelody = function () {
       const below = Array.from(target.children).find(child => child.matches('verse')
         && Number.parseInt(child.getAttribute('n')) > lineNumber);
       target.insertBefore(lyricElement, below ?? null);
-      // These are the melody's own words now, engraved on the voice above only because the
-      // tune moved down. showMelodyOnly drops what is still secondary after this.
-      lyricElement.removeAttribute('ch-secondary');
     }
   }
 }
@@ -4271,6 +4269,15 @@ ChScore.prototype._updateMei = function () {
         deletedElementIds.push(element.getAttribute('xml:id'));
         element.remove();
       }
+    } else {
+      // Drop the staves no melody line is written on (the accompaniment)
+      const melodyStaffNumbers = new Set(Array.from(
+        this._scoreData.meiParsed.querySelectorAll('staff:has([ch-melody])'), staff => staff.getAttribute('n')));
+      for (const staff of this._scoreData.meiParsed.querySelectorAll('staff')) {
+        if (melodyStaffNumbers.has(staff.getAttribute('n'))) continue;
+        deletedElementIds.push(staff.getAttribute('xml:id'));
+        staff.remove();
+      }
     }
     // Remove orphaned chords and beams
     for (const element of this._scoreData.meiParsed.querySelectorAll('chord, beam')) {
@@ -4278,6 +4285,21 @@ ChScore.prototype._updateMei = function () {
         deletedElementIds.push(element.getAttribute('xml:id'));
         element.remove();
       }
+    }
+    // A tempo written on a removed staff (often the accompaniment's) moves to the top staff left
+    for (const tempo of this._scoreData.meiParsed.querySelectorAll('measure > tempo[staff]')) {
+      const staffNumbers = Array.from(tempo.closest('measure').querySelectorAll(':scope > staff'), staff => staff.getAttribute('n'));
+      const keptNumbers = tempo.getAttribute('staff').split(' ').filter(n => staffNumbers.includes(n));
+      tempo.setAttribute('staff', keptNumbers.length > 0 ? keptNumbers.join(' ') : staffNumbers[0]);
+    }
+    // A staff left with nothing in it (a piano introduction, or the other part's solo) gets
+    // a whole-measure rest. Condensing is off in this mode, so the staff stays drawn.
+    for (const staff of this._scoreData.meiParsed.querySelectorAll('staff')) {
+      const layer = staff.querySelector('layer');
+      if (!layer || staff.querySelector(CH_SPLITTABLE_EVENTS.join())) continue;
+      const mRest = this._createMeiElement(this._scoreData.meiParsed, 'mRest');
+      this._setMeiId(mRest, `${layer.getAttribute('xml:id')}-mrest`);
+      layer.appendChild(mRest);
     }
     // Clean up spanning elements
     const uniqueSlurs = new Set();
@@ -9341,8 +9363,7 @@ ChScore.prototype._markSingleLineChordPositions = function (lyricChordPositionRa
 // above, so a verse there counts as the melody's. Above and same staff both matter: lyrics
 // sit on a staff's top voice, so words *below* the melody are a second voice singing its
 // own ("may rest, may rest" in "Come unto Jesus").
-// Help text is left out; @ch-secondary is not, since a verse engraved above a lower voice
-// carrying the tune is marked secondary and is still the melody's words.
+// Help text is left out. _singsMelodyWords is also what marks @ch-secondary.
 
 // Every verse sung at each chord position, the tune's and the parts' alike, in the order the
 // staves are read. `isMelody` tells one from the other: a page printing the words for the
@@ -9393,7 +9414,7 @@ ChScore.prototype._melodyLyricElementIndex = function () {
       else if (name === 'section' || name === 'ending') { section = ancestor; break; }
     }
     if (!holder) continue;
-    if (!this._carriesMelody(holder) && !this._isAboveMelody(holder, melodyLayers)) continue;
+    if (!this._singsMelodyWords(holder, melodyLayers)) continue;
 
     lyricElements.push(lyricElement);
     const chordPosition = Number.parseInt(holder.getAttribute('ch-chord-position'));
@@ -9420,10 +9441,17 @@ ChScore.prototype._carriesMelody = function (element) {
     || (element.localName === 'chord' && element.querySelector('[ch-melody]') !== null);
 }
 
+// Whether the words on a note or chord are the melody's: on the voice carrying the tune, or
+// engraved on a voice above it, which sings them too ('SATB#A' in "The Lord Is My Shepherd").
+// Everything else is marked @ch-secondary.
+ChScore.prototype._singsMelodyWords = function (element, melodyLayers) {
+  return this._carriesMelody(element) || this._isAboveMelody(element, melodyLayers);
+}
+
 // Whether a note or chord sits above the voice carrying the tune, on that voice's own staff.
-ChScore.prototype._isAboveMelody = function (element, melodyLayers, staffNumber = this._staffNumberOf(element)) {
+ChScore.prototype._isAboveMelody = function (element, melodyLayers) {
   const chordPosition = Number.parseInt(element.getAttribute('ch-chord-position'));
-  const melodyLayer = melodyLayers.get(staffNumber)?.get(chordPosition);
+  const melodyLayer = melodyLayers.get(this._staffNumberOf(element))?.get(chordPosition);
   const layer = this._layerNumberOf(element);
   return layer !== null && melodyLayer !== undefined && layer < melodyLayer;
 }

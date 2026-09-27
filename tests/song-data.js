@@ -43,6 +43,18 @@ export const sampleMusicXmlFHS = readFileSync(
 export const sampleMusicXmlTwoPart = readFileSync(
   resolve(resourcesDir, 'two-part-test-song.musicxml'), 'utf-8'
 );
+// Synthetic, built to the shape of "Love Is Spoken Here" (1989 CSB): two melody parts on
+// their own staves over a piano, a piano introduction that fills its own system, and the
+// tempo written on the piano's upper staff.
+export const sampleMusicXmlTwoPartIntro = readFileSync(
+  resolve(resourcesDir, 'two-part-intro-test-song.musicxml'), 'utf-8'
+);
+// Synthetic, built to the shape of "Mary's Lullaby" (1989 CSB): a descant staff above a
+// melody that has words of its own, the descant joining in later with a verse for each pass
+// and then a chorus engraved on line 3, under them.
+export const sampleMusicXmlDescant = readFileSync(
+  resolve(resourcesDir, 'descant-test-song.musicxml'), 'utf-8'
+);
 // Synthetic. A chorus whose middle stretch is reworded for the last verse, the line claimed
 // by a "(2nd verse)" instruction over the lower staff -- the shape "Dear to the Heart of the
 // Shepherd" (1985 Hymns) has, where the chorus's "he hastens" becomes "we'll hasten".
