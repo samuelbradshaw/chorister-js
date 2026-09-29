@@ -3044,12 +3044,20 @@ ChScore.prototype._annotateFromTimemap = function (vrvTimemap, elementsById) {
       }
 
       if (chordPositionIsAudible) this._scoreData.audibleChordPositions.push(chordPositionCounter);
+      // Where it sits as templates write it ("13@1.5"), null with no measure: the singer's measure
+      // (a pickup is `0`; one written in two sub-measures is still one) and the beat from its
+      // start, rounded where a beat dividing quarter notes would repeat
+      const measure = this._scoreData.measures?.[measureIndex];
+      const beat = measure?.startQ == null ? null
+        : this._qstampToTstamp(entry.qstamp, measure.startQ, measure.timeSignature[1]);
       const chordPositionInfo = {
         chordPosition: chordPositionCounter,
         startQ: entry.qstamp,
         endQ: null, // Added later
         durationQ: null, // Added later
         measureIndex: measureIndex,
+        measureBeat: beat == null || measure.measureNumber == null ? null
+          : `${measure.measureNumber}@${Math.round(beat * 1000) / 1000}`,
         notesAndRests: notesAndRests,
         melodyNote: melodyNote,
         isAudible: chordPositionIsAudible,
@@ -5260,8 +5268,9 @@ ChScore.prototype._updateSvg = function (svg) {
 
         // Draw beat labels
         const beatLabelClassName = 'ch-beat-label';
-        const beat = shapeLayersByClassName[beatLabelClassName].length > 0
-          ? this._chordPositionToMeasureBeat(Number.parseInt(chordPosition))?.beat : null;
+        const measureBeat = shapeLayersByClassName[beatLabelClassName].length > 0
+          ? this._scoreData.chordPositions[chordPosition]?.measureBeat : null;
+        const beat = measureBeat ? this._splitMeasureBeat(measureBeat)[1] : null;
         for (const shapeLayer of beat == null
           ? [] : shapeLayersByClassName[beatLabelClassName]) {
           const beatLabel = this._createSvgElement(svgParsed, 'text');
@@ -7622,7 +7631,7 @@ ChScore.prototype._sectionIdentity = function (type, number) {
 // generator below bothers to make them up.
 ChScore.prototype._newSection = function ({ type = 'section', marker = null,
   placement = 'inline', chordPositionRanges = [], lyricsText = null, lyricsAnnotated = null,
-  lyricWords = null }) {
+  lyricWords = null, partLyrics = null }) {
   return {
     sectionId: null,
     type: type,
@@ -7637,6 +7646,10 @@ ChScore.prototype._newSection = function ({ type = 'section', marker = null,
     // already carries. Null where the words were handed in rather than read off the
     // score's own syllables.
     lyricWords: lyricWords,
+    // A two-part song's words for each part where every part sings at once ("[Verse 3a]",
+    // "[Verse 3b]"), as { partId, lyricsText, lyricsAnnotated } in part order. lyricsText and
+    // lyricsAnnotated above are the first part's.
+    partLyrics: partLyrics,
   };
 }
 
@@ -8076,6 +8089,7 @@ ChScore.prototype._normalizeSections = function () {
           lyricsText: lyricStanza.lyricsText,
           lyricsAnnotated: lyricStanza.lyricsAnnotated,
           lyricWords: lyricStanza.lyricWords ?? null,
+          partLyrics: lyricStanza.partLyrics ?? null,
         }));
         nameLyricElements(otherSections.at(-1), lyricStanza);
       }
@@ -8117,6 +8131,7 @@ ChScore.prototype._normalizeSections = function () {
       section.lyricsText = lyricStanza.lyricsText;
       section.lyricsAnnotated = lyricStanza.lyricsAnnotated;
       section.lyricWords = lyricStanza.lyricWords ?? null;
+      section.partLyrics = lyricStanza.partLyrics ?? null;
       nameLyricElements(section, lyricStanza);
       if (foundByPosition) si = pi + 1;
     } else if (!section) {
@@ -8661,9 +8676,11 @@ ChScore.prototype._getLyricChordPositionRanges = function (otherSections, melody
   // On a two-part song the parts sing a verse each and then sing them together, and that last
   // pass is a section of its own naming both lyric lines (see _splitTwoPartFinalPass). It is
   // music the score plays and words it does not add: both verses have been sung already, so it
-  // belongs in the sections and not in the lyrics.
-  const twoPartFinalPass = (chordPositionRange) =>
-    this._scoreData.features?.hasTwoPartMelody
+  // belongs in the sections and not in the lyrics -- unless the lyrics give it each part's
+  // words ("[Verse 3a]", "[Verse 3b]"; see _extractLyricStanzas).
+  const hasTwoPartMelody = this._scoreData.features?.hasTwoPartMelody;
+  const hasPartLyrics = hasTwoPartMelody && this._patterns.laterPartStanza.test(this._scoreData.lyricsText ?? '');
+  const twoPartFinalPass = (chordPositionRange) => hasTwoPartMelody && !hasPartLyrics
     && (chordPositionRange.lyricLineIds?.length ?? 0) > 1;
 
   if (otherSections.length > 0) {
@@ -9669,10 +9686,60 @@ ChScore.prototype._getRoundMarkersByChordPosition = function () {
 // what the stanzas are; without them, the stanzas are read out of the score's own
 // syllables.
 ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecpStart, melodyLyricElements = this._melodyLyricElementIndex()) {
-  const syllables = this._gatherSyllables(lyricChordPositionRanges, ecpStart, melodyLyricElements);
-  return this._scoreData.lyricsText
-    ? this._alignSyllablesToLyrics(this._scoreData.lyricsText, syllables, this._scoreData.staffNumbers)
-    : this._getLyricsFromSyllables(syllables);
+  const lyricsText = this._scoreData.lyricsText;
+  const gather = (ranges) => this._gatherSyllables(ranges, ecpStart, melodyLyricElements);
+  if (!lyricsText) return this._getLyricsFromSyllables(gather(lyricChordPositionRanges));
+
+  // A two-part song's verse sung by every part at once can give each part its own words:
+  // "[Verse 3a]" the first part's, "[Verse 3b]" the second's. The first part's stanzas are
+  // matched with the rest, following that part's lines; each later part's is matched against
+  // its own syllables in the same verse and kept on that stanza.
+  const partIds = this._scoreData.twoPartMelodyPartIds ?? [];
+  const stanzaTexts = lyricsText.split('\n\n');
+  const laterParts = partIds.length < 2 ? []
+    : stanzaTexts.map(text => this._patterns.laterPartStanza.exec(text.trim())).filter(Boolean);
+  if (laterParts.length === 0) {
+    return this._alignSyllablesToLyrics(lyricsText, gather(lyricChordPositionRanges), this._scoreData.staffNumbers);
+  }
+  // A part's syllables, where a range naming lines of more than one part keeps only this part's
+  // (a line is its staff's). Walked once per part.
+  const syllablesByPart = new Map();
+  const syllablesOf = (partId) => {
+    if (!syllablesByPart.has(partId)) {
+      const staves = new Set(Object.values(this._scoreData.partsById[partId].chordPositionRefs)
+        .flatMap(ref => ref.staffNumbers ?? []).map(Number));
+      syllablesByPart.set(partId, gather(lyricChordPositionRanges.map(range => {
+        const own = range.lyricLineIds?.filter(id => staves.has(Number(id.split('.')[0])));
+        return own?.length ? { ...range, lyricLineIds: own } : range;
+      })));
+    }
+    return syllablesByPart.get(partId);
+  };
+
+  const stanzas = this._alignSyllablesToLyrics(stanzaTexts.filter(text => !this._patterns.laterPartStanza.test(text.trim())).join('\n\n'),
+    syllablesOf(partIds[0]), this._scoreData.staffNumbers);
+  for (const { input: text, 1: verseNumber, 2: letter } of laterParts) {
+    const partId = partIds[letter.charCodeAt(0) - 'a'.charCodeAt(0)];
+    const stanza = stanzas.find(candidate => candidate.marker === `${verseNumber}a`);
+    if (!stanza || !partId) continue;
+    // Only this verse's syllables, up to where the next stanza sung starts: the part sings its
+    // own verse elsewhere too, and a moved tail word leaves the stanza's own end short
+    const from = stanza.expandedChordPositions?.[0];
+    const to = stanzas.slice(stanzas.indexOf(stanza) + 1).map(next => next.expandedChordPositions?.[0])
+      .find(start => start > from) ?? Infinity;
+    const syllables = from == null || Number.isNaN(from) ? [] : syllablesOf(partId)
+      .filter(syllable => syllable.expandedChordPositions.some(ecp => ecp >= from && ecp < to));
+    const [aligned] = this._alignSyllablesToLyrics(text, syllables, this._scoreData.staffNumbers);
+    const plain = text.split('\n').slice(1).join('\n');
+    stanza.partLyrics = [...(stanza.partLyrics ?? [{
+      partId: partIds[0], lyricsText: stanza.lyricsText, lyricsAnnotated: stanza.lyricsAnnotated,
+    }]), {
+      partId: partId,
+      lyricsText: aligned?.lyricsText ?? plain,
+      lyricsAnnotated: aligned?.lyricsAnnotated ?? plain,
+    }];
+  }
+  return stanzas;
 }
 
 // Walk the chord positions in sung order and pull out the syllable engraved at each,
@@ -9761,10 +9828,13 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
     // what is chosen from: the pickup rule above indexes the whole stack by pass number.
     // Where the pass count named no line at all -- it looked for a line number the music
     // never carries -- the range's answer stands in for it rather than only correcting it.
+    // Only the tune's words stand in: a line named here can be secondary at this chord position
+    // (the echo on a chorus that another verse's line sings as melody), and a secondary syllable
+    // is never taken for its line's name.
     if (range.lyricLineIds?.length
       && !(lyricElement && range.lyricLineIds.includes(lyricElement.getAttribute('ch-lyric-line-id')))) {
-      lyricElement = lyricElements.find(ve => range.lyricLineIds.includes(ve.getAttribute('ch-lyric-line-id')))
-        ?? lyricElement;
+      lyricElement = lyricElements.find(ve => !ve.hasAttribute('ch-secondary')
+        && range.lyricLineIds.includes(ve.getAttribute('ch-lyric-line-id'))) ?? lyricElement;
     }
 
     // A round marker is engraved where the voice enters, which isn't always the chord
@@ -12697,6 +12767,8 @@ ChScore.prototype._sameColumnTolerance = 100;
 
 // Regular expressions
 ChScore.prototype._patterns = {
+  // A two-part song's later part's words in the verse every part sings ("[Verse 3b]"; see _extractLyricStanzas)
+  laterPartStanza: /^\[Verse (\d+)([b-z])\]$/m,
   // Verse markers and styling in text blocks
   verseMarker: /^\s*\d{1,2}\s*[.)]/,
   stylingMarkup: /<\/?(?:em|strong)>/g,
@@ -12878,6 +12950,8 @@ ChScore.prototype._markSectionChordPositions = function () {
     section.lyricsAnnotated = markersFor(unmarked.filter(cp => cp < firstMarked))
       + section.lyricsAnnotated
       + markersFor(unmarked.filter(cp => cp >= firstMarked));
+    // The first part's entry is the section's own words
+    if (section.partLyrics?.[0]) section.partLyrics[0].lyricsAnnotated = section.lyricsAnnotated;
   }
 }
 
@@ -13306,24 +13380,9 @@ ChScore.prototype._tstampToQstamp = function (tstamp, measureStartQ, measureEndQ
   return Math.min(measureEndQ, measureStartQ + ((tstamp - 1) * quartersPerBeat));
 }
 
-// Where a chord position sits in the score as a singer would name it: the measure number
-// (`0` for a pickup -- a measure written in two sub-measures is still one) and the 1-based beat
-// within it. Null where the chord position has no measure -- nothing to place it against.
-ChScore.prototype._chordPositionToMeasureBeat = function (chordPosition) {
-  const chordPositionInfo = this._scoreData.chordPositions?.[chordPosition];
-  const measure = this._scoreData.measures?.[chordPositionInfo?.measureIndex];
-  if (!measure || measure.startQ == null) return null;
-  // The beat counts from the measure's start, whichever of its sub-measures the position is in
-  return {
-    measureNumber: measure.measureNumber,
-    beat: this._qstampToTstamp(chordPositionInfo.startQ ?? measure.startQ,
-      measure.startQ, measure.timeSignature[1]),
-  };
-}
-
-// The inverse: the chord position a measure number and beat name. The number is not a position
-// -- `0` exists, and a score without a pickup starts at 1 -- so it is resolved through the
-// measures rather than used to subscript. The beat is counted from the measure's start and runs
+// The chord position a measure number and beat name (the reverse of a chord position's
+// measureBeat). The number is not a position -- `0` exists, and a score without a pickup starts
+// at 1 -- so it is resolved through the measures rather than used to subscript. The beat is counted from the measure's start and runs
 // on through however many sub-measures it is written in, which is what makes the split
 // invisible. `qstamps` is for callers reading a position before the chord positions are built.
 ChScore.prototype._measureBeatToChordPosition = function (measureNumber, beat, qstamps = null) {
@@ -13370,7 +13429,8 @@ ChScore.prototype._resolveTemplatePosition = function (text, numChordPositions,
   { syllableIndex = null, lyricLineIds = null, qstamps = null } = {}) {
   const chordPosition = this._parseTemplatePosition(text, qstamps);
   if (chordPosition === null || chordPosition < 0 || chordPosition > numChordPositions) return null;
-  if (!syllableIndex || !String(text).includes('@')) return chordPosition;
+  // A range singing no lines (an introduction, ':none') has no words to keep whole
+  if (!syllableIndex || lyricLineIds?.length === 0 || !String(text).includes('@')) return chordPosition;
 
   const { byChordPosition, byLine, jumps } = syllableIndex();
   const sungAt = (at) => {
@@ -13456,11 +13516,7 @@ ChScore.prototype._continuesOverGap = function (from, to, lyricLineIds) {
 // chord position, which is still readable against this score.
 ChScore.prototype._writeTemplatePosition = function (chordPosition, form = 'chord-position') {
   if (form !== 'measure-beat') return String(chordPosition);
-  const where = this._chordPositionToMeasureBeat(chordPosition);
-  if (!where || where.measureNumber == null) return String(chordPosition);
-  // A beat divides quarter notes, so it can land on a repeating fraction; rounded to where a
-  // written beat stops meaning anything
-  return `${where.measureNumber}@${Math.round(where.beat * 1000) / 1000}`;
+  return this._scoreData.chordPositions?.[chordPosition]?.measureBeat ?? String(chordPosition);
 }
 
 ChScore.prototype._chordPositionQstamps = function () {
