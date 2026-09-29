@@ -133,7 +133,7 @@ describe('This Little Light of Mine — shared fixture', { timeout: 30000 }, () 
 
     it('should give every sub-measure record the same fields, split pieces included', () => {
       const expectedKeys = [
-        'durationQ', 'endQ', 'firstChordPosition', 'keySignatureId', 'measureIndex',
+        'clefs', 'durationQ', 'endQ', 'firstChordPosition', 'keySignatureId', 'measureIndex',
         'rightBarLine', 'startQ', 'subMeasureId', 'subMeasureIndex', 'timeSignature',
       ];
       const records = Object.values(score._scoreData.subMeasuresById);

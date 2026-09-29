@@ -890,3 +890,45 @@ describe('How Great the Wisdom and the Love — changing key part-way through', 
       ['c-major', 'a-flat-major', 'a-flat-major', 'a-flat-major', 'a-flat-major']);
   });
 });
+
+// The same with a clef: the introduction ends after the bass staff changes to treble clef, so
+// the first verse, and each after it, has to start back in bass clef ("When Joseph Went to
+// Bethlehem", Children's Songbook)
+describe('How Great the Wisdom and the Love — changing clef part-way through', () => {
+  let changingClef;
+
+  beforeAll(async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    ChScore.prototype._drawScore = function () {};
+    changingClef = new ChScore('#score-container');
+    // From measure 14 on, the lower staff in treble clef
+    await changingClef.load('musicxml', {
+      scoreContent: sampleMusicXml.replace('<measure number="14">',
+        '<measure number="14"><attributes><clef number="2"><sign>G</sign><line>2</line></clef></attributes>'),
+    });
+    changingClef.setOptions({ expandScore: 'full-score' });
+  });
+
+  afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
+
+  it('should draw every measure in the clef it is written in', () => {
+    const inForce = { timeSignature: [0, 0], keySignatureId: null, clefs: {} };
+    const passStarts = [];
+    let pass = null;
+    for (const element of changingClef._scoreData.meiParsed
+      .querySelectorAll('scoreDef, staffDef, keySig, meterSig, clef, measure')) {
+      if (!element.matches('measure')) {
+        changingClef._applyMeiDefinition(element, inForce);
+        continue;
+      }
+      const record = changingClef._scoreData.subMeasuresById[element.getAttribute('xml:id')];
+      expect(inForce.clefs).toEqual(record.clefs);
+      const elementPass = element.closest('[ch-iteration]')?.getAttribute('ch-iteration');
+      if (elementPass !== pass) passStarts.push(inForce.clefs['2'].shape);
+      pass = elementPass;
+    }
+    // The introduction is drawn from measures 11-14, so it opens in bass clef and changes to
+    // treble in its last measure; each of the four verses opens back in bass clef
+    expect(passStarts).toEqual(['F', 'F', 'F', 'F', 'F']);
+  });
+});

@@ -1,3 +1,3 @@
 await import('./chorister.js');
-const ChScore = window.ChScore;
+const ChScore = globalThis.ChScore;
 export { ChScore };

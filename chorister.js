@@ -89,7 +89,7 @@ ChScore.prototype._loadStyles = function () {
 
 ChScore.prototype._loadEventListeners = function () {
   // Abort controller can be used to cancel event listeners if the score is removed
-  this._controller = new AbortController;
+  this._controller = new AbortController();
 
   // Print
   let previousLayout = null;
@@ -1077,6 +1077,12 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
 
     for (const direction of parsed.querySelectorAll('direction')) {
       if (!['⌜', '⌝'].includes(direction.textContent.trim())) continue;
+      // A bracket is never played; with a <sound> in it, Verovio makes it a <dynam> instead of
+      // a <dir> ("Guíame, oh Salvador", Spanish Hymns)
+      for (const sound of Array.from(direction.querySelectorAll('sound'))) {
+        sound.remove();
+        changed = true;
+      }
       const positioned = direction.querySelector('[default-x]');
       const bracketX = positioned ? Number.parseFloat(positioned.getAttribute('default-x')) : null;
       if (bracketX === null || Number.isNaN(bracketX)) continue;
@@ -2030,8 +2036,8 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   // This walk visits every scoreDef and staffDef in document order, so it also enables
   // collapsing empty staves ("True to the Faith", 1985 Hymns) and collects the staff numbers
   const staffNumbers = [];
-  const inForce = { timeSignature: [0, 0], keySignatureId: null };
-  const definitions = 'scoreDef, staffDef, keySig, meterSig, measure';
+  const inForce = { timeSignature: [0, 0], keySignatureId: null, clefs: {} };
+  const definitions = 'scoreDef, staffDef, keySig, meterSig, clef, measure';
   for (const element of this._scoreData.meiParsed.querySelectorAll(definitions)) {
     if (element.matches('scoreDef')) element.setAttribute('optimize', 'true');
     else if (element.matches('staffDef')) staffNumbers.push(Number.parseInt(element.getAttribute('n')));
@@ -2043,6 +2049,7 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
         subMeasureIndex: null, // Added later
         timeSignature: [...inForce.timeSignature],
         keySignatureId: inForce.keySignatureId, // As in keySignatureInfo; null where none is named
+        clefs: inForce.clefs, // By staff number, as the clef's attributes
         // As drawn now: _updateMei keeps it in step with each rebuild. The measure's own, in
         // _scoreData.measures, stays the one the score writes.
         rightBarLine: element.getAttribute('right') ?? 'single',
@@ -3106,10 +3113,20 @@ ChScore.prototype._measureOf = function (subMeasureId) {
   return this._scoreData.measures?.[subMeasure?.measureIndex];
 }
 
-// What a scoreDef, staffDef, keySig or meterSig puts in force from where it is written on,
-// applied to `inForce` ({ timeSignature: [count, unit], keySignatureId }). The records and the
-// expanded document are both read with this, so they agree on what is in force where.
+// What a scoreDef, staffDef, keySig, meterSig or clef puts in force from where it is written on,
+// applied to `inForce` ({ timeSignature: [count, unit], keySignatureId, clefs }). The records and
+// the expanded document are both read with this, so they agree on what is in force where.
 ChScore.prototype._applyMeiDefinition = function (element, inForce) {
+  if (element.matches('clef, staffDef')) {
+    // A clef holds for its staff: set in a staffDef, or changed part-way through a measure.
+    // `clefs` is replaced rather than changed, so the records can share it.
+    const prefix = element.matches('clef') ? '' : 'clef.';
+    const clef = Object.fromEntries(['shape', 'line', 'dis', 'dis.place']
+      .map(name => [name, element.getAttribute(prefix + name)]).filter(([, value]) => value != null));
+    const staffNumber = element.closest('staff, staffDef')?.getAttribute('n');
+    if (clef.shape && staffNumber) inForce.clefs = { ...inForce.clefs, [staffNumber]: clef };
+    if (element.matches('clef')) return;
+  }
   inForce.keySignatureId = this._keySignatureIdOf(element) ?? inForce.keySignatureId;
   if (element.matches('keySig')) return;
   inForce.timeSignature = [
@@ -3298,14 +3315,16 @@ ChScore.prototype._splitMeasure = function (measure, elementsById, qstamps, inco
   const piece = this._splitSubMeasure(element, tstamp, meter, elementsById);
   // Everything the sub-measure's record holds, but for what the cut changes. A key can change
   // part-way through a measure, so the piece opens in whatever the first piece leaves in force.
-  const inForce = { keySignatureId: subMeasure.keySignatureId };
-  for (const keySig of element.querySelectorAll('keySig')) this._applyMeiDefinition(keySig, inForce);
+  // So can a clef.
+  const inForce = { keySignatureId: subMeasure.keySignatureId, clefs: subMeasure.clefs };
+  for (const definition of element.querySelectorAll('keySig, clef')) this._applyMeiDefinition(definition, inForce);
   const record = {
     ...subMeasure,
     subMeasureId: piece.getAttribute('xml:id'),
     measureIndex: null, // Both settled by the walk in _finalizeMeasures
     subMeasureIndex: null,
     keySignatureId: inForce.keySignatureId,
+    clefs: inForce.clefs,
     rightBarLine: piece.getAttribute('right') ?? 'single',
     // The sub-measure this was cut from, which is what tells a piece cut for wrapping from a
     // sub-measure the engraver wrote
@@ -4389,7 +4408,7 @@ ChScore.prototype._updateMei = function () {
       const isTwoPart = this._scoreData.features.hasTwoPartMelody;
 
       // Gather section contents
-      // TODO: No need to get previous element siblings if this is fixed in Verovio code. Example: "This Is the Christ" (Hymns—For Home and Church)
+      // TODO: No need to get previous element siblings if this is fixed in Verovio code. Example: "This Is the Christ" (Hymns for Home and Church)
       // https://github.com/rism-digital/verovio/pull/4250
       const parentSection = expansion.parentElement;
       const sectionsById = {};
@@ -4840,10 +4859,10 @@ ChScore.prototype._updateMei = function () {
   }
 
   // An expansion places measures where the score did not -- a verse played again after the
-  // song modulated, an introduction drawn from after a change of meter -- so wherever the key or
-  // meter in force is not the one a <measure> is written in, a <scoreDef> puts it back
-  const inForce = { timeSignature: [0, 0], keySignatureId: null };
-  const definitions = 'scoreDef, staffDef, keySig, meterSig, measure';
+  // song modulated, an introduction drawn from after a change of meter or clef -- so wherever the
+  // key, meter or a clef in force is not the one a <measure> is written in, a <scoreDef> puts it back
+  const inForce = { timeSignature: [0, 0], keySignatureId: null, clefs: {} };
+  const definitions = 'scoreDef, staffDef, keySig, meterSig, clef, measure';
   for (const element of this._scoreData.meiParsed.querySelectorAll(definitions)) {
     if (!element.matches('measure')) {
       this._applyMeiDefinition(element, inForce);
@@ -4856,7 +4875,10 @@ ChScore.prototype._updateMei = function () {
       && subMeasure.keySignatureId !== inForce.keySignatureId;
     const meterChanged = unit
       && (count !== inForce.timeSignature[0] || unit !== inForce.timeSignature[1]);
-    if (!keyChanged && !meterChanged) continue;
+    // Only on staves still drawn: a staff hidden above has no clef in force
+    const changedClefs = Object.entries(subMeasure.clefs ?? {}).filter(([staffNumber, clef]) =>
+      inForce.clefs[staffNumber] && JSON.stringify(clef) !== JSON.stringify(inForce.clefs[staffNumber]));
+    if (!keyChanged && !meterChanged && !changedClefs.length) continue;
     const scoreDef = this._createMeiElement(this._scoreData.meiParsed, 'scoreDef');
     scoreDef.setAttribute('optimize', 'true');
     if (keyChanged) {
@@ -4873,8 +4895,20 @@ ChScore.prototype._updateMei = function () {
       meterSig.setAttribute('unit', String(unit));
       scoreDef.appendChild(meterSig);
     }
+    if (changedClefs.length) {
+      const staffGrp = this._createMeiElement(this._scoreData.meiParsed, 'staffGrp');
+      for (const [staffNumber, clef] of changedClefs) {
+        const staffDef = this._createMeiElement(this._scoreData.meiParsed, 'staffDef');
+        staffDef.setAttribute('n', staffNumber);
+        const clefElement = this._createMeiElement(this._scoreData.meiParsed, 'clef');
+        for (const [name, value] of Object.entries(clef)) clefElement.setAttribute(name, value);
+        staffDef.appendChild(clefElement);
+        staffGrp.appendChild(staffDef);
+      }
+      scoreDef.appendChild(staffGrp);
+    }
     element.parentNode.insertBefore(scoreDef, element);
-    for (const definition of scoreDef.children) this._applyMeiDefinition(definition, inForce);
+    for (const definition of scoreDef.querySelectorAll('keySig, meterSig, clef')) this._applyMeiDefinition(definition, inForce);
   }
 
   // Number the document now it is whole -- the introduction, the passes an expansion made,
@@ -9801,8 +9835,8 @@ ChScore.prototype._gatherSyllables = function (lyricChordPositionRanges, ecpStar
   let previousRangeWasRepeated = false;
 
   // Test cases:
-  // "Gethsemane" (Hymns—For Home and Church), "This Is the Christ" (Hymns—For Home and Church), "Beautiful Savior" (1989 CSB) – complex sections
-  // Japanese "When the Savior Comes Again" (Hymns—For Home and Church) – ruby text
+  // "Gethsemane" (Hymns for Home and Church), "This Is the Christ" (Hymns for Home and Church), "Beautiful Savior" (1989 CSB) – complex sections
+  // Japanese "When the Savior Comes Again" (Hymns for Home and Church) – ruby text
   // "Have I Done Any Good?" (1985 Hymns) – simple verses and chorus, but verses have chord positions with only one lyric syllable. When there's only one lyric syllable, it should be extracted only in the correct verse.
   for (const { range, chordPosition: cp, expandedChordPosition: ecpCounter, passNumber }
     of this._walkSungChordPositions(lyricChordPositionRanges, { ecpStart })) {
