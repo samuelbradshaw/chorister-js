@@ -6177,7 +6177,8 @@ ChScore.prototype._chLoadDependencies = async function () {
     // https://github.com/magenta/magenta-js/issues/684
     // import('https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1/es6/core.min.js'),
     import('https://cdn.jsdelivr.net/gh/samuelbradshaw/magenta-js@master/music/es6/core.js'),
-    import('https://cdn.jsdelivr.net/npm/verovio@6.2.0/dist/verovio-toolkit-wasm.min.js'),
+    // Kept to the version sheet-music-parser parses with, so chord positions match its timestamps
+    import('https://cdn.jsdelivr.net/npm/verovio@6.1.0/dist/verovio-toolkit-wasm.min.js'),
     verovioInitialized(),
   ]);
   return true;
