@@ -316,8 +316,8 @@ describe('MEI annotations — plain sampleMusicXml shared load', () => {
       expect(versesWithSectionId.length).toBeGreaterThan(0);
     });
 
-    it('should have hasLyricSectionIds true after loading', () => {
-      expect(score._scoreData.features.hasLyricSectionIds).toBe(true);
+    it('should tag lyrics with their section IDs after loading', () => {
+      expect(score._scoreData.meiParsed.querySelector(':is(label, verse)[ch-section-id]')).not.toBeNull();
     });
 
     it('should contain section IDs matching the loaded sections', () => {

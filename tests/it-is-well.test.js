@@ -371,8 +371,8 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
       }
     });
 
-    it('should have hasLyricSectionIds true', () => {
-      expect(score._scoreData.features.hasLyricSectionIds).toBe(true);
+    it('should tag lyrics with their section IDs', () => {
+      expect(score._scoreData.meiParsed.querySelector(':is(label, verse)[ch-section-id]')).not.toBeNull();
     });
   });
 

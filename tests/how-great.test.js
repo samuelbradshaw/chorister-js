@@ -368,8 +368,8 @@ describe('How Great the Wisdom and the Love — shared fixture', { timeout: 3000
       expect(versesWithSectionId.length).toBeGreaterThan(0);
     });
 
-    it('should have hasLyricSectionIds true', () => {
-      expect(score._scoreData.features.hasLyricSectionIds).toBe(true);
+    it('should tag lyrics with their section IDs', () => {
+      expect(score._scoreData.meiParsed.querySelector(':is(label, verse)[ch-section-id]')).not.toBeNull();
     });
 
     it('section IDs should reference known sections', () => {
@@ -889,6 +889,11 @@ describe('How Great the Wisdom and the Love — changing key part-way through', 
     expect(passStarts).toEqual(
       ['c-major', 'a-flat-major', 'a-flat-major', 'a-flat-major', 'a-flat-major']);
   });
+
+  it('should report the change of key, and no change of clef', () => {
+    expect(modulating._scoreData.features.hasKeySignatureChange).toBe(true);
+    expect(modulating._scoreData.features.hasClefChange).toBe(false);
+  });
 });
 
 // The same with a clef: the introduction ends after the bass staff changes to treble clef, so
@@ -930,5 +935,11 @@ describe('How Great the Wisdom and the Love — changing clef part-way through',
     // The introduction is drawn from measures 11-14, so it opens in bass clef and changes to
     // treble in its last measure; each of the four verses opens back in bass clef
     expect(passStarts).toEqual(['F', 'F', 'F', 'F', 'F']);
+  });
+
+  it('should report the change of clef, and no change of key or meter', () => {
+    expect(changingClef._scoreData.features.hasClefChange).toBe(true);
+    expect(changingClef._scoreData.features.hasKeySignatureChange).toBe(false);
+    expect(changingClef._scoreData.features.hasTimeSignatureChange).toBe(false);
   });
 });
