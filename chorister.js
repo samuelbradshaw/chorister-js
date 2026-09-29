@@ -378,9 +378,9 @@ ChScore.prototype.load = async function (format, {
     features: {
       hasLyrics: false, hasPartInfo: false, hasMelodyInfo: false, hasChordSets: false,
       hasChordSymbols: false, hasFingeringMarks: false,
-      hasRepeatOrJump: false, hasTwoPartMelody: false, hasRound: false, hasDescant: false,
-      hasOstinato: false, hasObbligato: false,
-      hasIntroBrackets: false, hasPickupMeasure: false, hasMelisma: false, hasExtenderLine: false,
+      hasTwoPartMelody: false, hasRound: false, hasDescant: false, hasOstinato: false,
+      hasObbligato: false,
+      hasRepeatOrJump: false, hasIntroBrackets: false, hasPickupMeasure: false, hasMelisma: false, hasExtenderLine: false,
       hasTiedNotes: false, hasFermatas: false, hasClefChange: false, hasTimeSignatureChange: false,
       hasKeySignatureChange: false, hasTempoChange: false, hasPartsChange: false,
       hasMelodyPartChange: false, hasExpansion: false, hasHelpText: false, hasInlineVerseNumbers: false,
@@ -6645,8 +6645,15 @@ ChScore.prototype._normalizeParts = function (chordPositionIndex) {
   // one means two-part; 'Duet' ('PP', one shared staff) yields one. Only ever holds part-N,
   // so a named-voice score ('SATB') leaves it empty however its melody is voiced — which
   // part carries the tune at a given chord position is _staffPartIds' own local list.
+  // Each line is alone on its staff: parts sharing staves with the accompaniment ('PC+PC',
+  // "Jesus, Lover of My Soul") are voices of one tune, not a melody each.
+  const refAt = (part, chordPosition) => Object.entries(part.chordPositionRefs)
+    .filter(([position]) => Number(position) <= chordPosition).at(-1)?.[1];
+  const aloneOnStaves = (part, chordPosition, staffNumbers) => this._scoreData.parts.every(other => other === part
+    || !(refAt(other, chordPosition)?.staffNumbers ?? []).some(staffNumber => staffNumbers.includes(staffNumber)));
   this._scoreData.twoPartMelodyPartIds = Object.values(this._scoreData.partsById)
-    .filter(part => /^part-\d+$/.test(part.partId) && Object.values(part.chordPositionRefs).some(ref => ref.isMelody))
+    .filter(part => /^part-\d+$/.test(part.partId) && Object.entries(part.chordPositionRefs).some(([position, ref]) =>
+      ref.isMelody && aloneOnStaves(part, Number(position), ref.staffNumbers ?? [])))
     .map(part => part.partId);
   this._scoreData.features.hasTwoPartMelody = this._scoreData.twoPartMelodyPartIds.length > 1;
 }
