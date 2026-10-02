@@ -142,6 +142,8 @@ You can also install it using [npm](https://www.npmjs.com/package/@samuelbradsha
     - **animate** – Whether the transition between pages should animate. Optional boolean. Default: `false`.
 - **getMidi(format = 'note-sequence')** – Get processed MIDI content.
     - **format** – Preferred format. Optional. Valid values: `note-sequence` (Magenta note sequence), `blob` ([Blob](https://developer.mozilla.org/en-US/docs/Web/API/Blob) object), `array-buffer` ([ArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer) object). Default: `note-sequence`.
+- **getLyrics(annotated = false)** – Get song lyrics from the score.
+    - **annotated** – Whether to include HTML markers (`<span>` elements with `data-ch-chord-position`, `data-ch-expanded-chord-position`, and `data-ch-lyric-line-id` attributes) that indicate where each syllable is sung. Optional boolean. Default: `false`.
 - **removeScore()** – Remove the current score from the page and clear stored data.
 
 Most of these methods will only work after the score is loaded.
@@ -206,60 +208,35 @@ With only a score (`scoreUrl` or `scoreContent`), Chorister.js should render cle
 
 #### Examples
 
-<details>
-<summary>Lyrics</summary>
+For simple scores, a parts template and a sections template are all Chorister.js needs. Both are optional; when they’re missing, Chorister.js works them out from the score.
 
-Provided lyrics should be written in the order they’re sung (for example, repeat the chorus if it’s sung multiple times), with bracketed labels such as [Verse 1], [Chorus], or [Bridge] above each lyric block. Only melody lyrics should be included (not lyrics from alternate or secondary parts).
-
+```javascript
+const scoreData = await chScore.load('musicxml', {
+  scoreUrl: 'https://cdn.jsdelivr.net/gh/samuelbradshaw/chorister-js@main/resources/how-great-the-wisdom-and-the-love.musicxml',
+  lyricsUrl: 'https://cdn.jsdelivr.net/gh/samuelbradshaw/chorister-js@main/resources/how-great-the-wisdom-and-the-love.txt',
+  partsTemplate: 'SATB',
+  sectionsTemplate: 'I(29-37); V(:1.1); V(:1.2); V(:1.3); V(:1.4)',
+});
 ```
-[Verse 1]
-When peace, like a river, attendeth my way,
-When sorrows like sea billows roll—
-Whatever my lot, Thou hast taught me to say,
-“It is well, it is well with my soul.”
 
-[Chorus]
-It is well with my soul;
-It is well, it is well with my soul.
+**Writing templates.** You don’t need to write templates from scratch. Load the score without them, then read `scoreData.templates`. It always reports the parts, sections, and lyric line breaks Chorister.js used, whether they came from your input or were worked out from the score. Correct anything that’s wrong, and pass the corrected template back in next time.
 
-[Verse 2]
-Though Satan should buffet, though trials should come,
-Let this blest assurance control:
-That Christ hath regarded my helpless estate
-And hath shed His own blood for my soul.
+`scoreData.templates` has three keys for each kind of template (parts, sections, and lyric lines): for example, `sectionsTemplateInput`, `sectionsTemplateCp`, and `sectionsTemplateMb`.
 
-[Chorus]
-It is well with my soul;
-It is well, it is well with my soul.
+- **`Input`** – The template you provided, unchanged, or `null` if you didn’t provide one.
+- **`Cp`** – The template Chorister.js used, with positions written as chord positions (`12`). It’s normalized, so `partsTemplate: 'SATB'` is reported as `'SA+TB'`.
+- **`Mb`** – The same template, with positions written as measure-beat positions (`4@1`, `12@3.5`). The beat counts from 1 within the measure. Measure-beat positions still work if the same music is engraved differently, such as a translation set to the same music. A measure-beat position that lands partway through a word moves to the start of that word.
 
-[Verse 3]
-My sin—oh, the bliss of this glorious thought!—
-My sin, not in part but the whole,
-Is nailed to the cross, and I bear it no more.
-Praise the Lord, praise the Lord, O my soul.
-
-[Chorus]
-It is well with my soul;
-It is well, it is well with my soul.
-
-[Verse 4]
-O Lord, haste the day when my faith shall be sight,
-The heav’ns be rolled back like a scroll.
-The trump shall resound, and the Lord shall descend;
-Even so, it is well with my soul.
-
-[Chorus]
-It is well with my soul;
-It is well, it is well with my soul.
-```
-</details>
+Either form can be used anywhere a template takes a position. If a template names a chord position or measure the score doesn’t have, Chorister.js logs a warning and ignores the whole template, as if none had been provided.
 
 <details>
 <summary>Parts</summary>
 
-Parts can be provided as a “parts template” string, or a parts object.
+Parts are best provided as a parts template. A parts object is also accepted, for cases a template can’t describe. If both are provided, the parts object is used.
 
 #### Parts template
+
+A parts template lists the parts on each staff, from the top staff down.
 
 Key:
 - M = melody
@@ -273,7 +250,7 @@ Key:
 - I = instrumental
 - C = accompaniment
 - \+ = separator between staves
-- \# = separator for specifying melody part (if not specified, M, S, P, or the first part is chosen as the melody)
+- \# = separator for specifying the melody part (if not specified, M, S, P, or the first part is chosen as the melody)
 - ; = separator between part changes
 
 Normalizations:
@@ -294,20 +271,24 @@ Normalizations:
 - SSAA –> SS+AA
 - AATT –> AA+TT
 - TTBB –> TT+BB
-- For unspecified staves, the normalized template is padded with C (accompaniment, if there are lyrics) or I (instrumental)
+- For unspecified staves, the normalized template is padded with C (accompaniment, if there are lyrics) or I (instrumental).
 
 Examples:
-- `SATB` – Staff 1: Soprano, alto. Staff 2: Tenor, bass.
-- `TT+BB#T2` – Staff 1: First tenor, second tenor. Staff 2: First bass, second bass. Second tenor has the melody.
-- `Descant+Unison` – Staff 1: Descant. Remaining staves: Unison (melody and accompaniment).
+- `SATB` – Staff 1: soprano, alto. Staff 2: tenor, bass. Soprano has the melody.
+- `D+SATB` – Staff 1: descant. Staff 2: soprano, alto. Staff 3: tenor, bass.
+- `MC+C` – Staff 1: melody, with accompaniment below it. Staff 2: accompaniment.
+- `SATB#A` – Like `SATB`, but alto has the melody.
+- `TT+BB#T2` – Staff 1: first tenor, second tenor. Staff 2: first bass, second bass. Second tenor has the melody.
+- `Two-Part` – Staff 1: part 1. Staff 2: part 2. Both parts are melodies, sung on different verses.
+- `Descant+Unison` – Staff 1: descant. Staff 2: melody and accompaniment. Remaining staves: accompaniment.
 
-If parts change throughout the song, templates can be combined and prefixed with starting chord position or measure-beat references:
-- `0:Unison; 39:SATB`
-- `0@1:SS+A#S1; 10@3.5:SS+A#A`
-- `0@1:SA+TB; 8@3:SA+TB#T; 12@3:SA+TB`
-
+If the parts change partway through the song, write each template with the position where it starts, separated by `;`:
+- `0:Unison; 39:SATB` – Unison until chord position 39, then SATB.
+- `0@1:SS+A#S1; 10@3.5:SS+A#A` – The melody moves from first soprano to alto on beat 3.5 of measure 10.
+- `0@1:SA+TB; 8@3:SA+TB#T; 12@3:SA+TB` – The tenor carries the melody from measure 8, beat 3, until measure 12, beat 3.
 
 #### Parts object
+
 ```json
 [
     {
@@ -316,9 +297,7 @@ If parts change throughout the song, templates can be combined and prefixed with
         "isVocal": true,
         "placement": "auto",
         "chordPositionRefs": {
-            "0": { "isMelody": true,
-                "staffNumbers": [1],
-                "lyricLineIds": null }
+            "0": { "isMelody": true, "staffNumbers": [1], "lyricLineIds": null }
         }
     },
     {
@@ -327,33 +306,10 @@ If parts change throughout the song, templates can be combined and prefixed with
         "isVocal": true,
         "placement": "auto",
         "chordPositionRefs": {
-            "0": { "isMelody": false,
-                "staffNumbers": [1],
-                "lyricLineIds": null }
+            "0": { "isMelody": false, "staffNumbers": [1], "lyricLineIds": null }
         }
     },
-    {
-        "partId": "tenor",
-        "name": "Tenor",
-        "isVocal": true,
-        "placement": "auto",
-        "chordPositionRefs": {
-            "0": { "isMelody": false,
-                "staffNumbers": [2],
-                "lyricLineIds": null }
-        }
-    },
-    {
-        "partId": "bass",
-        "name": "Bass",
-        "isVocal": true,
-        "placement": "auto",
-        "chordPositionRefs": {
-            "0": { "isMelody": false,
-                "staffNumbers": [2],
-                "lyricLineIds": null }
-        }
-    }
+    ...
 ]
 ```
 
@@ -362,14 +318,78 @@ Properties:
 - **name** – Part name that may be visible to users. String.
 - **isVocal** – Whether the part is sung or instrumental. Boolean.
 - **placement** – Placement of the part on its staff/staves. Valid values: 1, 2, 3, 4 (relative position among other parts on the staff), "full" (fills the specified staves), "auto" (automatically placed).
-- **chordPositionRefs** – Chord position where the part starts or where part metadata changes. Integer.
+- **chordPositionRefs** – Keyed by the chord position where the part starts or where its information changes.
     - **isMelody** – Whether the part includes the melody (starting at the given chord position). Boolean.
-    - **staffNumbers** – Numbers of the staves where the part is to be placed. List of integers.
-    - **lyricLineIds** – References to lyrics that are sung in the part. List of lyricLineIds (combination of staff and lyric line number – for example, a lyric syllable on the second staff, line number 1, has lyricLineId "2.1"). Optional.
+    - **staffNumbers** – Numbers of the staves where the part is placed. An empty list means the part stops at this chord position. List of integers.
+    - **lyricLineIds** – Lyric lines sung in the part. List of lyric line IDs. Optional.
 </details>
 
 <details>
 <summary>Sections</summary>
+
+Sections are best provided as a sections template. A sections object is also accepted, for cases a template can’t describe. If both are provided, the sections object is used.
+
+#### Sections template
+
+A sections template lists the sections in the order they’re sung, separated by `;`. Each section is a section character followed by one or more ranges in parentheses.
+
+Section characters:
+- V = verse
+- C = chorus
+- B = bridge
+- I = introduction
+- N = interlude
+- S = section (the default, if no section character is given)
+
+Normalizations:
+- Verse –> V
+- Chorus –> C
+- Bridge –> B
+- Introduction –> I
+- Interlude –> N
+- Section –> S
+
+Inside each pair of parentheses, in this order (each part is optional):
+- **Range** – `start-end`, where `end` is exclusive. Either end can be left out: `11@1-` runs to the end of the song, and `-20` starts at the beginning. Default: the whole song.
+- **Staff numbers** – Comma-separated, in square brackets. Default: all staves.
+- **Lyric location** – After `:`, one of:
+    - A comma-separated list of lyric line IDs, such as `2.1` or `1.1,2.1`.
+    - `below` – The words are printed below the music and aren’t sung in the score.
+    - `none` – Nothing is sung.
+
+  Default: `none` for introductions and interludes; otherwise, all lyric lines.
+
+On its own, `(:below)` or `(:none)` describes a section the score never plays, such as a verse printed below the music. With a range in front of it, the section is still played. For example, `C(0-37:none)` is a chorus played inline with nothing sung over it.
+
+Notes:
+- A section with no parentheses covers the whole song. For example, `V` is a single verse that includes all chord positions and staves.
+- A section can have more than one range. For example, an introduction made of the first and last few measures would be `I(0-25)(57-65)`.
+- Adding `/force` anywhere in the template tells Chorister.js to trust the template over the score. Use it when the score’s lyrics or verse numbers are engraved incorrectly. With `/force`:
+    - Verses begin only where the template says. A verse number engraved partway through a lyric line doesn’t start a new verse.
+    - Words that don’t belong to any section in the template are left out, instead of being added as a verse below the music.
+    - The template sets how many times the song is played, even if the score doesn’t have repeats for every playthrough (see the two-part example below).
+
+Everything else about each section is worked out for you:
+- **Numbering** – Verses are numbered from 1. A chorus is numbered from 0 if the song opens with a chorus, and from 1 otherwise. Other types are numbered from 1.
+- **marker** – Only verses have one: the verse number. If the score prints its own number for a verse (such as “5.” on a verse below the music), that number is used instead.
+- **sectionId** and **name** – From the type and number: `verse-2` / “Verse 2”, `chorus-1` / “Chorus”. The first introduction’s ID is `introduction`.
+- **placement** – `inline` where the section has music, `below` where its words are printed below the music, and `none` where it isn’t placed in the score.
+- **pauseAfter** – `true` after a bracketed introduction. It’s also `true` after a section that’s followed by another playthrough from the beginning, when the song ends on a note too short to breathe in.
+
+Examples from the [demo scores](https://github.com/samuelbradshaw/chorister-js/tree/main/resources):
+- `I(29-37); V(:1.1); V(:1.2); V(:1.3); V(:1.4)` – *How Great the Wisdom and the Love.* An introduction made of the last two lines (marked with intro brackets), then four verses over the whole song, each on its own lyric line.
+- `I(0-12); V(12-60:1.1); V(12-48:1.2)(48-51:1.1)(60-69:1.1)` – *This Little Light of Mine.* An introduction, then two verses. Verse 2 has its own words up to chord position 48, then sings the same words as verse 1, skipping the first ending.
+- `I(0-13[2,3])(55-64[2,3]); V(0-42[2,3]:2.1); C(42-64[2,3]:2.1); …; V(0-42:2.4); C(42-64:1.1,2.1)` – *It Is Well with My Soul.* The introduction and the first three verses leave out the descant on staff 1. Verse 4 and its chorus add it, and the last chorus also sings the descant’s words (`1.1`).
+
+Other examples:
+- `I(0-12); V(12-42); C(42-63); V(:below); C(:below)` – An introduction, a sung verse and chorus, then a verse and chorus printed below the music.
+- `V(:1.1); V(:2.1); V(:1.1,2.1) /force` – A two-part song printed once: part 1 sings verse 1, part 2 sings verse 2, then both sing together on a third playthrough.
+
+The same templates in measure-beat form (`templates.sectionsTemplateMb`):
+- `I(11@3-); V(:1.1); V(:1.2); V(:1.3); V(:1.4)`
+- `I(0@1-4@1); V(4@1-20@1:1.1); V(4@1-16@1:1.2)(16@1-17@1:1.1)(20@1-:1.1)`
+
+#### Sections object
 
 ```json
 [
@@ -381,12 +401,8 @@ Properties:
         "placement": "inline",
         "pauseAfter": true,
         "chordPositionRanges": [
-            { "start": 0, "end": 12,
-              "staffNumbers": [1, 2],
-              "lyricLineIds": [] },
-            { "start": 55, "end": 63,
-              "staffNumbers": [1, 2],
-              "lyricLineIds": [] }
+            { "start": 0, "end": 13, "staffNumbers": [2, 3], "lyricLineIds": [] },
+            { "start": 55, "end": 64, "staffNumbers": [2, 3], "lyricLineIds": [] }
         ]
     },
     {
@@ -397,9 +413,7 @@ Properties:
         "placement": "inline",
         "pauseAfter": false,
         "chordPositionRanges": [
-            { "start": 0, "end": 42,
-              "staffNumbers": [1, 2],
-              "lyricLineIds": ["1.1"] }
+            { "start": 0, "end": 42, "staffNumbers": [2, 3], "lyricLineIds": ["2.1"] }
         ]
     },
     {
@@ -410,76 +424,206 @@ Properties:
         "placement": "inline",
         "pauseAfter": false,
         "chordPositionRanges": [
-            { "start": 42, "end": 63,
-              "staffNumbers": [1, 2],
-              "lyricLineIds": ["1.1"] }
+            { "start": 42, "end": 64, "staffNumbers": [2, 3], "lyricLineIds": ["2.1"] }
         ]
-    }
+    },
+    ...
 ]
 ```
 
 Properties:
-- **sectionId** – Any unique ID for the part. String.
-- **type** – Section type. Valid values: "introduction", "verse", "chorus", "bridge", "interlude", "unknown".
+- **sectionId** – Any unique ID for the section. String.
+- **type** – Section type. Valid values: "verse", "chorus", "bridge", "introduction", "interlude", "section". Use "section" where nothing more is known about a passage.
 - **name** – Section name that may be visible to users. String.
-- **marker** – Verse number or similar sequential marker. String. Optional.
+- **marker** – Verse number or similar sequential marker. String or `null`.
 - **placement** – Placement of the section in the score. Valid values: "inline" (inline with the music), "below" (below the music), "none" (not placed in the score).
 - **pauseAfter** – Whether a short pause should be added in the MIDI after the section is played. Boolean.
-- **chordPositionRanges** – Chord position ranges that are part of the verse.
+- **lyricsAnnotated** – The section’s words, for sections placed below the music. String. Optional.
+- **chordPositionRanges** – Chord position ranges that are part of the section.
     - **start** – Chord position where the range starts. Integer.
-    - **end** – Chord position where the range ends (exclusive range). Integer.
-    - **staffNumbers** – Numbers of the staves that are relevant to the section. For example, if the first staff is a descant only sung on the third verse, only the third verse should include that staff number. List of integers. Optional.
-    - **lyricLineIds** – References to lyrics that are relevant to the section. List of lyricLineIds (combination of staff and lyric line number – for example, a lyric syllable on the second staff, line number 1, has lyricLineId "2.1"). Optional.
+    - **end** – Chord position where the range ends (exclusive). Integer.
+    - **staffNumbers** – Staves played in the section. For example, if the first staff is a descant that’s only sung on the third verse, only the third verse should include that staff number. List of integers. Optional.
+    - **lyricLineIds** – Lyric lines sung in the section. List of lyric line IDs. Optional.
+</details>
+
+<details>
+<summary>Lyrics</summary>
+
+Provided lyrics should be written in the order they’re sung, with a bracketed label such as `[Verse 1]`, `[Chorus]`, or `[Bridge]` above each block. If the chorus is sung more than once, repeat it each time. Only melody lyrics should be included (not lyrics from alternate or secondary parts). Labels with no words under them, such as `[Introduction]` or `[Interlude]`, are allowed and are skipped. Line breaks are kept, and are reported back as a lyric lines template.
+
+```
+[Introduction]
+
+[Verse 1]
+When peace, like a river, attendeth my way,
+When sorrows, like sea-billows, roll;
+Whatever my lot, Thou hast taught me to say,
+It is well, it is well with my soul.
+
+[Chorus]
+It is well with my soul,
+It is well, it is well with my soul.
+
+[Verse 2]
+Though Satan should buffet, though trials should come,
+Let this blest assurance control:
+That Christ hath regarded my helpless estate,
+And hath shed His own blood for my soul.
+
+[Chorus]
+It is well with my soul,
+It is well, it is well with my soul.
+
+...
+```
+
+In a two-part song where both parts sing together on the last verse, each part’s words for that verse can be given separately, with a letter after the verse number:
+
+```
+[Verse 3a]
+(words sung by part 1)
+
+[Verse 3b]
+(words sung by part 2)
+```
+
+If lyrics aren’t provided, Chorister.js extracts them from the score. Either way, `getLyrics()` returns the lyrics in this format (see “Public methods”).
+</details>
+
+<details>
+<summary>Lyric lines template</summary>
+
+When Chorister.js extracts lyrics from the score, it decides where each line of lyrics breaks, using punctuation, capitalization, rests, and other hints. A lyric lines template sets the line breaks instead. It lists the positions where new lines start, separated by `;`. A position can be followed by lyric line IDs in square brackets, to apply it only to those lyric lines.
+
+- `11; 19; 29` – Every verse starts a new line at chord positions 11, 19, and 29.
+- `4@3; 7@3; 11@3` – The same line breaks, written as measure-beat positions.
+- `4@3; 7@3; 9@1[1.2]; 11@3` – Like the previous template, but verse 2 (lyric line `1.2`) also breaks at measure 9, beat 1.
+
+A line break that would fall in the middle of a word moves to the start of that word. If a verse can’t follow the template, its line breaks are worked out automatically instead. Lyric lines templates are only used when lyrics are extracted from the score. Provided lyrics keep their own line breaks.
+</details>
+
+<details>
+<summary>Injected syllables</summary>
+
+Injected syllables are added to the score before Chorister.js reads it, and are then treated the same as syllables engraved in the score. Use them to:
+- Place a verse that’s printed below the music onto the staff, so it can be highlighted and played along with.
+- Fix a misspelled or incorrectly engraved syllable. An injected syllable replaces any syllable engraved on the same lyric line at the same chord position, and keeps any verse number engraved with it.
+
+Provide one row per syllable, as a TSV string with a header row or as an array of objects:
+
+| Column | Meaning |
+| --- | --- |
+| `chordPosition` | Chord position of the note the syllable is sung on. Required. |
+| `text` | The syllable. A verse number before the first syllable (`5. Re`) becomes the verse’s label. Required. |
+| `connector` | What comes after the syllable (see below). Default: `SPACE`. |
+| `staffNumber` | Staff number. Default: the first staff with lyrics. |
+| `layerNumber` | Layer number. Default: the first layer. |
+| `lineNumber` | Lyric line number on the staff. Default: the staff’s first unused line. Numbers past the staff’s engraved lines continue directly after them, so `10` and `11` on a staff with four engraved verses become lines 5 and 6. |
+
+Connectors:
+- `SPACE` – A space (the word ends).
+- `NONE` – Nothing; the next syllable continues the word. For languages written without spaces.
+- `SPACE_TAB` – A space where the line may wrap, such as between the two halves of a line of Japanese lyrics.
+- `SPACE_NEWLINE` – A new line of lyrics.
+- `HYPHEN` – A hyphen that’s part of the word’s spelling (`soul-cheering`).
+- `HYPHEN_SOFT` – A syllable break within a word (no hyphen in the lyrics).
+- `EXTENDER` – An extender line (the word ends, and the syllable is held).
+- `EXTENDER_END` – The last syllable held by an extender line.
+- `TIE_OVER`, `TIE_UNDER` – An elision joining two words.
+
+```javascript
+// Add verse 5, printed below the music, to the staff
+await chScore.load('musicxml', {
+  scoreUrl: 'redeemer-of-israel.musicxml',
+  injectedSyllables: 'chordPosition\ttext\tconnector\n'
+    + '0\t5. Re\tHYPHEN_SOFT\n'
+    + '1\tstore,\tSPACE\n'
+    + '3\tmy\tSPACE\n'
+    + '...',
+});
+
+// Fix "children", engraved on lyric line 2 at chord positions 14 and 15
+await chScore.load('musicxml', {
+  scoreUrl: 'called-to-serve.musicxml',
+  injectedSyllables: [
+    { chordPosition: 14, text: 'chil', connector: 'HYPHEN_SOFT', lineNumber: 2 },
+    { chordPosition: 15, text: 'dren', connector: 'SPACE', lineNumber: 2 },
+  ],
+});
+```
+
+When fixing part of a word, inject the whole word: a syllable’s place in its word is worked out from the injected syllables alone. A syllable whose chord position has no note on its staff and layer is skipped, with a warning.
+</details>
+
+<details>
+<summary>Hyphenated words</summary>
+
+When Chorister.js extracts lyrics from the score, it joins syllables into words. Some words are spelled with a hyphen that falls between two syllables, such as Tagalog `pag-ibig` (engraved `Pag` / `i` / `big`). The score doesn’t show whether those syllables should be joined with a hyphen, so Chorister.js uses these sources, in order of priority:
+
+1. **The score’s own text.** Hyphenated words in the printed title and in verses printed below the music. No setup needed.
+2. **`hyphenatedWords`**, if provided.
+3. **A built-in list** of common hyphenated words, for `en`, `fr`, and `pt` (selected with `lang`).
+
+For other languages, provide `hyphenatedWords` to restore hyphens that aren’t in the score’s own text:
+
+```javascript
+await chScore.load('musicxml', {
+  scoreUrl: 'song.musicxml',
+  lang: 'tl',
+  hyphenatedWords: ['pag-ibig', 'mag-isa', 'nag-ampo'],
+});
+```
+
+Words are matched without regard to capitalization, and a hyphen is only added where it falls between two syllables, so a listed word can’t change the spelling of an unrelated word.
+
+A good list can be gathered from hyphenated words in existing lyrics in the same language, or from a dictionary such as Wiktionary. Leave out hyphenated words whose unhyphenated spelling is also a word: for example, `sun-light` would turn every `sunlight` into `sun-light`.
+</details>
+
+<details>
+<summary>MIDI</summary>
+
+Without MIDI, Chorister.js uses MIDI generated by Verovio, which plays the score at a steady tempo. Provided MIDI is used for its timing: tempo changes, rubato, held fermatas, and dynamics. The notes still come from the score, and are reordered to match the expanded score. Use your own MIDI for more natural playback, or to keep highlighting in sync with a recording made from the same MIDI.
+
+```javascript
+await chScore.load('musicxml', {
+  scoreUrl: 'it-is-well-with-my-soul.musicxml',
+  midiUrl: 'it-is-well-with-my-soul.mid',
+});
+```
+
+To be used, the MIDI must line up note for note with the score, either:
+- **Minimal** – One play-through of the score as written, ignoring jumps and repeats. The same timing is used for every verse.
+- **Complete** – The whole song as sung, with every verse, jump, and repeat. Each verse keeps its own timing.
+
+Otherwise, Chorister.js logs a warning and uses MIDI generated by Verovio. `scoreData.midiType` reports which kind of MIDI was used. Duplicate notes (such as a piano part doubling the voices) are ignored. If you already have the MIDI as a Magenta note sequence, pass it as `midiNoteSequence` instead of `midiUrl`.
 </details>
 
 <details>
 <summary>Chord sets</summary>
 
+Chord sets are shown above the music system, one set at a time (see the `showChordSet` option). Each item is keyed by the chord position it’s placed at.
+
 ```json
 [
-    {
-        "chordSetId": "default",
-        "name": "Default",
-        "svgSymbolsUrl": null,
-        "chordPositionRefs": {
-            "1": {
-                "prefix": null,
-                "text": "C",
-                "svgSymbolId": null
-            },
-            "4": {
-                "prefix": null,
-                "text": "C+",
-                "svgSymbolId": null
-            },
-            "7": {
-                "prefix": null,
-                "text": "Dm",
-                "svgSymbolId": null
-            },
-            ...
-        }
-    },
     {
         "chordSetId": "guitar",
         "name": "Guitar",
         "svgSymbolsUrl": null,
         "chordPositionRefs": {
-            "1": {
-                "text": "C",
-                "prefix": null,
-                "svgSymbolId": null
-            },
-            "4": {
-                "text": "C+",
-                "prefix": null,
-                "svgSymbolId": null
-            },
-            "7": {
-                "text": "Dm",
-                "prefix": null,
-                "svgSymbolId": null
-            },
+            "1": { "text": "C", "prefix": null, "svgSymbolId": null },
+            "4": { "text": "C+", "prefix": null, "svgSymbolId": null },
+            "7": { "text": "Dm", "prefix": null, "svgSymbolId": null },
+            ...
+        }
+    },
+    {
+        "chordSetId": "guitar-capo-5",
+        "name": "Guitar (Capo 5)",
+        "svgSymbolsUrl": null,
+        "chordPositionRefs": {
+            "1": { "text": "G", "prefix": "Capo 5:", "svgSymbolId": null },
+            "4": { "text": "G+", "prefix": null, "svgSymbolId": null },
+            "7": { "text": "Am", "prefix": null, "svgSymbolId": null },
             ...
         }
     },
@@ -488,21 +632,9 @@ Properties:
         "name": "Parsons Code",
         "svgSymbolsUrl": "/static/symbols.svg",
         "chordPositionRefs": {
-            "0": {
-                "text": "＊",
-                "prefix": null,
-                "svgSymbolId": "pc-asterisk"
-            },
-            "1": {
-                "text": "R",
-                "prefix": null,
-                "svgSymbolId": "pc-repeat"
-            },
-            "2": {
-                "text": "D",
-                "prefix": null,
-                "svgSymbolId": "pc-down"
-            },
+            "0": { "text": "＊", "prefix": null, "svgSymbolId": "pc-asterisk" },
+            "1": { "text": "R", "prefix": null, "svgSymbolId": "pc-repeat" },
+            "2": { "text": "D", "prefix": null, "svgSymbolId": "pc-down" },
             ...
         }
     }
@@ -513,31 +645,27 @@ Properties:
 - **chordSetId** – Any unique ID for the chord set. String.
 - **name** – Chord set name that may be visible to users. String.
 - **svgSymbolsUrl** – Relative or absolute URL to an SVG file with SVG symbols. String. Optional.
-- **chordPositionRefs** – Chord position where an item should be added. Integer.
+- **chordPositionRefs** – Keyed by the chord position where an item should be added.
     - **text** – Text to be added. String.
-    - **prefix** – Prefix to be added, such as `Capo 5:`. String. Optional.
-    - **svgSymbolId** – ID of the SVG symbol to be drawn above (when enabled in options). String. Optional.
+    - **prefix** – Text shown before the item, such as `Capo 5:`. String. Optional.
+    - **svgSymbolId** – ID of an SVG symbol (from `svgSymbolsUrl`) to be drawn above the text, such as a chord diagram, when `showChordSetImages` is enabled. String. Optional.
 </details>
 
 <details>
 <summary>Fermatas</summary>
 
+Fermatas tell Chorister.js how long to hold each note with a fermata during playback. Each duration factor multiplies the length of the note at that chord position. If provided MIDI already slows down noticeably at that point, the fermata is assumed to be part of the MIDI and isn’t applied again.
+
 ```json
 [
-    {
-        "chordPosition": 31,
-        "durationFactor": 2.0
-    },
-    {
-        "chordPosition": 157,
-        "durationFactor": 1.5
-    }
+    { "chordPosition": 31, "durationFactor": 2.0 },
+    { "chordPosition": 157, "durationFactor": 1.5 }
 ]
 ```
 
 Properties:
 - **chordPosition** – Chord position of the fermata. Integer.
-- **durationFactor** – Relative duration of the chord position. Float.
+- **durationFactor** – How many times longer the note is held. Float.
 </details>
 
 
@@ -578,7 +706,7 @@ Each event has a `detail` attribute that provides additional information. For ex
 const scoreContainer = document.getElementById('score-container');
 scoreContainer.addEventListener('ch:tap', (event) => {
   console.log(event.detail);
-  if (event.detail.expandedChordPositions.length > 0) {
+  if (event.detail.pointData.expandedChordPositions.length > 0) {
     const startTime = getTimestamp(event.detail.pointData.expandedChordPositions[0]);
     prPlayer.seekToTime(startTime, { play: true });
   }
