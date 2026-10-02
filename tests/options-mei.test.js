@@ -1030,7 +1030,7 @@ describe('_updateSvg() — SVG post-processing', () => {
       drawForegroundShapes: ['ch-chord-position-label'],
     });
     const svg = score._container.querySelector('svg');
-    const labels = svg.querySelectorAll('.ch-shapes-foreground .ch-chord-position-label:not(.ch-row-header)');
+    const labels = svg.querySelectorAll('.ch-shapes-foreground .ch-chord-position-label:not([data-ch-label-marker])');
     expect(labels.length).toBe(score._scoreData.chordPositions.length);
     for (const label of labels) {
       expect(label.getAttribute('data-ch-chord-position')).toBeTruthy();
@@ -1043,7 +1043,7 @@ describe('_updateSvg() — SVG post-processing', () => {
       drawForegroundShapes: ['ch-measure-label'],
     });
     const svg = score._container.querySelector('svg');
-    const labels = svg.querySelectorAll('.ch-shapes-foreground .ch-measure-label:not(.ch-row-header)');
+    const labels = svg.querySelectorAll('.ch-shapes-foreground .ch-measure-label:not([data-ch-label-marker])');
     // A measure written in more than one sub-measure is labelled once, on the one that opens
     // it -- so there are fewer labels than <measure> elements, and no number appears twice
     const measures = score._scoreData.measures;
@@ -1060,7 +1060,7 @@ describe('_updateSvg() — SVG post-processing', () => {
     });
     const svg = score._container.querySelector('svg');
     const labels = Array.from(
-      svg.querySelectorAll('.ch-shapes-foreground .ch-measure-label:not(.ch-row-header)'));
+      svg.querySelectorAll('.ch-shapes-foreground .ch-measure-label:not([data-ch-label-marker])'));
     expect(labels.length).toBeGreaterThan(0);
     for (const label of labels) {
       expect(label.textContent.trim()).toBe(label.getAttribute('data-ch-measure-number'));
@@ -1072,7 +1072,7 @@ describe('_updateSvg() — SVG post-processing', () => {
   it('should draw measure labels on the copies an expanded score plays', () => {
     score.setOptions({ expandScore: 'full-score', drawForegroundShapes: ['ch-measure-label'] });
     const svg = score._container.querySelector('svg');
-    const labels = Array.from(svg.querySelectorAll('.ch-measure-label:not(.ch-row-header)'));
+    const labels = Array.from(svg.querySelectorAll('.ch-measure-label:not([data-ch-label-marker])'));
     // More measures than the score has, because passes repeat them, and every copy is
     // labelled with the number of the measure it copies
     expect(svg.querySelectorAll('.measure').length)
@@ -1091,7 +1091,7 @@ describe('_updateSvg() — SVG post-processing', () => {
       drawForegroundShapes: ['ch-beat-label'],
     });
     const svg = score._container.querySelector('svg');
-    const labels = svg.querySelectorAll('.ch-shapes-foreground .ch-beat-label:not(.ch-row-header)');
+    const labels = svg.querySelectorAll('.ch-shapes-foreground .ch-beat-label:not([data-ch-label-marker])');
     expect(labels.length).toBe(score._scoreData.chordPositions.length);
     for (const label of labels) {
       expect(label.getAttribute('data-ch-chord-position')).toBeTruthy();
@@ -1105,7 +1105,7 @@ describe('_updateSvg() — SVG post-processing', () => {
     });
     const svg = score._container.querySelector('svg');
     const firstY = (className) => Number.parseInt(
-      svg.querySelector(`.ch-shapes-foreground .${className}:not(.ch-row-header)`).getAttribute('y'));
+      svg.querySelector(`.ch-shapes-foreground .${className}:not([data-ch-label-marker])`).getAttribute('y'));
     expect(firstY('ch-measure-label')).toBeLessThan(firstY('ch-beat-label'));
     expect(firstY('ch-beat-label')).toBeLessThan(firstY('ch-chord-position-label'));
   });
@@ -1117,11 +1117,11 @@ describe('_updateSvg() — SVG post-processing', () => {
     const svg = score._container.querySelector('svg');
     const subMeasureIdOf = (label) => label.getAttribute('data-related').split(' ')[1];
     const firstCpXBySubMeasureId = {};
-    for (const cpLabel of svg.querySelectorAll('.ch-chord-position-label:not(.ch-row-header)')) {
+    for (const cpLabel of svg.querySelectorAll('.ch-chord-position-label:not([data-ch-label-marker])')) {
       const subMeasureId = subMeasureIdOf(cpLabel);
       if (!(subMeasureId in firstCpXBySubMeasureId)) firstCpXBySubMeasureId[subMeasureId] = cpLabel.getAttribute('x');
     }
-    const measureLabels = svg.querySelectorAll('.ch-measure-label:not(.ch-row-header)');
+    const measureLabels = svg.querySelectorAll('.ch-measure-label:not([data-ch-label-marker])');
     expect(measureLabels.length).toBeGreaterThan(0);
     for (const measureLabel of measureLabels) {
       expect(measureLabel.getAttribute('x')).toBe(firstCpXBySubMeasureId[subMeasureIdOf(measureLabel)]);
@@ -1135,7 +1135,7 @@ describe('_updateSvg() — SVG post-processing', () => {
     const svg = score._container.querySelector('svg');
     const systems = Array.from(svg.querySelectorAll('.system'))
       .filter(system => system.querySelector('.measure'));
-    const headers = Array.from(svg.querySelectorAll('.ch-row-header'));
+    const headers = Array.from(svg.querySelectorAll('[data-ch-label-marker]'));
     expect(headers.length).toBe(systems.length * 3);
     expect(new Set(headers.map(header => header.textContent.trim())))
       .toEqual(new Set(['M:', 'B:', 'CP:']));
@@ -1156,8 +1156,8 @@ describe('_updateSvg() — SVG post-processing', () => {
     }
     // Each header sits on its own row's baseline
     for (const className of ['ch-measure-label', 'ch-beat-label', 'ch-chord-position-label']) {
-      const header = svg.querySelector(`.ch-row-header.${className}`);
-      const label = svg.querySelector(`.${className}:not(.ch-row-header)`);
+      const header = svg.querySelector(`[data-ch-label-marker].${className}`);
+      const label = svg.querySelector(`.${className}:not([data-ch-label-marker])`);
       expect(header.getAttribute('y')).toBe(label.getAttribute('y'));
     }
   });
@@ -1186,7 +1186,7 @@ describe('_updateSvg() — SVG post-processing', () => {
   it('should draw row headers only for the rows being drawn', () => {
     score.setOptions({ drawForegroundShapes: ['ch-beat-label'] });
     const svg = score._container.querySelector('svg');
-    expect(new Set(Array.from(svg.querySelectorAll('.ch-row-header'))
+    expect(new Set(Array.from(svg.querySelectorAll('[data-ch-label-marker]'))
       .map(header => header.textContent.trim()))).toEqual(new Set(['B:']));
   });
 
@@ -1201,7 +1201,7 @@ describe('_updateSvg() — SVG post-processing', () => {
       const pageHeight = Number.parseInt(
         svg.querySelector('svg.definition-scale').getAttribute('viewBox').split(' ')[3]);
       const labels = Array.from(svg.querySelectorAll(
-        '.ch-measure-label:not(.ch-row-header), .ch-beat-label:not(.ch-row-header), .ch-chord-position-label:not(.ch-row-header)'));
+        '.ch-measure-label:not([data-ch-label-marker]), .ch-beat-label:not([data-ch-label-marker]), .ch-chord-position-label:not([data-ch-label-marker])'));
       const lowestBaseline = Math.max(...labels.map(label => Number.parseInt(label.getAttribute('y'))));
       expect(lowestBaseline).toBeLessThan(pageHeight);
     }

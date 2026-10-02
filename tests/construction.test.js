@@ -70,8 +70,8 @@ describe('Default Options', () => {
     expect(defaults.showMelodyOnly).toBe(false);
     expect(defaults.hideSectionIds).toEqual([]);
     expect(defaults.layout).toBe('vertical-scroll');
-    expect(defaults.headerContent).toBe('');
-    expect(defaults.footerContent).toBe('');
+    expect(defaults.headerContent).toBeNull();
+    expect(defaults.footerContent).toBeNull();
     expect(defaults.drawBackgroundShapes).toEqual([]);
     expect(defaults.drawForegroundShapes).toEqual([]);
     expect(defaults.customEvents).toEqual(['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw', 'ch:pagechange']);

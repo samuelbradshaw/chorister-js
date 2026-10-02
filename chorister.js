@@ -285,12 +285,13 @@ ChScore.prototype._loadEventListeners = function () {
 
 ChScore.prototype.load = async function (format, {
     scoreId = null, lang = 'en', scoreUrl = null, scoreContent = null,
-    midiUrl = null, midiNoteSequence = null, lyricsUrl = null,
-    lyricsText = null, lyricLinesTemplate = null,
-    parts = null, partsTemplate = null,
-    sections = null, sectionsTemplate = null,
-    chordSets = null, fermatas = null, hyphenatedWords = null,
-    injectedSyllables = null
+    midiUrl = null, midiNoteSequence = null,
+    partsTemplate = null, parts = null,
+    sectionsTemplate = null, sections = null,
+    lyricsUrl = null, lyricsText = null,
+    chordSets = null, fermatas = null,
+    injectedSyllables = null,
+    lyricLinesTemplate = null, hyphenatedWords = null
   }, options = this._defaultOptions) {
   this._container.dataset.chStatus = 'preparing';
   if (!format || !(scoreUrl || scoreContent)) {
@@ -4476,6 +4477,9 @@ ChScore.prototype._updateMei = function () {
 
   // Expand score
   const expansion = this._scoreData.meiParsed.querySelector('expansion[plist]');
+  // Only a score with an <expansion> can be expanded past its introduction. Verovio writes one
+  // when it imports MusicXML, but an MEI score may not have one; it is then drawn as written.
+  const isFullScoreExpanded = this._currentOptions.expandScore === 'full-score' && expansion != null;
   if (this._currentOptions.expandScore) {
 
     // Expand introduction
@@ -4483,8 +4487,8 @@ ChScore.prototype._updateMei = function () {
 
     // Expand sections, endings, codas, etc.
     // TODO: Look into using Verovio's built-in expansion option (get expanded MEI, then edit to clean up endings, barlines, lyrics, etc.). Potential benefits would be automatic handling for cross-section ties (potentially – need to test), automatic generation of unique IDs, etc. The downside is less control over the output.
-    const sectionIds = expansion.getAttribute('plist').split(' ').map(ref => ref.substring(1));
-    if (this._currentOptions.expandScore === 'full-score') {
+    if (isFullScoreExpanded) {
+      const sectionIds = expansion.getAttribute('plist').split(' ').map(ref => ref.substring(1));
       const singleLineSectionIds = new Set();
       const isTwoPart = this._scoreData.features.hasTwoPartMelody;
 
@@ -4851,7 +4855,7 @@ ChScore.prototype._updateMei = function () {
   }
 
   // Add expanded chord positions (non-expanded score, or expanded intro only)
-  if (this._currentOptions.expandScore !== 'full-score') {
+  if (!isFullScoreExpanded) {
     const introSectionElement = this._scoreData.meiParsed.querySelector('section[type="introduction"]');
     const chordPositionElements = this._scoreData.meiParsed.querySelectorAll(`[ch-chord-position]`);
     for (const chordPositionElement of chordPositionElements) {
@@ -4877,7 +4881,7 @@ ChScore.prototype._updateMei = function () {
   }
 
   // Set section lyrics visibility (non-expanded score)
-  if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0 && this._currentOptions.expandScore !== 'full-score') {
+  if (this._currentOptions.hideSectionIds && this._currentOptions.hideSectionIds.length > 0 && !isFullScoreExpanded) {
     // Which lines survive is settled first: a claimed line needs to know whether the line it
     // replaces is still drawn beside it, which the elements after it in document order decide.
     const keptElements = [];
@@ -5276,21 +5280,22 @@ ChScore.prototype._updateSvg = function (svg) {
       shapeLayer.appendChild(systemRect);
     }
 
-    // Draw row headers ("M:", "B:", "CP:"), one per row of labels below the system. Each
+    // Draw label markers ("M:", "B:", "CP:"), one per row of labels below the system. Each
     // carries its row's class so it comes and goes with the row, and they share a right edge.
     // Drawn inside the system, in the blank space under the clef and time signature.
     for (const className of drawnBelowSystemLabels) {
       for (const shapeLayer of shapeLayersByClassName[className]) {
-        const rowHeader = this._createSvgElement(svgParsed, 'text');
-        rowHeader.setAttribute('x', systemX1 + this._belowSystemLabelHeaderOffset);
-        rowHeader.setAttribute('y', systemY2 + belowSystemLabelY[className]);
-        rowHeader.setAttribute('font-size', this._labelFontSize);
-        if (className === 'ch-measure-label') rowHeader.setAttribute('font-weight', 'bold');
-        rowHeader.setAttribute('text-anchor', 'end');
-        rowHeader.setAttribute('class', `${className} ch-row-header`);
-        rowHeader.setAttribute('data-related', system.id);
-        rowHeader.innerHTML = this._belowSystemLabelHeaders[className];
-        shapeLayer.append(rowHeader);
+        const labelMarker = this._createSvgElement(svgParsed, 'text');
+        labelMarker.setAttribute('x', systemX1 + this._belowSystemLabelHeaderOffset);
+        labelMarker.setAttribute('y', systemY2 + belowSystemLabelY[className]);
+        labelMarker.setAttribute('font-size', this._labelFontSize);
+        if (className === 'ch-measure-label') labelMarker.setAttribute('font-weight', 'bold');
+        labelMarker.setAttribute('text-anchor', 'end');
+        labelMarker.setAttribute('class', className);
+        labelMarker.setAttribute('data-ch-label-marker', '');
+        labelMarker.setAttribute('data-related', system.id);
+        labelMarker.innerHTML = this._belowSystemLabelHeaders[className];
+        shapeLayer.append(labelMarker);
       }
     }
 
@@ -6317,20 +6322,26 @@ ChScore.prototype._defaultVerovioOptions = {
   svgAdditionalAttribute: [
     // Standard MEI attributes
     'staff@n', 'tie@startid', 'slur@startid',
-    // Chorister.js basic attributes
+    
+    // Positional attributes
     'chord@ch-chord-position', 'note@ch-chord-position', 'rest@ch-chord-position',
     'dir@ch-chord-position', 'harm@ch-chord-position', 'fermata@ch-chord-position',
-    'verse@ch-lyric-line-id',
-    'dir@ch-intro-bracket', 'dir@ch-round-marker', 'rend@ch-superscript', 'syl@ch-extender-end',
-    'verse@ch-help-text', 'syl@ch-help-text',
-    // Chorister.js advanced attributes (based on parts and sections data)
+    'breath@ch-chord-position', 'caesura@ch-chord-position',
     'chord@ch-expanded-chord-position', 'note@ch-expanded-chord-position', 'rest@ch-expanded-chord-position',
     'dir@ch-expanded-chord-position', 'harm@ch-expanded-chord-position', 'fermata@ch-expanded-chord-position',
+    'breath@ch-expanded-chord-position', 'caesura@ch-expanded-chord-position',
+    
+    // Note and rest attributes
     'note@ch-part-id', 'note@ch-melody',
     'rest@ch-part-id', 'rest@ch-melody',
+    
+    // Lyric attributes
     'verse@ch-section-id', 'verse@ch-secondary', 'verse@ch-chorus',
-    'section@ch-iteration', 'ending@ch-iteration',
-    'dir@ch-section-id',
+    'verse@ch-lyric-line-id', 'syl@ch-extender-end', 'rend@ch-superscript',
+    
+    // Additional attributes
+    'dir@ch-intro-bracket', 'dir@ch-round-marker', 'dir@ch-section-id',
+    'verse@ch-help-text', 'syl@ch-help-text',
   ],
 };
 
@@ -6345,12 +6356,12 @@ ChScore.prototype._defaultOptions = {
   showFingeringMarks: false,  // true or false
   showMeasureNumbers: false,  // true or false
   showMelodyOnly: false,      // true or false
-  headerContent: '',          // HTML string
-  footerContent: '',          // HTML string
+  headerContent: null,        // HTML string or null
+  footerContent: null,        // HTML string or null
   hideSectionIds: [],         // Array of section IDs
   drawBackgroundShapes: [],   // Array of shape class names
   drawForegroundShapes: [],   // Array of shape class names
-  customEvents: ['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw', 'ch:pagechange'], // array of custom event types
+  customEvents: ['ch:tap', 'ch:scoreload', 'ch:scoredraw', 'ch:midiready', 'ch:pagechange'], // array of custom event types
 }
 
 // Header text for each row of labels drawn below the system, in the order the rows stack from
