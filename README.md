@@ -28,22 +28,26 @@ Chorister.js powers the interactive sheet music at [SingPraises.net](https://sin
 - Responsive layout options that adapt to various screen sizes.
 - Adjust sheet music size with pinch to zoom or scale to fit.
 - Support for expanding/unrolling piano introductions, verses, jumps, and repeats.
-- Melody-only view (when part information is provided).
-- Support for switching between multiple “chord sets” (guitar chords, ukulele chords, analytical marks, etc.).
-- Toggling of sheet music features such as fingering marks and measure numbers.
 - Support for transposing to different keys.
-- Support for showing and hiding verses.
+- Flexible “chord sets” system for guitar chords and similar annotations.
+- Melody-only view and intelligent part detection in condensed scores.
 - Support for printing.
 
-### MIDI and lyric alignment
+### MIDI alignment
 
 Chorister.js doesn’t directly handle audio playback, but it processes and exports MIDI that can be loaded into other libraries that support MIDI playback, such as [ProxyPlayer.js](https://github.com/samuelbradshaw/proxy-player-js).
 
 - Provided or Verovio-generated MIDI is expanded and aligned with the sheet music.
-- MIDI is split into channels based on sheet music parts (when part information is provided).
+- MIDI is split into channels based on vocal or instrumental parts.
 - MIDI is adapted to the lyrics, handling cases where a syllable is only sung in certain verses.
 - Support for adjusting the length of fermatas (when relative durations are provided).
-- Lyric text (if provided) is aligned to sheet music syllables, supporting use cases such as displaying chord sets in a standalone lyrics view.
+
+### Advanced lyric handling
+
+- Lyrics are aligned to the sheet music.
+- Inline verses can be shown or hidden dynamically.
+- Additional lyric syllables can be added to the score when loading.
+- Lyrics can be extracted in versified form.
 
 ### Tap events and CSS styles
 
@@ -150,6 +154,7 @@ Most of these methods will only work after the score is loaded.
 - **Score container** – HTML element that holds the rendered score, and can receive JavaScript events.
 - **Chord position** – Relative position of each note/rest onset, in the order the score is written (ignoring jumps and repeats), starting at 0.
 - **Expanded chord position** – Relative position of each note/rest onset, in the order the score is played, starting at 0. If the score has jumps or repeats, notes and rests that are played multiple times will have multiple expanded chord positions.
+- **Measure-beat position** – Position of each note/rest onset, expressed in beat numbers and relative to the measure. For example, the first beat in the measure 5 would be 5@1.
 - **Part** – Choral voicing or instrument, such as soprano, alto, tenor, bass, violin, trumpet, accompaniment, etc.
 - **Section** – Introduction, verse, chorus, or other similar unit of a song. May also refer to MEI `<section>` elements, depending on the context.
 - **Lyric line ID** – Identifier for a specific lyric line. For example, syllables in staff 1, lyric line 2, would be marked with lyric line ID `1.2`.
@@ -161,22 +166,22 @@ Most of these methods will only work after the score is loaded.
 Input data is provided to Chorister.js when loading the score (see “Methods”). The `inputData` object has the following properties:
 
 - **scoreId** – Unique identifier for the score. Optional.
+- **lang** – BCP 47 language code. Used for localized lookups when categorizing text blocks, detecting inline instructions, and hyphenating extracted lyrics. Optional.
 - **scoreUrl** – URL where the score can be fetched. Either `scoreUrl` or `scoreContent` is required.
-- **midiUrl** – URL where a MIDI file can be fetched. Optional.
-- **lyricsUrl** – URL where lyrics can be fetched as plain text. Optional.
 - **scoreContent** – Score content as a string. Either `scoreUrl` or `scoreContent` is required.
+- **midiUrl** – URL where a corresponding MIDI file can be fetched. Optional.
 - **midiNoteSequence** – MIDI content as a Magenta note sequence. Optional.
-- **lyricsText** – Lyrics as a string. Optional.
-- **parts** – Parts object (more details below). Optional.
 - **partsTemplate** – Parts template string (more details below). Optional.
-- **sections** – Sections object (more details below). Optional.
+- **parts** – Parts object (more details below). Optional.
 - **sectionsTemplate** – Sections template string (more details below). Optional.
-- **lyricLinesTemplate** – Lyric lines template string: where the lyrics break into lines (more details below). Optional.
+- **sections** – Sections object (more details below). Optional.
+- **lyricsUrl** – URL where lyrics can be fetched as plain text. Optional.
+- **lyricsText** – Lyrics as a string. Optional.
 - **chordSets** – Chord sets object (more details below). Optional.
 - **fermatas** – Fermatas object (more details below). Optional.
-- **hyphenatedWords** – Array of hyphenated words for this score's language, e.g. `['pag-ibig', 'latter-day']` (more details below). Optional.
-- **injectedSyllables** – Syllables to add to the score before it's read, as TSV or an array of objects: a verse printed below the music, or corrections to engraved syllables (more details below). Optional.
-- **lang** – Language code (e.g. `'en'`) selecting the built-in dictionary of known hyphenated words used when extracting lyrics from the score's own syllables. Built-in dictionaries exist for `en`, `es`, `fr` and `pt`; for any other language, supply `hyphenatedWords`. Optional, defaults to `'en'`. A score's own printed title/lyrics (if present) are also used and take priority, regardless of `lang`.
+- **injectedSyllables** – Syllables to be added to the sheet music (more details below). Optional.
+- **lyricLinesTemplate** – Lyric lines template string (more details below). Optional.
+- **hyphenatedWords** – Array of hyphenated words for lyric extraction (more details below). Optional.
 
 `scoreUrl`, `midiUrl`, and `lyricsUrl` may be subject to [CORS restrictions](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS) depending on where the files are hosted.
 
@@ -184,121 +189,20 @@ With only a score (`scoreUrl` or `scoreContent`), Chorister.js should render cle
 
 - **MIDI.** High-quality MIDI allows for more realistic playback, with variation in volume and tempo. Provided MIDI can be minimal (single play-through from top to bottom, ignoring jumps and repeats) or complete (play-through of the entire song with all verses). If MIDI isn’t provided or can’t be aligned with the score, Chorister.js will use Verovio-generated MIDI.
 
-- **Lyrics.** Chorister.js can align versified lyrics with sheet music syllables. This enables breaking complex scores into logical sections. Lyrics not in the score will be displayed below the sheet music. If lyrics aren’t provided, Chorister.js will attempt to extract lyrics on the fly.
+- **Parts.** The parts template provides information about the choral voicing and/or instruments in the score, This enables Chorister.js to identify the melody, and to tag notes in the score and MIDI as belonging to a specific part. If parts metadata isn’t provided, Chorister.js will attempt to derive parts automatically from the score.
 
-- **Parts.** The parts template or parts object provides information about the choral voicing and/or instruments in the score, as well as information about each staff. This enables Chorister.js to identify the melody, and to tag notes in the score and MIDI as belonging to a specific part. If parts metadata isn’t provided, Chorister.js will mark the top part in the first staff as the melody, and remaining parts as accompaniment.
+- **Sections.** The sections template identifies the logical sections of the score, such as the introduction, verses, choruses, etc. If not provided, Chorister.js will attempt to derive sections automatically based on lyrics, MEI expansions, verse labels in the score, intro brackets, and other hints.
 
-- **Sections.** The sections template or sections object identifies the logical sections of the score, such as the introduction, verses, choruses, etc. If not provided, Chorister.js will attempt to generate sections automatically based on lyrics, MEI expansions, verse labels in the score, intro brackets, and other hints. Automatic section generation may be sufficient for some scores.
+- **Lyrics.** Chorister.js can align versified lyrics with sheet music syllables. This helps Chorister.js derive sections more accurately.
 
 - **Chord sets.** Guitar chords, ukulele chords, analytical marks, or similar text and/or images to be shown above the music system.
 
 - **Fermatas.** Information about each fermata in the score, for better MIDI playback.
 
-- **Hyphenated words.** A dictionary of words your language spells with a hyphen, for scores whose lyrics Chorister.js reads out of the engraving. See below.
+- **Injected syllables.** Syllables to insert into the score at specified locations. This can be used to add additional verses that may not have been in the original score, insert lyrics in a different language, or fix misspelled words, without editing the original score.
 
-#### <a name="hyphenated-words"></a>Hyphenated words
+- **Lyric lines template** and **hyphenated words.** Chorister.js can extract lyrics from the score. These inputs help Chorister.js to format extracted lyrics more cleanly. Lyric lines templates define the approximate locations of line breaks, and hyphenated words help Chorister.js decide which hyphens to keep or discard when converting syllables to words.
 
-When lyrics are extracted from the score's own syllables, a hyphen that falls on a syllable
-boundary was never engraved — the engraver had no reason to print one, since the syllables were
-already being split. Tagalog `pag-ibig` is engraved `Pag` / `i` / `big` and rejoins as `pagibig`.
-Chorister.js puts such hyphens back from three sources, each beating the one after it:
-
-1. **The score's own printed title and stanza text.** Evidence about this song, so it always wins.
-   This needs no setup and is often enough on its own.
-2. **`hyphenatedWords`**, if you provide it — your dictionary for the score's language.
-3. **The built-in list** for `lang`. This covers four languages — `en`, `es`, `fr` and `pt`, the
-   same set spelled-out ordinals are recognized in — and within those, only a few hundred of the
-   commonest hyphenated words each. It is small by design: enough to be useful with nothing
-   handed in, and no substitute for a real dictionary. **Any other language restores hyphens only
-   from the score's own printed text unless you supply `hyphenatedWords`.**
-
-```js
-score.load('musicxml', {
-  scoreUrl: 'song.musicxml',
-  lang: 'tl',
-  hyphenatedWords: ['pag-ibig', 'mag-isa', 'nag-ampo'],
-});
-```
-
-A word is only restored where its hyphen lands on a syllable boundary, so an entry that happens to
-collide with an unrelated word cannot respell it. Entries are matched case-insensitively and the
-restored hyphen is an ordinary `-`; the word's own capitalization is left as the syllables spelled
-it, so Indonesian `dari-Nya` keeps its capital.
-
-**Building a dictionary.** Chorister.js does not ship one beyond the four built-in lists — a
-useful list is large, and the sources worth building it from carry their own licence terms. Two
-approaches that work:
-
-- **Harvest from lyrics you already have.** Every hyphenated word in a body of text in that
-  language is a candidate. This is cheap and stays close to the words you actually sing.
-- **Extract from a dictionary of the language**, such as Wiktionary. Drop any hyphenated word
-  whose joined spelling is *also* a word — otherwise restoring the hyphen would respell the
-  joined one (`sun-light` would claim every `sunlight`) — and drop words spelled out by syllable.
-
-Note that a dictionary is not a complete answer: much of what goes missing is morphology rather
-than vocabulary. Indonesian's `dari-Nya` and `berkat-Mu`, French's `dis-nous` and `sauve-moi`, and
-Cebuano's `nag-ampo` are inflected forms no dictionary lists, so a language with heavy clitic or
-affix hyphenation may need its own rules on top.
-
-#### <a name="injected-syllables"></a>Injected syllables
-
-A verse printed below the music has no notes of its own, so it can't be highlighted or played
-along with. `injectedSyllables` places such a verse on the staff, syllable by syllable, before
-Chorister.js reads the score — from then on it's treated exactly like an engraved lyric line:
-verse numbers, melisma extenders, melody detection and sections all see it. It also fixes an
-engraved syllable: one injected where a syllable is already engraved on the same line replaces it,
-keeping any verse label engraved with it.
-
-Give one row per syllable, as a TSV string or as an array of objects with the same properties:
-
-| column | meaning |
-| --- | --- |
-| `chordPosition` | Chord position of the note the syllable is sung on. Required. |
-| `text` | The syllable. A verse number written before the first syllable (`5. Re`) becomes the verse's label, as an engraved one does. |
-| `connector` | What follows the syllable (below). Defaults to `SPACE`. |
-| `staffNumber` | Optional. Defaults to the first staff with lyrics. |
-| `layerNumber` | Optional. Defaults to the first layer. |
-| `lineNumber` | Lyric line (MEI `verse/@n`). Optional: defaults to the staff's first unused line. Lines past the staff's engraved ones follow straight on from them, in order, so `10` and `11` on a staff engraving four verses become lines 5 and 6; a line within the engraved ones is kept. |
-
-A TSV string starts with a header row naming its columns, in any order; optional columns can be
-left out.
-
-| connector | MEI `syl/@con` | in the lyrics |
-| --- | --- | --- |
-| `NONE` | `s` | nothing — the next syllable carries on the word (languages written without spaces) |
-| `SPACE` | `s` | a space |
-| `SPACE_TAB` | `s` | a space and a `<wbr>`: where the line may divide, as between the two halves of a line of Japanese lyrics |
-| `SPACE_NEWLINE` | `s` | a new lyric line |
-| `HYPHEN` | `d` | a hyphen the word is spelled with (`soul-cheering`) |
-| `HYPHEN_SOFT` | `d` | nothing — a syllable break |
-| `EXTENDER` | `u` | nothing (the word ends) |
-| `EXTENDER_END` | `u` | nothing (the word ends). Marks the last syllable held by an extender, as MusicXML's `extend@type="stop"`; the extender stops at the next note |
-| `TIE_OVER`, `TIE_UNDER` | `t` | nothing (the word ends; an elision joining two words) |
-
-```js
-score.load('musicxml', {
-  scoreUrl: 'redeemer-of-israel.musicxml',
-  injectedSyllables: 'chordPosition\ttext\tconnector\n'
-    + '0\t5. Re\tHYPHEN_SOFT\n'
-    + '1\tstore,\tSPACE\n'
-    + '3\tmy\tSPACE\n',
-});
-
-// Fix "child" + "dren", engraved on the second lyric line at chord positions 14 and 15
-score.load('musicxml', {
-  scoreUrl: 'called-to-serve.musicxml',
-  injectedSyllables: [
-    { chordPosition: 14, text: 'chil', connector: 'HYPHEN_SOFT', lineNumber: 2 },
-    { chordPosition: 15, text: 'dren', connector: 'SPACE', lineNumber: 2 },
-  ],
-});
-```
-
-A syllable's place in its word is worked out from the injected syllables on its line alone, so
-inject a whole word when fixing part of one. A syllable whose chord position has no note on its
-staff and layer is skipped with a warning. Where the lyrics are read from the score rather than
-handed in as `lyricsText`, `SPACE_NEWLINE` breaks the line after its syllable; a supplied
-`lyricLinesTemplate` still decides first.
 
 #### Examples
 
@@ -370,10 +274,10 @@ Key:
 - C = accompaniment
 - \+ = separator between staves
 - \# = separator for specifying melody part (if not specified, M, S, P, or the first part is chosen as the melody)
-- ; = separator between chord position changes
+- ; = separator between part changes
 
 Normalizations:
-- Melody –> MC
+- Melody –> M
 - Soprano –> S
 - Alto –> A
 - Tenor –> T
@@ -387,7 +291,7 @@ Normalizations:
 - Two-Part –> P+P
 - Duet –> PP
 - SATB –> SA+TB
-- SSAA –> SS+AAA
+- SSAA –> SS+AA
 - AATT –> AA+TT
 - TTBB –> TT+BB
 - For unspecified staves, the normalized template is padded with C (accompaniment, if there are lyrics) or I (instrumental)
@@ -397,10 +301,10 @@ Examples:
 - `TT+BB#T2` – Staff 1: First tenor, second tenor. Staff 2: First bass, second bass. Second tenor has the melody.
 - `Descant+Unison` – Staff 1: Descant. Remaining staves: Unison (melody and accompaniment).
 
-If parts change throughout the song, templates can be combined and marked with starting chord positions:
-- `0:Unison; 39:SA+TB`
-- `0:SS+A#S1; 35:SS+A#S1`
-- `0:SA+TB#S; 24:SA+TB#T; 36:SA+TB#S`
+If parts change throughout the song, templates can be combined and prefixed with starting chord position or measure-beat references:
+- `0:Unison; 39:SATB`
+- `0@1:SS+A#S1; 10@3.5:SS+A#A`
+- `0@1:SA+TB; 8@3:SA+TB#T; 12@3:SA+TB`
 
 
 #### Parts object
@@ -467,101 +371,6 @@ Properties:
 <details>
 <summary>Sections</summary>
 
-Sections can be provided as a “sections template” string, or a sections object.
-
-#### Sections template
-
-A sections template lists the sections in the order they’re sung, separated by `;`. Each
-section is a section character followed by the chord position ranges it covers, in
-parentheses:
-
-Section characters:
-- V = verse
-- C = chorus
-- B = bridge
-- I = introduction
-- N = interlude
-- S = section (the default, if no section character is given)
-
-Inside each pair of parentheses:
-- **Chord position range** – `start-end` (exclusive end). Default: the whole song (`0` to the end).
-- **Staff numbers** – comma-separated, in square brackets. Default: all staves.
-- **Lyric location** – after `:`, either a comma-separated list of lyricLineIds, `below` (lyrics printed below the music), or `none` (no lyrics). Default: `none` for the instrumental types (introduction and interlude), otherwise all lyricLineIds.
-
-A lyric location standing on its own, with no chord position range in front of it, marks a section the score never plays – `V(:below)` is a verse printed under the music, and it gets no chord position ranges at all. With a chord position range in front of it the section still has its music: `C(0-37:none)` is played inline with nothing sung over it.
-
-Normalizations:
-- Verse –> V
-- Chorus –> C
-- Bridge –> B
-- Introduction –> I
-- Interlude –> N
-- Section –> S
-
-Notes:
-- A section with no parentheses includes the whole song – for example, `V` is a single verse that includes all of the chord positions and staves in the sheet music.
-- A section can name more than one range in parentheses – for example, an introduction that includes the first and last part of the song would be `I(0-25)(57-65)`.
-- `/force` anywhere in the template says the template is the authority and the engraving is not: the sections it names are the sections the song has. Without it, the score still speaks for itself where it disagrees – a verse number engraved as a sung syllable partway down a lyric line starts a new verse there, and words no section accounts for are added back as a verse printed below the music. With it, a section’s own bounds are the only place a verse begins, and a stanza that matches no section is passed over. For a score whose lyrics are engraved wrongly, this is how a caller says it already knows.
-- `/force` also says how many times the song is played. The sections covering the most-covered chord position are counted as playthroughs – two verses over the same music are two, while a verse and the chorus after it divide one between them – and the expansion is extended to match where the sections ask for more than the engraving writes. This is how a two-part song's verses sung together become a third playthrough on a score whose music is printed once, with no repeat to say so.
-- The reported templates (`sectionsTemplateCp` and `sectionsTemplateMb`) carry `/force` back whenever it was supplied, so feeding one in again reproduces this reading.
-
-Example: `I(0-13[2,3,4,5]); V(13-77[2,3]:2.1); V(16-77[1,2,3]:2.2) /force`
-
-Everything a section carries that the template doesn’t spell out is inferred:
-
-- **Numbering** – verses are numbered from 1; a chorus is numbered from 0 when the song opens with one and from 1 otherwise; every other type is numbered from 1.
-- **marker** – only verses have one, and it’s that number. A number the score prints for itself (a verse engraved “5.” below the music) is kept instead.
-- **sectionId** and **name** follow from the type and the number: `verse-2` / “Verse 2”, `chorus-1` / “Chorus”. The first introduction keeps the plain id `introduction`.
-- **placement** – `inline` where the section has music, `below` where its words are printed under the music, `none` where it isn’t placed in the score at all.
-- **pauseAfter** – true after an introduction the score brackets, and after a section the next one starts the sheet over from for another playthrough, when the song ends too short to breathe in. An arrangement whose next section re-enters partway — past a pickup, or into a repeat with its own endings — already has that room written in, so it takes no pause.
-
-Examples:
-- `I(0-12); V(12-42); C(42-63)` – An introduction, a verse, and a chorus, each over its own range.
-- `V(0-32:1.1); C(32-65:1.1); V(0-32:1.2); C(32-65:1.1)` – Two verses on different lyric lines, alternating with a chorus that always sings line 1.
-- `I(0-25[2,3])(57-65[2,3]); V(0-32[2,3]:2.1); C(32-65[2,3]:2.1); V(:below); C(:below)` – An introduction played from staves 2 and 3, a sung verse and chorus, then a verse and chorus whose words are only printed below the music.
-
-If sections aren’t provided as an object, they’re built from the template; if neither is
-provided, Chorister.js generates them automatically. Either way the returned score data
-reports the sections as a template – so a generated set of sections can be read, corrected by
-hand, and handed back.
-
-#### Templates in the returned score data
-
-`templates` reports the score as templates, whether or not any were provided – the parts, the
-sections, and where the lyrics break into lines:
-
-| key | what it names |
-| --- | --- |
-| `partsTemplateInput`, `partsTemplateCp`, `partsTemplateMb` | the parts |
-| `sectionsTemplateInput`, `sectionsTemplateCp`, `sectionsTemplateMb` | the sections |
-| `lyricLinesTemplateInput`, `lyricLinesTemplateCp`, `lyricLinesTemplateMb` | where the lyric lines break |
-
-`Cp` and `Mb` are always filled in, so anything Chorister worked out for itself can be read,
-corrected by hand, and handed back. They describe the parts, sections and line breaks that
-were actually built, so a template provided as input comes back resolved against this score
-rather than echoed – `partsTemplate: 'SATB'` is reported as `'SA+TB'`.
-
-`Input` is the template that was provided, verbatim and in whichever form it was written, or
-`null` if none was. It's there so a caller can tell what they asked for apart from what the
-score answered.
-
-The two forms differ only in how a position is written, and either is accepted wherever a
-template names one:
-
-- **`Cp`** – a chord position (`12`). Exact, and the cheaper read against the score it came
-  from.
-- **`Mb`** – a measure number and beat (`4@1`, `12@3.5`). The beat counts from 1 within the
-  time signature, and runs on through a measure written in more than one `<measure>` element,
-  so a measure split across a section end stays one measure — written and read as `1@4`, since
-  a `<measure>` that only continues another is never addressed on its own. This is the
-  form that survives a different
-  engraving of the same song – a translation set to the same music, for instance.
-
-So `sectionsTemplate: 'V(0-32)'` and `sectionsTemplate: 'V(0-9@1)'` say the same thing about a
-score whose measure 9 begins at chord position 32.
-
-#### Sections object
-
 ```json
 [
     {
@@ -584,7 +393,7 @@ score whose measure 9 begins at chord position 32.
         "sectionId": "verse-1",
         "type": "verse",
         "name": "Verse 1",
-        "marker": 1,
+        "marker": "1",
         "placement": "inline",
         "pauseAfter": false,
         "chordPositionRanges": [
@@ -611,7 +420,7 @@ score whose measure 9 begins at chord position 32.
 
 Properties:
 - **sectionId** – Any unique ID for the part. String.
-- **type** – Section type. Valid section types: "verse", "chorus", "bridge", "introduction", "interlude", "section". "section" is the plain one, used wherever the score says nothing more about a passage than where it is – including every section of a score with nothing sung in it. Where a section ends with at least a whole measure of music that nothing is sung over, and another section follows, that music is broken off as an "interlude", starting where the last word stops sounding.
+- **type** – Section type. Valid values: "introduction", "verse", "chorus", "bridge", "interlude", "unknown".
 - **name** – Section name that may be visible to users. String.
 - **marker** – Verse number or similar sequential marker. String. Optional.
 - **placement** – Placement of the section in the score. Valid values: "inline" (inline with the music), "below" (below the music), "none" (not placed in the score).
@@ -747,10 +556,10 @@ Options can be passed in to Chorister.js when calling the `load()` method to loa
 - **showMelodyOnly** – Whether non-melody notes should be hidden. Boolean. Default: `false`.
 - **headerContent** – HTML content to display at the beginning of the score. Header and footer content is scaled with the score and included when printing. String or `null`. Default: `null`.
 - **footerContent** – HTML content to display at the end of the score. Header and footer content is scaled with the score and included when printing. String or `null`. Default: `null`.
-- **hideSectionIds** – Section IDs to hide. Possible values: One or more section (intro, verse, chorus, etc.) IDs. Array. Default: `[]`.
+- **hideSectionIds** – Section IDs to hide. Possible values: One or more section (introduction, verse, chorus, etc.) IDs. Array. Default: `[]`.
 - **drawBackgroundShapes** – Background shapes to draw. Possible values: See “Background and foreground shapes.” Array. Default: `[]`.
 - **drawForegroundShapes** – Foreground shapes to draw. Possible values: See “Background and foreground shapes.” Array. Default: `[]`.
-- **customEvents** – Custom events to send. Possible values: See “Custom events.” Array. Default: `['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw', 'ch:pagechange']`.
+- **customEvents** – Custom events to send. Possible values: See “Custom events.” Array. Default: `['ch:tap', 'ch:scoreload', 'ch:scoredraw', 'ch:midiready', 'ch:pagechange']`.
 
 ### <a name="custom-events"></a>Custom events
 
@@ -758,9 +567,9 @@ When enabled in options, Chorister.js sends [custom events](https://developer.mo
 
 - **ch:tap** – Sent when the user taps on a shape in the score.
 - **ch:hover** – Sent when the user hovers over a shape in the score with a mouse or trackpad. Disabled by default to reduce processing.
-- **ch:midiready** – Sent when MIDI is processed and ready to use.
 - **ch:scoreload** – Sent when the score finishes its initial loading.
 - **ch:scoredraw** – Sent each time the score is drawn or redrawn.
+- **ch:midiready** – Sent when MIDI is processed and ready to use.
 - **ch:pagechange** – Sent when the current page changes (for paginated layout).
 
 Each event has a `detail` attribute that provides additional information. For example, the `ch:tap` event could be used to trigger playback from a specific place in the score:
@@ -770,7 +579,7 @@ const scoreContainer = document.getElementById('score-container');
 scoreContainer.addEventListener('ch:tap', (event) => {
   console.log(event.detail);
   if (event.detail.expandedChordPositions.length > 0) {
-    const startTime = getTimestamp(event.detail.expandedChordPositions[0]);
+    const startTime = getTimestamp(event.detail.pointData.expandedChordPositions[0]);
     prPlayer.seekToTime(startTime, { play: true });
   }
 });
@@ -792,17 +601,18 @@ Verovio also adds the `@data-related` attribute to elements that are related to 
 
 Chorister.js adds the following data attributes to elements in Verovio’s SVG output:
 
-- **@data-ch-chord-position** – Indicates the chord position of each element. Chord position is the relative position of each unique note or rest onset, as written in the sheet music, starting at 0 for the first written note or chord in the sheet music. Added to chord, note, rest, dir, harm, and fermata elements.
-- **@data-ch-expanded-chord-position** – Expanded chord position is similar to chord position, but it indicates relative position in the expanded score, or the order that notes are played. If the score has repeats or jumps, elements may have multiple expanded chord positions. Added to chord, note, rest, dir, harm, and fermata elements.
-- **@data-ch-lyric-line-id** – Indicates the lyric line ID. Can be used to highlight a specific verse in the score.
-- **@data-ch-intro-bracket** – Indicates an intro bracket (⌜ or ⌝). The attribute value is either `start` or `end`.
-- **@data-ch-round-marker** – Indicates a round marker (①, ②, ③, etc.), which marks where each voice enters in a round.
-- **@data-ch-part-id** – Indicates the vocal or instrumental part (if part information is provided). Added to note and rest elements.
-- **@data-ch-melody** – Indicates that the note or rest is part of the melody (if part information is provided). Added to note and rest elements.
-- **@data-ch-section-id** – Indicates the section ID for lyric text. Added to verse and label elements.
+- **@data-ch-chord-position** – Indicates the chord position of each element. Chord position is the relative position of each unique note or rest onset, as written in the sheet music, starting at 0 for the first written note or chord in the sheet music. Added to chord, note, rest, dir, harm, fermata, breath, and caesura elements.
+- **@data-ch-expanded-chord-position** – Expanded chord position is similar to chord position, but it indicates relative position in the expanded score, or the order that notes are played. If the score has repeats or jumps, elements may have multiple expanded chord positions. Added to chord, note, rest, dir, harm, fermata, breath, and caesura elements.
+- **@data-ch-part-id** – Indicates the vocal or instrumental part. Added to note and rest elements.
+- **@data-ch-melody** – Indicates that the note or rest is part of the melody. Added to note and rest elements.
+- **@data-ch-section-id** – Indicates the section ID for lyric syllables. Added to verse and label elements. Also added to `dir` elements for instructions that apply to a specific verse.
 - **@data-ch-secondary** – Indicates that the lyric text is secondary, i.e. not part of the melody (if part information is provided). Added to verse elements.
 - **@data-ch-chorus** – Indicates that the lyric text is part of a chorus or refrain. Added to verse elements.
-- **@data-ch-help-text** – Indicates inline text that helps the singer but is not sung (for example, pronunciation or performance instructions inline with the music).
+- **@data-ch-lyric-line-id** – Indicates the lyric line ID. Can be used to highlight a specific verse in the score.
+- **@data-ch-intro-bracket** – Indicates an intro bracket (⌜ or ⌝). The attribute value is either `start` or `end`.
+- **@data-ch-round-marker** – Indicates a round marker (①, ②, ③, etc.).
+- **@data-ch-help-text** – Indicates help text, such as inline pronunciations or singer designations. Added to verse and syl elements.
+- **@data-ch-label-marker** – Marker on the left when chord position, measure, or beat labels are enabled.
 
 These data attributes are set on the score container:
 
@@ -826,9 +636,7 @@ Additionally, the score container has a `style` attribute with the CSS [custom p
 
 #### Background and foreground shapes
 
-Chorister.js supports adding labels and shapes to the foreground or background in the SVG output, using the `drawBackgroundShapes` and `drawForegroundShapes` options. These can be used for hover effects, highlighting what’s currently playing, or labeling parts of the score. They are identified by their class names: `ch-staff-label`, `ch-measure-label`, `ch-beat-label`, `ch-chord-position-label`, `ch-lyric-line-label`, `ch-system-rect`, `ch-measure-rect`, `ch-staff-rect`, `ch-chord-position-line`, `ch-chord-position-rect`, `ch-note-circle`, `ch-lyric-rect`.
-
-`ch-measure-label`, `ch-beat-label`, and `ch-chord-position-label` are drawn below the system, stacking in that order when more than one of them is shown. Each row also gets a header at the start of every system (`M:`, `B:`, `CP:`), drawn in the blank space under the clef and time signature, carrying its row's class name plus `ch-row-header` — so a row's header appears and disappears with the row. To select only the labels themselves, exclude the headers: `.ch-chord-position-label:not(.ch-row-header)`.
+Chorister.js supports adding labels and shapes to the foreground or background in the SVG output, using the `drawBackgroundShapes` and `drawForegroundShapes` options. These can be used for hover effects, highlighting what’s currently playing, or labeling parts of the score. They are identified by their class names: `ch-staff-label`, `ch-lyric-line-label`, `ch-measure-label`, `ch-beat-label`, `ch-chord-position-label`, `ch-system-rect`, `ch-measure-rect`, `ch-staff-rect`, `ch-chord-position-line`, `ch-chord-position-rect`, `ch-note-circle`, `ch-lyric-rect`.
 
 ## <a name="license"></a>License
 
