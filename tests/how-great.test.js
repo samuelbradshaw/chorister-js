@@ -783,17 +783,17 @@ describe('How Great — plain load (no partsTemplate)', { timeout: 30000 }, () =
     expect(intro.chordPositionRanges.map(range => range.staffNumbers)).toEqual([[1, 2]]);
   });
 
-  it('should report the lyrics read out of the score as lyricsText', () => {
-    const lyricsText = score._scoreData.lyricsText;
+  it('should return the lyrics read out of the score from getLyrics()', () => {
+    const lyricsText = score.getLyrics();
     expect(lyricsText).toBeTruthy();
 
     // Bracketed stanzas, in sung order — the same format load() accepts as input
     const headings = lyricsText.split('\n').filter(line => line.startsWith('['));
-    expect(headings).toEqual(['[Verse 1]', '[Verse 2]', '[Verse 3]', '[Verse 4]']);
+    expect(headings).toEqual(['[Introduction]', '[Verse 1]', '[Verse 2]', '[Verse 3]', '[Verse 4]']);
     expect(lyricsText).toContain('How great the wisdom and the love');
 
-    // The introduction carries no words, so it contributes no stanza
-    expect(lyricsText).not.toContain('[Introduction]');
+    // The introduction carries no words, so it's a header alone
+    expect(lyricsText).toMatch(/^\[Introduction\]\n\n\[Verse 1\]/);
   });
 });
 
@@ -816,8 +816,9 @@ describe('How Great — lyrics extraction from text file', { timeout: 30000 }, (
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
-  it('should store the lyrics text', () => {
-    expect(score._scoreData.lyricsText).toBe(sampleLyrics);
+  it('should return the provided lyrics from getLyrics()', () => {
+    // The introduction has no words, so it's a header alone
+    expect(score.getLyrics()).toBe(`[Introduction]\n\n${sampleLyrics.trim()}`);
   });
 
   it('should have verse sections from lyrics (6 total)', () => {

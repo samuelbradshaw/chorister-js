@@ -746,8 +746,9 @@ describe('This Little Light — lyrics extraction from text file', { timeout: 30
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
   afterEach(() => { resetScoreState(score); });
 
-  it('should store the lyrics text', () => {
-    expect(score._scoreData.lyricsText).toBe(sampleLyrics2);
+  it('should return the provided lyrics from getLyrics()', () => {
+    // The introduction has no words, so it's a header alone
+    expect(score.getLyrics()).toBe(`[Introduction]\n\n${sampleLyrics2.trim()}`);
   });
 
   it('should have 2 verse sections from lyrics', () => {

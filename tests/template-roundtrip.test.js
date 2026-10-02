@@ -94,7 +94,7 @@ describe('parts and sections round-trip through their templates', { timeout: 600
           sectionsShape: shapeSections(score._scoreData.sections),
           lyricLinesTemplate: score._scoreData.templates.lyricLinesTemplateMb,
           chordPositionTemplate: score._scoreData.templates.lyricLinesTemplateCp,
-          lyricsText: score._scoreData.lyricsText,
+          lyricsText: score.getLyrics(),
           numChordPositions: score._scoreData.numChordPositions,
           partsTemplateMeasureBeat: score._scoreData.templates.partsTemplateMb,
           sectionsTemplateMeasureBeat: score._scoreData.templates.sectionsTemplateMb,
@@ -177,13 +177,13 @@ describe('parts and sections round-trip through their templates', { timeout: 600
       it('should break the same lines from its own lyric lines template', async () => {
         if (!derived.lyricLinesTemplate) return;
         const score = await load(content, { lyricLinesTemplate: derived.lyricLinesTemplate });
-        expect(score._scoreData.lyricsText).toBe(derived.lyricsText);
+        expect(score.getLyrics()).toBe(derived.lyricsText);
       });
 
       it('should break the same lines from the chord-position form of it', async () => {
         if (!derived.lyricLinesTemplate) return;
         const score = await load(content, { lyricLinesTemplate: derived.chordPositionTemplate });
-        expect(score._scoreData.lyricsText).toBe(derived.lyricsText);
+        expect(score.getLyrics()).toBe(derived.lyricsText);
       });
 
       it('should name the same breaks in both forms', async () => {

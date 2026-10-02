@@ -390,7 +390,6 @@ ChScore.prototype.load = async function (format, {
     meiStringOriginal: this._vrvToolkit.getMEI(),
     midiNoteSequence: midiNoteSequence ?? core.midiToSequenceProto(midiArray),
     midiType: midiType ?? null,
-    lyricsText: lyricsText || null,
     parts: parts ?? [],
     partsById: null,
     sections: sections ?? [],
@@ -414,6 +413,17 @@ ChScore.prototype.load = async function (format, {
   // '/force' says the sections template is the authority and the engraving is not: what it
   // names is what the song has, whatever the score's own verse numbers and leftover words say.
   this._forcedSections = CH_FORCE_FLAG.test(sectionsTemplate ?? '');
+
+  // A section header with no words under it (such as [Introduction] or [Interlude]) has
+  // nothing to align, so it's dropped: within each block, a header followed by another
+  // header or by nothing, and then any block left empty
+  this._suppliedLyricsText = (lyricsText || '').split(/\n\s*\n/)
+    .map(block => block.trim().split('\n')
+      .filter((line, index, lines) => !this._patterns.stanzaHeader.test(line)
+        || (index + 1 < lines.length && !this._patterns.stanzaHeader.test(lines[index + 1])))
+      .join('\n'))
+    .filter(Boolean)
+    .join('\n\n') || null;
 
   // Process MEI, draw SVG, and load MIDI
   this._parseAndAnnotateMei(scoreId, lang);
@@ -613,6 +623,26 @@ ChScore.prototype.getMidi = function (format = 'note-sequence') {
       return byteArray.toArray();
     }
   }
+}
+
+// Lyrics in the order they're sung, each section under a bracketed header ("[Verse 1]"), in
+// the same format lyricsText is given in. A section with no words (an introduction) gets its
+// header alone; a two-part song's shared verse gets one block per part ("[Verse 3a]").
+// Null if no section has words.
+ChScore.prototype.getLyrics = function (annotated = false) {
+  const sections = this._scoreData?.sections ?? [];
+  if (!sections.some(section => section.lyricsText)) return null;
+
+  return sections.flatMap(section => {
+    const name = section.name || this._stanzaName({ ...section });
+    // Read back by _extractLyricStanzas, which maps the letter to the part the same way
+    const blocks = section.partLyrics?.length > 1
+      ? section.partLyrics.map((lyrics, index) =>
+        [`${name}${String.fromCharCode('a'.charCodeAt(0) + index)}`, lyrics])
+      : [[name, section]];
+    return blocks.map(([header, lyrics]) =>
+      `[${header}]\n${(annotated ? lyrics.lyricsAnnotated : lyrics.lyricsText) || ''}`.trim());
+  }).join('\n\n');
 }
 
 // Free the Verovio toolkit's WASM-side object. It is an Emscripten object the module holds
@@ -8183,7 +8213,7 @@ ChScore.prototype._normalizeSections = function () {
   // generated again with its lyric line demoted and the verses carry it instead. Not for a
   // chorus the song opens with, which is a chorus and whose closing repeat would be lost
   // with it, and not against lyrics the caller handed in, which are already the answer.
-  if (hasSimpleSections && !hasInitialChorus && !this._scoreData.lyricsText) {
+  if (hasSimpleSections && !hasInitialChorus && !this._suppliedLyricsText) {
     const doubleBars = this._doubleBarChordPositions();
     const refrainLineNumbers = lyricStanzas
       .filter(stanza => stanza.type === 'chorus' && this._isRefrain(stanza, doubleBars))
@@ -8201,7 +8231,7 @@ ChScore.prototype._normalizeSections = function () {
   // Lyrics handed in say how the song divides, so their stanzas become the sections. The
   // generated ones are still made, because the walk needs a range per verse to reach every
   // stacked lyric line; they are dropped once the stanzas they produced exist.
-  if (this._scoreData.lyricsText && !hasPrebuiltSections && !hasTemplateSections) {
+  if (this._suppliedLyricsText && !hasPrebuiltSections && !hasTemplateSections) {
     otherSections = [];
   }
 
@@ -8559,18 +8589,6 @@ ChScore.prototype._normalizeSections = function () {
   }
 
   this._reportTemplates();
-
-  // Save lyrics if lyrics weren't provided
-  if (!this._scoreData.lyricsText) {
-    const stanzaTexts = [];
-    for (const section of this._scoreData.sections) {
-      if (!section.lyricsText) continue;
-      const name = section.name || this._stanzaName(section);
-      stanzaTexts.push(`[${name}]\n${section.lyricsText}`);
-    }
-    this._scoreData.lyricsText = stanzaTexts.join('\n\n') || null;
-  }
-
 }
 
 // Music at the end of a section that nobody sings over is an interlude of its own: the measures
@@ -8813,7 +8831,7 @@ ChScore.prototype._getLyricChordPositionRanges = function (otherSections, melody
   // belongs in the sections and not in the lyrics -- unless the lyrics give it each part's
   // words ("[Verse 3a]", "[Verse 3b]"; see _extractLyricStanzas).
   const hasTwoPartMelody = this._scoreData.features?.hasTwoPartMelody;
-  const hasPartLyrics = hasTwoPartMelody && this._patterns.laterPartStanza.test(this._scoreData.lyricsText ?? '');
+  const hasPartLyrics = hasTwoPartMelody && this._patterns.laterPartStanza.test(this._suppliedLyricsText ?? '');
   const twoPartFinalPass = (chordPositionRange) => hasTwoPartMelody && !hasPartLyrics
     && (chordPositionRange.lyricLineIds?.length ?? 0) > 1;
 
@@ -9820,7 +9838,7 @@ ChScore.prototype._getRoundMarkersByChordPosition = function () {
 // what the stanzas are; without them, the stanzas are read out of the score's own
 // syllables.
 ChScore.prototype._extractLyricStanzas = function (lyricChordPositionRanges, ecpStart, melodyLyricElements = this._melodyLyricElementIndex()) {
-  const lyricsText = this._scoreData.lyricsText;
+  const lyricsText = this._suppliedLyricsText;
   const gather = (ranges) => this._gatherSyllables(ranges, ecpStart, melodyLyricElements);
   if (!lyricsText) return this._getLyricsFromSyllables(gather(lyricChordPositionRanges));
 
@@ -12903,6 +12921,8 @@ ChScore.prototype._sameColumnTolerance = 100;
 ChScore.prototype._patterns = {
   // A two-part song's later part's words in the verse every part sings ("[Verse 3b]"; see _extractLyricStanzas)
   laterPartStanza: /^\[Verse (\d+)([b-z])\]$/m,
+  // A line of supplied lyrics that's only a section header ("[Verse 1]")
+  stanzaHeader: /^\s*\[[^\]]*\]\s*$/,
   // Verse markers and styling in text blocks
   verseMarker: /^\s*\d{1,2}\s*[.)]/,
   stylingMarkup: /<\/?(?:em|strong)>/g,

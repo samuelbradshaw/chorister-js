@@ -111,14 +111,16 @@ describe('load()', () => {
     expect(scoreData.scoreMetadata.scoreId).toBe('my-score-123');
   });
 
-  it('should store lyricsText when provided', async () => {
-    const lyrics = '[Verse 1]\nAmazing grace, how sweet the sound';
+  it('should skip section headers with no words in lyricsText', async () => {
+    // Empty headers in the middle, at the end, and directly before another header
+    const lyrics = `[Introduction]\n\n${sampleLyrics.trim().replace('\n\n[Verse 2]', '\n\n[Interlude]\n[Verse 2]')}\n\n[Interlude]\n`;
     const score = new ChScore('#score-container');
     const scoreData = await score.load('musicxml', {
       scoreContent: sampleMusicXml,
       lyricsText: lyrics,
     });
-    expect(scoreData.lyricsText).toBe(lyrics);
+    expect(score.getLyrics()).toBe(`[Introduction]\n\n${sampleLyrics.trim()}`);
+    expect(scoreData).not.toHaveProperty('lyricsText');
   });
 
   it('should successfully fetch scoreUrl when provided', async () => {
@@ -150,7 +152,7 @@ describe('load()', () => {
       lyricsUrl: 'https://example.com/lyrics.txt',
     });
     expect(scoreData).toBeDefined();
-    expect(scoreData.lyricsText).toBe(sampleLyrics);
+    expect(score.getLyrics()).toBe(`[Introduction]\n\n${sampleLyrics.trim()}`);
     vi.restoreAllMocks();
   });
 
@@ -377,6 +379,40 @@ describe('getMidi()', () => {
     const midi1 = score.getMidi('note-sequence');
     const midi2 = score.getMidi('note-sequence');
     expect(midi1).toBe(midi2);
+  });
+
+  // getLyrics() is read-only, so it shares the same loaded score
+  describe('getLyrics()', () => {
+    it('should return a header and lyrics for each section, in sung order', () => {
+      const blocks = score.getLyrics().split('\n\n');
+      expect(blocks.map(block => block.split('\n')[0]))
+        .toEqual(score._scoreData.sections.map(section => `[${section.name}]`));
+      expect(blocks[1]).toBe(`[Verse 1]\n${score._scoreData.sectionsById['verse-1'].lyricsText}`);
+    });
+
+    it('should return a header alone for a section with no words', () => {
+      expect(score.getLyrics().split('\n\n')[0]).toBe('[Introduction]');
+    });
+
+    it('should return annotated lyrics when asked', () => {
+      const annotated = score.getLyrics(true);
+      expect(annotated).toContain(score._scoreData.sectionsById['verse-1'].lyricsAnnotated);
+      expect(annotated).toContain('data-ch-expanded-chord-position');
+      expect(score.getLyrics()).not.toContain('data-ch-expanded-chord-position');
+    });
+
+    it('should read back the same sections when passed in as lyricsText', async () => {
+      const again = new ChScore('#score-container');
+      await again.load('musicxml', { scoreContent: sampleMusicXml, lyricsText: score.getLyrics() });
+      expect(again.getLyrics()).toBe(score.getLyrics());
+    });
+
+    it('should return null for a score with no lyrics', async () => {
+      const noLyrics = new ChScore('#score-container');
+      await noLyrics.load('musicxml', { scoreContent: MINIMAL_MUSICXML });
+      expect(noLyrics.getLyrics()).toBeNull();
+      expect(noLyrics.getLyrics(true)).toBeNull();
+    });
   });
 });
 

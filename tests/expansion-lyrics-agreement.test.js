@@ -416,7 +416,7 @@ describe('Two-part together pass — invented section survives a redraw', { time
       scoreContent: sampleMusicXmlTwoPart,
       partsTemplate: 'Two-Part',
     });
-    const ownWords = plain._scoreData.lyricsText;
+    const ownWords = plain.getLyrics();
 
     document.body.innerHTML = '<div id="score-container"></div>';
     score = new ChScore('#score-container');
@@ -441,8 +441,9 @@ describe('Two-part together pass — invented section survives a redraw', { time
   });
 
   it('should keep the together pass out of the lyrics', () => {
-    // It sings nothing the two verses before it haven't
-    expect(score._scoreData.lyricsText.split('\n\n')).toHaveLength(2);
+    // It sings nothing the two verses before it haven't, so it's a header with no words
+    const blocks = score.getLyrics().split('\n\n');
+    expect(blocks.map(block => block.includes('\n'))).toEqual([true, true, false]);
   });
 
   it('should name the together pass in both forms of the sections template', () => {

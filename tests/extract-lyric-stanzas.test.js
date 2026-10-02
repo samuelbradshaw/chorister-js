@@ -870,7 +870,7 @@ describe('A held melody with the words on the voice below it', { timeout: 30000 
 
   it('should finish the melody line with the word engraved beneath it, sung once', () => {
     // One stanza, so no number tells it apart from another (see _normalizeSections)
-    expect(score._scoreData.lyricsText).toBe('[Verse 1]\nWhere all who may rest,');
+    expect(score.getLyrics()).toBe('[Verse 1]\nWhere all who may rest,');
   });
 
   it('should leave the repeat in the score for it to draw, on the voice that sings it', () => {
@@ -907,7 +907,7 @@ describe('A lyric line marked optional by an instruction', { timeout: 30000 }, (
   it('should leave the alternate line out of the lyrics', () => {
     // A verse, not a chorus: with the alternate line taken out the fixture carries one lyric
     // line throughout, and a score that labels no verses falls back to calling a stanza one
-    expect(score._scoreData.lyricsText).toBe('[Verse 1]\nSing to me now, gently and true. Sing now.');
+    expect(score.getLyrics()).toBe('[Verse 1]\nSing to me now, gently and true. Sing now.');
   });
 
   it('should read the alternate words out beside the footnote they belong to', () => {
@@ -951,7 +951,7 @@ describe('A chorus whose middle stretch is claimed for one pass', { timeout: 300
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
   it('should sing the chorus as printed on every pass but the one claimed', () => {
-    expect(score._scoreData.lyricsText).toBe([
+    expect(score.getLyrics()).toBe([
       '[Verse 1]', 'I will sing a song of joy now', '',
       '[Chorus]', 'Sing out loud and clear and strong.', 'And true all day long.', '',
       '[Verse 2]', 'We will sing a song of peace too', '',
@@ -1030,7 +1030,7 @@ describe('A chorus whose middle stretch is claimed for one pass', { timeout: 300
 
   it('should give the same lyrics when those sections are handed back in', async () => {
     const again = await load(score._scoreData.sections);
-    expect(again._scoreData.lyricsText).toBe(score._scoreData.lyricsText);
+    expect(again.getLyrics()).toBe(score.getLyrics());
   });
 });
 

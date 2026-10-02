@@ -74,7 +74,7 @@ describe('Default Options', () => {
     expect(defaults.footerContent).toBeNull();
     expect(defaults.drawBackgroundShapes).toEqual([]);
     expect(defaults.drawForegroundShapes).toEqual([]);
-    expect(defaults.customEvents).toEqual(['ch:tap', 'ch:midiready', 'ch:scoreload', 'ch:scoredraw', 'ch:pagechange']);
+    expect(defaults.customEvents).toEqual(['ch:tap', 'ch:scoreload', 'ch:scoredraw', 'ch:midiready', 'ch:pagechange']);
   });
 });
 

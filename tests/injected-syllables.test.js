@@ -59,7 +59,7 @@ describe('injectedSyllables', () => {
   it('reads TSV by its header row, like objects', async () => {
     const fromObjects = await loadScore({ injectedSyllables: verse1Rows });
     const fromTsv = await loadScore({ injectedSyllables: asTsv(verse1Rows) });
-    expect(fromTsv._scoreData.lyricsText).toBe(fromObjects._scoreData.lyricsText);
+    expect(fromTsv.getLyrics()).toBe(fromObjects.getLyrics());
     const reordered = 'text\tchordPosition\n' + verse1Rows.map(row => `${row.text}\t${row.chordPosition}`).join('\n');
     const score = await loadScore({ injectedSyllables: reordered });
     expect(sylsOnLine(score, 5).map(syl => syl.textContent)).toEqual(verse1Rows.map(row => row.text));
@@ -126,7 +126,7 @@ describe('injectedSyllables', () => {
     expect(verse5.lyricsText.match(/<wbr>/g)).toHaveLength(1);
     expect(verse5.lyricsAnnotated.match(/<wbr>/g)).toHaveLength(1);
     // Read back as lyricsText, the <wbr> is skipped like other markup
-    const reread = await loadScore({ injectedSyllables: rows, lyricsText: score._scoreData.lyricsText });
+    const reread = await loadScore({ injectedSyllables: rows, lyricsText: score.getLyrics() });
     expect(reread._scoreData.sections.find(section => section.sectionId === 'verse-5')?.placement).toBe('inline');
   });
 

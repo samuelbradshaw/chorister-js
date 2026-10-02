@@ -784,8 +784,9 @@ describe('It Is Well — lyrics extraction from text file', { timeout: 30000 }, 
 
   afterAll(() => { ChScore.prototype._drawScore = origDrawScore; });
 
-  it('should store the lyrics text', () => {
-    expect(score._scoreData.lyricsText).toBe(iiwLyrics);
+  it('should return the provided lyrics from getLyrics()', () => {
+    // The introduction has no words, so it's a header alone
+    expect(score.getLyrics()).toBe(`[Introduction]\n\n${iiwLyrics.trim()}`);
   });
 
   it('should extract sections from the lyrics text (verses and choruses)', () => {
