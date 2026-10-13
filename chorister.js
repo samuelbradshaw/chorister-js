@@ -6332,6 +6332,7 @@ ChScore.prototype._defaultVerovioOptions = {
   spacingSystem: 0, // Vertical spacing
   spacingLinear: 0.25, // Horizontal spacing
   spacingNonLinear: 0.6, // Horizontal spacing
+  lyricElision: 'narrow', // Lyric elision width (undertie/synalepha)
   lyricHeightFactor: 1.4, // Lyric line spacing
   lyricSize: 4.5, // Lyric size relative to size of notes
   lyricWordSpace: 2.0, // Space between lyric syllables (slightly bigger than default ensures that syllables remain spaced well when wider fonts are set with CSS)
