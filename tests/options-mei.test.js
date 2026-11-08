@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import './setup.js';
 import { initChScore, setupStandardHooks, resetScoreState } from './helpers.js';
-import { sampleMusicXmlHGW as sampleMusicXml, sampleMusicXmlTwoPartIntro, sampleMusicXmlDescant } from './song-data.js';
+import { sampleMusicXmlHGW as sampleMusicXml, sampleMusicXmlTwoPartIntro, sampleMusicXmlDescant, sampleMusicXmlIIW } from './song-data.js';
 
 let ChScore, origDrawScore;
 
@@ -539,53 +539,50 @@ describe('showMelodyOnly — two-part melody with piano introduction', () => {
   });
 
   afterEach(() => {
-    score.setOptions({ showMelodyOnly: false });
+    score.setOptions({ showMelodyOnly: false, expandScore: false });
   });
-
-  const introMeasures = () => Array.from(score._scoreData.meiParsed.querySelectorAll('measure')).slice(0, 2);
 
   it('should load as a two-part melody with the tempo on the piano staff', () => {
     expect(score._scoreData.twoPartMelodyPartIds).toEqual(['part-1', 'part-2']);
     expect(score._scoreData.meiParsed.querySelector('tempo').getAttribute('staff')).toBe('3');
   });
 
-  it('should draw a system of rests without throwing', () => {
-    expect(() => score.setOptions({ showMelodyOnly: true })).not.toThrow();
-  });
-
-  it('should keep only the two melody staves', () => {
+  it('should keep and define only the two melody staves, each system opening with a line', () => {
     score.setOptions({ showMelodyOnly: true });
-    for (const measure of score._scoreData.meiParsed.querySelectorAll('measure')) {
-      const staffNumbers = Array.from(measure.querySelectorAll('staff'), staff => staff.getAttribute('n'));
-      expect(staffNumbers).toEqual(['1', '2']);
+    const meiParsed = score._scoreData.meiParsed;
+    for (const measure of meiParsed.querySelectorAll('measure')) {
+      expect(Array.from(measure.querySelectorAll('staff'), staff => staff.getAttribute('n'))).toEqual(['1', '2']);
     }
-  });
-
-  it('should fill each melody staff in the introduction with a whole-measure rest', () => {
-    score.setOptions({ showMelodyOnly: true });
-    for (const measure of introMeasures()) {
-      for (const staff of measure.querySelectorAll('staff')) {
-        expect(staff.querySelectorAll('layer > *').length).toBe(1);
-        expect(staff.querySelector('layer > mRest')).not.toBeNull();
-      }
-    }
-  });
-
-  it('should turn condensing off while on, and back on after', () => {
-    score.setOptions({ showMelodyOnly: true });
-    expect(score._vrvToolkit.getOptions().condense).toBe('none');
-    score.setOptions({ showMelodyOnly: false });
-    expect(score._vrvToolkit.getOptions().condense).toBe('auto');
-  });
-
-  it('should draw both melody staves in every system', () => {
-    score.setOptions({ showMelodyOnly: true });
+    // Verovio leaves out a system's opening line when a defined staff is missing from it
+    expect(Array.from(meiParsed.querySelectorAll('staffDef'), staffDef => staffDef.getAttribute('n'))).toEqual(['1', '2']);
+    expect(meiParsed.querySelector('staffGrp staffGrp')).toBeNull();
     const measures = score._container.querySelectorAll('svg .measure');
-    expect(measures.length).toBe(4);
-    for (const measure of measures) {
-      const staffNumbers = Array.from(measure.querySelectorAll('.staff'), staff => staff.getAttribute('data-n'));
-      expect(staffNumbers).toEqual(['1', '2']);
-    }
+    expect(Array.from(measures, measure => Array.from(measure.querySelectorAll(':scope > .staff'), staff => staff.getAttribute('data-n'))))
+      .toEqual([['1', '2'], ['1', '2']]);
+    for (const measure of measures) expect(measure.closest('g.system').querySelector(':scope > path')).not.toBeNull();
+  });
+
+  it('should leave out the piano introduction, which has nothing sung in it', () => {
+    const songMeasureIds = Array.from(score._scoreData.meiParsed.querySelectorAll('measure'))
+      .slice(2).map(measure => measure.getAttribute('xml:id'));
+    score.setOptions({ showMelodyOnly: true });
+    const measures = Array.from(score._scoreData.meiParsed.querySelectorAll('measure'));
+    expect(measures.map(measure => measure.getAttribute('xml:id'))).toEqual(songMeasureIds);
+    expect(measures[0].querySelector('note')).not.toBeNull();
+  });
+
+  it('should keep condensing on', () => {
+    score.setOptions({ showMelodyOnly: true });
+    expect(score._vrvToolkit.getOptions().condense).toBe('auto');
+    expect(score._scoreData.meiParsed.querySelector('note[visible="false"]')).toBeNull();
+  });
+
+  it('should keep each part on its own staff when expanded', () => {
+    score.setOptions({ expandScore: 'full-score', showMelodyOnly: true });
+    const meiParsed = score._scoreData.meiParsed;
+    expect(meiParsed.querySelector('staff:not([n="1"], [n="2"])')).toBeNull();
+    expect(meiParsed.querySelector('staff[n="1"] note')).not.toBeNull();
+    expect(meiParsed.querySelector('staff[n="2"] note')).not.toBeNull();
   });
 
   it('should move the tempo onto the top melody staff and draw it', () => {
@@ -598,7 +595,8 @@ describe('showMelodyOnly — two-part melody with piano introduction', () => {
   it('should restore the piano staves and the tempo\'s staff when turned off', () => {
     score.setOptions({ showMelodyOnly: true });
     score.setOptions({ showMelodyOnly: false });
-    expect(introMeasures()[0].querySelectorAll('staff').length).toBe(4);
+    expect(score._scoreData.meiParsed.querySelector('measure').querySelectorAll('staff').length).toBe(4);
+    expect(score._scoreData.meiParsed.querySelector('note[visible="false"]')).toBeNull();
     expect(score._scoreData.meiParsed.querySelector('tempo').getAttribute('staff')).toBe('3');
     expect(score._scoreData.meiParsed.querySelectorAll('mRest[*|id$="-mrest"]').length).toBe(0);
   });
@@ -630,6 +628,21 @@ describe('showMelodyOnly — lyrics kept with the melody', () => {
     expect(lineIds.filter(id => id === '2.2')).toHaveLength(9);
   });
 
+  it('should put words engraved above a staff below it', async () => {
+    // As "The Morning Breaks" (1985 Hymns) engraves a lower staff's words, to line up with the staff above
+    document.body.innerHTML = '<div id="score-container"></div>';
+    const score = new ChScore('#score-container');
+    const voiceAbove = sampleMusicXmlDescant.replace(/(<part id="P2">[\s\S]*?<\/part>)/,
+      voice => voice.replaceAll('<lyric number=', '<lyric placement="above" number='));
+    await score.load('musicxml', { scoreContent: voiceAbove });
+    expect(score._scoreData.meiParsed.querySelectorAll('verse[place="above"]').length).toBeGreaterThan(0);
+
+    score.setOptions({ showMelodyOnly: true });
+    expect(score._scoreData.meiParsed.querySelector('verse[place]')).toBeNull();
+    score.setOptions({ showMelodyOnly: false });
+    expect(score._scoreData.meiParsed.querySelectorAll('verse[place="above"]').length).toBeGreaterThan(0);
+  });
+
   it('should number a descant\'s chorus as line 1, under its stacked verses', async () => {
     document.body.innerHTML = '<div id="score-container"></div>';
     const score = new ChScore('#score-container');
@@ -637,6 +650,24 @@ describe('showMelodyOnly — lyrics kept with the melody', () => {
     const descantLines = Array.from(score._scoreData.meiParsed.querySelectorAll('staff[n="1"] verse'),
       verse => `${verse.getAttribute('ch-lyric-line-id')} ${verse.textContent.trim()}`);
     expect(descantLines).toEqual(['1.1 Ring,', '1.2 Chime,', '1.1 bells!', '1.2 bells!', '1.1 Ring!']);
+  });
+
+  it('should rest out a descant in an expanded section that doesn\'t use its staff', async () => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    const score = new ChScore('#score-container');
+    // The descant joins in on the second verse only
+    await score.load('musicxml', { scoreContent: sampleMusicXmlDescant, sectionsTemplate: 'V([2,3,4]:2.1); V(:1.1,2.2)' });
+    score.setOptions({ expandScore: 'full-score' });
+    const staffEvents = (n) => score._scoreData.meiParsed.querySelectorAll(`staff[n="${n}"] :is(note, chord)`);
+    const descantIds = Array.from(staffEvents(1), element => element.getAttribute('xml:id'));
+    expect(descantIds.length).toBeGreaterThan(0);
+    expect(descantIds.every(id => id.endsWith('-rend2'))).toBe(true);
+    expect(score._scoreData.meiParsed.querySelectorAll('staff[n="1"] mRest').length).toBeGreaterThan(0);
+    expect(staffEvents(2).length).toBeGreaterThan(0);
+
+    // Unexpanded, the descant is drawn as engraved
+    score.setOptions({ expandScore: false });
+    expect(staffEvents(1).length).toBeGreaterThan(0);
   });
 
   it('should keep the words engraved above a lower voice carrying the tune (SATB#A)', async () => {
@@ -1281,5 +1312,166 @@ describe('_updateSvg() — Chord symbols', () => {
     for (const text of chordTexts) {
       expect(text.getAttribute('text-anchor')).toBe('middle');
     }
+  });
+});
+
+// ============================================================
+// Staves, introductions and lyrics: each case loads its own score
+// ============================================================
+describe('Staves, introductions and lyrics', { timeout: 30000 }, () => {
+  const load = async (scoreContent, data = {}) => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    const score = new ChScore('#score-container');
+    await score.load('musicxml', { scoreContent, ...data });
+    return score;
+  };
+
+  it('should drop a lyric holding only a space, keeping one with an extender', () => {
+    const score = new ChScore('#score-container');
+    // Two lyrics added to the voice's first note: a placeholder space, and a space ending a melisma
+    const musicXml = sampleMusicXmlDescant.replace(/(<part id="P2">[\s\S]*?<\/lyric>)/, `$1
+      <lyric number="7"><syllabic>single</syllabic><text> </text></lyric>
+      <lyric number="8"><syllabic>single</syllabic><text> </text><extend/></lyric>`);
+    const lyricNumbers = xml => Array.from(new DOMParser().parseFromString(xml, 'text/xml').querySelectorAll('lyric'),
+      lyric => lyric.getAttribute('number'));
+    const before = lyricNumbers(musicXml);
+    const after = lyricNumbers(score._optimizeMusicXml(musicXml));
+    expect(before).toContain('7');
+    expect(after).not.toContain('7');
+    expect(after).toContain('8');
+    expect(after).toHaveLength(before.length - 1);
+  });
+
+  it('should make room on both sides for a brace while its staves are drawn', async () => {
+    // The fixture's piano is braced; its staves are the accompaniment, gone with the melody only
+    const score = await load(sampleMusicXmlDescant);
+    const margins = () => [score._vrvToolkit.getOptions().pageMarginLeft, score._vrvToolkit.getOptions().pageMarginRight];
+    expect(margins()).toEqual([35, 35]);
+    score.setOptions({ showMelodyOnly: true });
+    // 4px at the default scale of 40
+    expect(margins()).toEqual([10, 10]);
+    score.setOptions({ showMelodyOnly: false });
+    expect(margins()).toEqual([35, 35]);
+  });
+
+  it('should tag a note only with the passes of sections that use its staff', async () => {
+    // The descant (staff 1) joins in on the second verse only
+    const score = await load(sampleMusicXmlDescant, { sectionsTemplate: 'V([2,3,4]:2.1); V(:1.1,2.2)' });
+    const passes = id => (id ?? '').split(' ').filter(Boolean).map(Number);
+    const sectionsOn = staffNumber => new Set(Array.from(score._scoreData.meiParsed.querySelectorAll(
+      `staff[n="${staffNumber}"] :is(note, chord)[ch-expanded-chord-position]`)).flatMap(element =>
+      passes(element.getAttribute('ch-expanded-chord-position')).map(ecp => score._scoreData.expandedChordPositions[ecp].sectionId)));
+    expect([...sectionsOn(1)]).toEqual(['verse-2']);
+    expect([...sectionsOn(2)].sort()).toEqual(['verse-1', 'verse-2']);
+
+    // A chord position's line carries every note's passes there, not just the first drawn
+    score.setOptions({ drawBackgroundShapes: ['ch-chord-position-line'] });
+    const svg = score._container.querySelector('svg');
+    const linePasses = new Map();
+    for (const line of svg.querySelectorAll('.ch-chord-position-line')) {
+      const chordPosition = line.getAttribute('data-ch-chord-position');
+      linePasses.set(chordPosition, new Set([...(linePasses.get(chordPosition) ?? []), ...passes(line.getAttribute('data-ch-expanded-chord-position'))]));
+    }
+    let checked = 0;
+    for (const note of svg.querySelectorAll('.note[data-ch-chord-position][data-ch-expanded-chord-position]')) {
+      const onLine = linePasses.get(note.getAttribute('data-ch-chord-position'));
+      if (!onLine) continue;
+      for (const ecp of passes(note.getAttribute('data-ch-expanded-chord-position'))) expect(onLine.has(ecp)).toBe(true);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it('should drop a section left empty by the opening measures from the expansion', async () => {
+    // A repeat after the piano introduction puts it in a section of its own, which the
+    // expansion names; with the melody only, the introduction (all rests) is left out
+    const withRepeat = sampleMusicXmlTwoPartIntro
+      .replaceAll('<measure number="3">', '<measure number="3"><barline location="left"><repeat direction="forward"/></barline>');
+    const score = await load(withRepeat);
+    const sectionIds = () => new Set(Array.from(score._scoreData.meiParsed.querySelectorAll('section'), section => section.getAttribute('xml:id')));
+    const plist = () => score._scoreData.meiParsed.querySelector('expansion[plist]')?.getAttribute('plist').split(/\s+/) ?? [];
+    expect(plist().length).toBeGreaterThan(0);
+    const measuresBefore = score._scoreData.meiParsed.querySelectorAll('measure').length;
+
+    score.setOptions({ showMelodyOnly: true });
+    expect(score._scoreData.meiParsed.querySelectorAll('measure').length).toBe(measuresBefore - 2);
+    for (const ref of plist()) expect(sectionIds().has(ref.substring(1))).toBe(true);
+  });
+
+  it('should tag each verse\'s copy with its own verse when the extracted introduction is left out', async () => {
+    // The introduction is copied from the song's measures (its chord positions recur in verse 1)
+    // and plays only the accompaniment, so with the melody only none of its notes are left
+    const derived = (await load(sampleMusicXmlIIW))._scoreData.templates.sectionsTemplateCp;
+    const sectionsTemplate = derived.replace(/^I\([^;]*;/, 'I(0-13[3])(55-64[3]);');
+    expect(sectionsTemplate).not.toBe(derived);
+    const score = await load(sampleMusicXmlIIW, { sectionsTemplate });
+    score.setOptions({ showMelodyOnly: true, expandScore: 'full-score' });
+    const copies = score._scoreData.meiParsed.querySelectorAll('section[ch-iteration]');
+    expect(copies.length).toBe(4);
+    for (const copy of copies) {
+      const sectionIds = new Set(Array.from(copy.querySelectorAll('note[ch-expanded-chord-position]'), note => note
+        .getAttribute('ch-expanded-chord-position').split(' ')
+        .map(ecp => score._scoreData.expandedChordPositions[ecp].sectionId)).flat());
+      expect([...sectionIds].sort()).toEqual([`chorus-${copy.getAttribute('ch-iteration')}`, `verse-${copy.getAttribute('ch-iteration')}`]);
+    }
+  });
+
+  it('should keep a staff of rests drawn with an invisible note in the rest\'s own layer', async () => {
+    // Expanded, each part of the two-part melody rests through the other's verse
+    const score = await load(sampleMusicXmlTwoPartIntro);
+    score.setOptions({ showMelodyOnly: true, expandScore: 'full-score' });
+    const anchors = Array.from(score._scoreData.meiParsed.querySelectorAll('note[visible="false"]'));
+    expect(anchors.length).toBeGreaterThan(0);
+    for (const anchor of anchors) {
+      const measure = anchor.closest('measure');
+      expect(measure.querySelector('note:not([visible="false"]), rest, chord')).toBeNull();
+      // Beside the rest: in a second layer, Verovio would raise the rest out of its way
+      expect(anchor.parentElement.querySelector(':scope > mRest')).not.toBeNull();
+      expect(anchor.closest('staff').querySelectorAll('layer')).toHaveLength(1);
+    }
+  });
+
+  it('should copy no empty measure where an introduction starts at a barline', async () => {
+    // The intro bracket moved from part-way through measure 13 to the end of measure 12
+    const bracket = sampleMusicXml.match(/<direction placement="above">\s*<direction-type>\s*<words>⌜<\/words>[\s\S]*?<\/direction>/)[0];
+    const withoutBracket = sampleMusicXml.replace(bracket, '');
+    const measure12 = withoutBracket.indexOf('<measure number="12"');
+    const measure12End = withoutBracket.indexOf('</measure>', measure12);
+    const atBarline = withoutBracket.slice(0, measure12End) + bracket + withoutBracket.slice(measure12End);
+    const score = await load(atBarline);
+    score.setOptions({ expandScore: 'intro' });
+    const introMeasures = Array.from(score._scoreData.meiParsed.querySelectorAll('section[type="introduction"] measure'));
+    expect(introMeasures.length).toBeGreaterThan(0);
+    for (const measure of introMeasures) expect(measure.querySelector('note, chord')).not.toBeNull();
+  });
+
+  it('should keep an instruction naming a verse only in that verse\'s copy', async () => {
+    // "Descant (verse 4)" is printed in the chorus, and every pass copies the chorus
+    const score = await load(sampleMusicXmlIIW);
+    score.setOptions({ expandScore: 'full-score' });
+    const descantInstructions = Array.from(score._scoreData.meiParsed.querySelectorAll('dir'))
+      .filter(dir => dir.textContent.includes('Descant (verse 4)'));
+    expect(descantInstructions).toHaveLength(1);
+    expect(descantInstructions[0].getAttribute('ch-section-id')).toBe('chorus-4');
+  });
+
+  it('should rest the melody through an introduction it doesn\'t play, then leave it out', async () => {
+    // "It Is Well" plays its melody in the introduction; here the introduction is the piano's left hand only
+    const derived = (await load(sampleMusicXmlIIW))._scoreData.templates.sectionsTemplateCp;
+    const sectionsTemplate = derived.replace('I(0-13[2,3])(55-64[2,3])', 'I(0-13[3])(55-64[3])');
+    expect(sectionsTemplate).not.toBe(derived);
+    const score = await load(sampleMusicXmlIIW, { sectionsTemplate });
+
+    score.setOptions({ expandScore: 'intro' });
+    const introMeasures = () => Array.from(score._scoreData.meiParsed.querySelectorAll('section[type="introduction"] measure'));
+    expect(introMeasures().length).toBeGreaterThan(0);
+    for (const measure of introMeasures()) {
+      expect(measure.querySelector('staff:not([n="3"]) :is(note, chord)')).toBeNull();
+    }
+
+    // With the melody only it's all rests, so the score opens on the song
+    score.setOptions({ showMelodyOnly: true });
+    expect(introMeasures()).toHaveLength(0);
+    expect(score._scoreData.meiParsed.querySelector('measure').querySelector('note')).not.toBeNull();
   });
 });

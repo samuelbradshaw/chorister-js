@@ -440,13 +440,14 @@ describe('It Is Well with My Soul — shared fixture', { timeout: 30000 }, () =>
       score.setOptions({ expandScore: 'intro' }); // re-apply for subsequent tests
     });
 
-    it('should only keep introduction staffNumbers (2, 3) in the intro section', () => {
+    it('should only play introduction staffNumbers (2, 3) in the intro section, resting the others', () => {
       const introSection = score._scoreData.meiParsed.querySelector('section[type="introduction"]');
-      const staves = introSection.querySelectorAll('staff');
-      for (const staff of staves) {
-        const n = staff.getAttribute('n');
-        expect(['2', '3']).toContain(n);
+      for (const measure of introSection.querySelectorAll('measure')) {
+        // Every staff of the song, so the system's line and brace are drawn
+        expect(Array.from(measure.querySelectorAll(':scope > staff'), staff => staff.getAttribute('n'))).toEqual(['1', '2', '3']);
+        expect(measure.querySelector(':scope > staff[n="1"] > layer > mRest:only-child')).not.toBeNull();
       }
+      expect(introSection.querySelector('staff:is([n="2"], [n="3"]) :is(note, chord)')).not.toBeNull();
     });
   });
 
