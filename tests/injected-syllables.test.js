@@ -143,7 +143,7 @@ describe('injectedSyllables', () => {
     expect(score._scoreData.sections.find(section => section.sectionId === 'verse-5').lyricsText).toContain('s2-s3');
     expect(score._scoreData.hyphenatedWords).toEqual([]);
     // EXTENDER_END stops the extender at the next note, with an empty syllable
-    const stub = score._scoreData.meiParsed.querySelector('staff[n="1"] [ch-chord-position="6"] verse[n="5"] syl[ch-extender-end]');
+    const stub = score._scoreData.meiParsed.querySelector('staff[n="1"] [ch-chord-position="6"] verse[n="5"] syl:empty');
     expect(stub).not.toBeNull();
   });
 

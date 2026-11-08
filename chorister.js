@@ -34,6 +34,12 @@ ChScore.prototype._loadStyles = function () {
   this._stylesheets = {};
   const generalStylesheet = this._addStylesheet('general');
   generalStylesheet.replaceSync(`
+    /* SVG score styles */
+    g.placeholder {
+      /* Hide placeholder circles, which were added in Verovio 6.4.0 (https://github.com/rism-digital/verovio/pull/4484). Verovio hides them by default, but we strip out Verovio's default CSS. */
+      visibility: hidden;
+    }
+
     /* Shape styles */
     .ch-staff-label, .ch-lyric-line-label, .ch-measure-label, .ch-beat-label, .ch-chord-position-label {
       opacity: 1;
@@ -532,6 +538,10 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
     // would be drawn with no staves at all
     if (this._scoreData?.features.hasMelodyInfo) verovioOptions.condense = 'none';
   }
+  // The margins above are in screen pixels; Verovio takes them at the scale drawn
+  this._pageMarginsPx = Object.fromEntries(['pageMarginTop', 'pageMarginBottom', 'pageMarginLeft', 'pageMarginRight']
+    .map(name => [name, verovioOptions[name]]));
+  Object.assign(verovioOptions, this._pageMarginsAtScale(verovioOptions.scale ?? 100));
 
   // Transpose
   const keySignatureInfo = this._scoreData?.keySignatureInfo;
@@ -1223,13 +1233,21 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
   // With the numbering right, the words a held melody leaves to the voice below it can be
   // read off that voice and put where they are sung. Example: Come unto Jesus (Hymns #117).
   if (hasLyrics) {
+    for (const lyric of parsed.querySelectorAll('lyric')) {
+      const texts = chChildren(lyric, 'text');
+      // A lyric holding only a space is a placeholder in the engraving, and would take up a
+      // lyric row. Example: verse 4 above the staff in The Lord Is My Light (Hymns #89).
+      if (texts.length > 0 && texts.every(text => !text.textContent.trim()) && !chChild(lyric, 'extend')) {
+        lyric.remove();
+        changed = true;
+        continue;
+      }
+      // Convert bold and italic font names like "McKay Neue ldsLat Italic" to font style and weight attributes
+      for (const text of texts) changed = this._normalizeFontStyling(text) || changed;
+    }
     changed = this._moveHeldMelodyLyrics(parsed) || changed;
     changed = this._normalizeTypedHyphens(parsed) || changed;
     changed = this._mergeMarkOnlyLyrics(parsed) || changed;
-    // Convert bold and italic font names like "McKay Neue ldsLat Italic" to font style and weight attributes
-    for (const text of parsed.querySelectorAll('lyric > text')) {
-      changed = this._normalizeFontStyling(text) || changed;
-    }
     this._readSpacedElisions(parsed);
   }
 
@@ -1999,10 +2017,6 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   // that isn't sung doesn't count as one when the numbers are read.
   this._normalizeLyricElements(this._scoreData.meiParsed);
 
-  // After _normalizeLyricElements: a stub copies its line's @label, which that pass creates
-  // for a verse number engraved into the first syllable
-  this._fixUnterminatedMelismas();
-
 
   /********** Read notes, rests and measures **********/
 
@@ -2153,11 +2167,8 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   const melodyLayers = this._melodyLayerByStaffAndChordPosition();
   this._normalizeLyricLineNumbers(melodyLayers);
   for (const lyricElement of this._scoreData.meiParsed.querySelectorAll('verse')) {
-    if (lyricElement.textContent.trim() === '') {
-      // Keep empty syllables used to mark the end of a melisma extender
-      if (!lyricElement.querySelector('[ch-extender-end]')) lyricElement.remove();
-      continue;
-    }
+    // Skip empty syllables (usually these mark the end of a melisma's extender)
+    if (lyricElement.textContent.trim() === '') continue;
     const staffNumber = lyricElement.closest('staff').getAttribute('n');
     // A lyric line is named by the row it's drawn on, so an id and @n always agree; which
     // verse a row is, with help text counted out, is _verseLineNumber's to say. Help text
@@ -2410,19 +2421,16 @@ ChScore.prototype._injectSyllables = function (vrvTimemap) {
         for (let at = chordPosition + 1; !nextNote && at < notesByChordPosition.length; at++) {
           nextNote = noteAt(at, staffNumber, layerNumber);
         }
+        // An empty syllable there ends the extender, which is how MEI marks where it stops
         const lyricElement = nextNote && lyricElementOn(nextNote);
-        if (lyricElement && !lyricElement.querySelector('syl')) this._appendExtenderEnd(lyricElement);
+        if (lyricElement && !lyricElement.querySelector('syl')) {
+          const syl = this._createMeiElement(this._scoreData.meiParsed, 'syl');
+          syl.setAttribute('con', 's');
+          lyricElement.appendChild(syl);
+        }
       }
     }
   }
-}
-
-// End a melisma's extender here: an empty syllable, which is how MEI marks where it stops
-ChScore.prototype._appendExtenderEnd = function (lyricElement) {
-  const syl = this._createMeiElement(this._scoreData.meiParsed, 'syl');
-  syl.setAttribute('con', 's');
-  syl.setAttribute('ch-extender-end', '');
-  lyricElement.appendChild(syl);
 }
 
 // What follows an injected syllable: its MEI @con, whether it ends the word, and the attributes
@@ -2440,56 +2448,6 @@ ChScore.prototype._syllableConnectors = {
   TIE_OVER: { con: 't', endsWord: true },
   TIE_UNDER: { con: 't', endsWord: true },
 };
-
-// Fix unterminated melisma extenders, by appending a stub <verse> holding an empty
-// syllable to the event where the extender should stop.
-ChScore.prototype._fixUnterminatedMelismas = function () {
-  // One walk over the events, bucketed by the staff number holding them, rather than a
-  // document query per staff. A staff number spans every measure, so it is the bucket key
-  // rather than the <staff> element.
-  const eventsByStaffNumber = new Map();
-  for (const element of this._scoreData.meiParsed.querySelectorAll('staff note, staff chord')) {
-    if (element.parentElement.closest('chord')) continue;
-    const staffNumber = element.closest('staff').getAttribute('n');
-    if (!eventsByStaffNumber.has(staffNumber)) eventsByStaffNumber.set(staffNumber, []);
-    eventsByStaffNumber.get(staffNumber).push(element);
-  }
-  for (const events of eventsByStaffNumber.values()) {
-    const activeLineNumbers = new Set();
-    for (const event of events) {
-      const lyricElementsByLine = new Map([...event.children]
-        .filter(child => child.matches('verse'))
-        .map(lyricElement => [lyricElement.getAttribute('n'), lyricElement]));
-      const realLyricElements = [...lyricElementsByLine.values()].filter(lyricElement => lyricElement.matches('verse:has(syl:not(:empty))'));
-
-      if (realLyricElements.length > 0) {
-        for (const lineNumber of activeLineNumbers) {
-          if (lyricElementsByLine.has(lineNumber)) continue;
-          const stubLyricElement = this._createMeiElement(this._scoreData.meiParsed, 'verse');
-          stubLyricElement.setAttribute('n', lineNumber);
-          const label = realLyricElements[0].getAttribute('label');
-          if (label) stubLyricElement.setAttribute('label', label);
-          // Syllable is left empty to not interfere with lyric line counting
-          this._appendExtenderEnd(stubLyricElement);
-          event.appendChild(stubLyricElement);
-          activeLineNumbers.delete(lineNumber);
-        }
-      }
-
-      for (const [lineNumber, lyricElement] of lyricElementsByLine) {
-        // The last syllable with words, not the first (so the right @con is used for elisions where there are multiple syllables on a note (common in languages like Spanish)
-        const syl = Array.from(lyricElement.querySelectorAll('syl:not(:empty)')).at(-1);
-        if (!syl) {
-          // An extender's end already written here closes it
-          if (lyricElement.querySelector('syl[ch-extender-end]')) activeLineNumbers.delete(lineNumber);
-          continue;
-        }
-        if (syl.getAttribute('con') === 'u') activeLineNumbers.add(lineNumber);
-        else activeLineNumbers.delete(lineNumber);
-      }
-    }
-  }
-}
 
 // Improve appearance of dir elements.
 // Adds attributes to intro brackets: @ch-intro-bracket.
@@ -5763,7 +5721,7 @@ ChScore.prototype._drawScore = function () {
       this._container.dataset.chScale = Number.parseInt(scale);
       this._container.style.setProperty('--ch-scale', Number.parseInt(scale));
       const availableHeight = Math.max(this._container.offsetHeight - this._pages[0].scrollHeight, 100);
-      this._vrvToolkit.setOptions({ scale: scale, pageHeight: availableHeight });
+      this._vrvToolkit.setOptions({ scale: scale, pageHeight: availableHeight, ...this._pageMarginsAtScale(scale) });
       this._vrvToolkit.redoLayout();
       return this._vrvToolkit.getPageCount();
     };
@@ -6294,7 +6252,7 @@ ChScore.prototype._chLoadDependencies = async function () {
     // import('https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1/es6/core.min.js'),
     import('https://cdn.jsdelivr.net/gh/samuelbradshaw/magenta-js@master/music/es6/core.js'),
     // Kept to the version sheet-music-parser parses with, so chord positions match its timestamps
-    import('https://cdn.jsdelivr.net/npm/verovio@6.1.0/dist/verovio-toolkit-wasm.min.js'),
+    import('https://cdn.jsdelivr.net/npm/verovio@6.4.1/dist/verovio-toolkit-wasm.min.js'),
     verovioInitialized(),
   ]);
   return true;
@@ -6368,7 +6326,7 @@ ChScore.prototype._defaultVerovioOptions = {
     
     // Lyric attributes
     'verse@ch-section-id', 'verse@ch-secondary', 'verse@ch-chorus',
-    'verse@ch-lyric-line-id', 'syl@ch-extender-end', 'rend@ch-superscript',
+    'verse@ch-lyric-line-id', 'rend@ch-superscript',
     
     // Additional attributes
     'dir@ch-intro-bracket', 'dir@ch-round-marker', 'dir@ch-section-id',
@@ -6419,6 +6377,13 @@ ChScore.prototype._labelFontSize = 350;
 // differently, so the same row height is a different number of each
 ChScore.prototype._verovioSpacingUnit = 90;
 ChScore.prototype._verovioMarginUnit = 25;
+
+// Since Verovio 6.2, page margins scale with the music; chorister sets them in screen pixels,
+// as earlier versions took them. Verovio refuses (rather than clamps) a margin over 500.
+ChScore.prototype._pageMarginsAtScale = function (scale) {
+  return Object.fromEntries(Object.entries(this._pageMarginsPx ?? {})
+    .map(([name, px]) => [name, Math.min(500, Math.round(px * 100 / scale))]));
+}
 
 ChScore.prototype._keySignatures = {
   major: {

@@ -233,7 +233,9 @@ describe('Options — shared plain sampleMusicXml load', () => {
       score.setOptions({ drawBackgroundShapes: ['ch-chord-position-label'] });
       const lastCall = spy.mock.calls[spy.mock.calls.length - 1][0];
       expect(lastCall.spacingSystem).toBe(12);
-      expect(lastCall.pageMarginBottom).toBe(20);
+      // 20px at the default scale of 40
+      expect(lastCall.scale).toBe(40);
+      expect(lastCall.pageMarginBottom).toBe(50);
       spy.mockRestore();
     });
 
@@ -887,7 +889,9 @@ describe('setOptions() — chord set images spacing', () => {
     const lastCall = spy.mock.calls[spy.mock.calls.length - 1][0];
     expect(lastCall.spacingLinear).toBe(1.0);
     expect(lastCall.spacingNonLinear).toBe(0.5);
-    expect(lastCall.pageMarginTop).toBe(220);
+    // 220px at the default scale of 40 is 550, over the 500 Verovio allows
+    expect(lastCall.scale).toBe(40);
+    expect(lastCall.pageMarginTop).toBe(500);
     spy.mockRestore();
     ChScore.prototype._drawScore = origDrawScore;
   });
