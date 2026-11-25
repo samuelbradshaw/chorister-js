@@ -200,6 +200,27 @@ describe('Expansion keeps each part to its own words — two-part score', { time
     expect(score._scoreData.features.hasTwoPartMelody).toBe(true);
   });
 
+  it('should give each part\'s verse only its staff, and the together pass every staff', () => {
+    const verses = score._scoreData.sections.filter(section => section.type === 'verse')
+      .map(section => section.chordPositionRanges.map(range => range.staffNumbers));
+    expect(verses).toEqual([[[1]], [[2]], [[1, 2]]]);
+    expect(score._scoreData.templates.sectionsTemplateCp).toBe('V([1]:1.1); V([2]:2.1); V(0-12:1.1,2.1)');
+  });
+
+  // Part 1's "(3.)" pickup is sung at the end of verse 2, so it sounds there (MIDI and playback
+  // read these staves) though verse 2 is otherwise Part 2's alone
+  it('should sound a pickup into verse 3 on its own staff at the end of verse 2', () => {
+    const pickupChordPositions = new Set(Array.from(score._scoreData.meiParsedComplete.querySelectorAll('verse label'))
+      .filter(label => label.textContent.includes('3'))
+      .map(label => Number(label.closest('[ch-chord-position]').getAttribute('ch-chord-position'))));
+    expect(pickupChordPositions.size).toBeGreaterThan(0);
+    const verse2 = score._scoreData.expandedChordPositions.filter(info => info.sectionId === 'verse-2');
+    const withPart1 = verse2.filter(info => info.staffNumbers.includes(1))
+      .map(info => info.chordPositionInfo.chordPosition);
+    expect(withPart1.some(chordPosition => pickupChordPositions.has(chordPosition))).toBe(true);
+    expect(withPart1.length).toBeLessThan(verse2.length);
+  });
+
   it('should extract one verse per part, each with that part own words', () => {
     const verses = Array.from(expected.values());
     expect(verses).toHaveLength(2);

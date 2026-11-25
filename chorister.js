@@ -34,6 +34,12 @@ ChScore.prototype._loadStyles = function () {
   this._stylesheets = {};
   const generalStylesheet = this._addStylesheet('general');
   generalStylesheet.replaceSync(`
+    /* SVG score styles */
+    g.placeholder {
+      /* Hide placeholder circles, which were added in Verovio 6.4.0 (https://github.com/rism-digital/verovio/pull/4484). Verovio hides them by default, but we strip out Verovio's default CSS. */
+      visibility: hidden;
+    }
+
     /* Shape styles */
     .ch-staff-label, .ch-lyric-line-label, .ch-measure-label, .ch-beat-label, .ch-chord-position-label {
       opacity: 1;
@@ -528,10 +534,11 @@ ChScore.prototype.setOptions = function (optionsToUpdate, redraw = true) {
   if (this._currentOptions.showMelodyOnly) {
     verovioOptions.spacingSystem += 5;
     verovioOptions.pageMarginBottom += 20;
-    // Condensing hides staves holding only rests, so a system of them (a piano introduction)
-    // would be drawn with no staves at all
-    if (this._scoreData?.features.hasMelodyInfo) verovioOptions.condense = 'none';
   }
+  // The margins above are in screen pixels; Verovio takes them at the scale drawn
+  this._pageMarginsPx = Object.fromEntries(['pageMarginTop', 'pageMarginBottom', 'pageMarginLeft', 'pageMarginRight']
+    .map(name => [name, verovioOptions[name]]));
+  Object.assign(verovioOptions, this._pageMarginsAtScale(verovioOptions.scale ?? 100));
 
   // Transpose
   const keySignatureInfo = this._scoreData?.keySignatureInfo;
@@ -1223,13 +1230,21 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
   // With the numbering right, the words a held melody leaves to the voice below it can be
   // read off that voice and put where they are sung. Example: Come unto Jesus (Hymns #117).
   if (hasLyrics) {
+    for (const lyric of parsed.querySelectorAll('lyric')) {
+      const texts = chChildren(lyric, 'text');
+      // A lyric holding only a space is a placeholder in the engraving, and would take up a
+      // lyric row. Example: verse 4 above the staff in The Lord Is My Light (Hymns #89).
+      if (texts.length > 0 && texts.every(text => !text.textContent.trim()) && !chChild(lyric, 'extend')) {
+        lyric.remove();
+        changed = true;
+        continue;
+      }
+      // Convert bold and italic font names like "McKay Neue ldsLat Italic" to font style and weight attributes
+      for (const text of texts) changed = this._normalizeFontStyling(text) || changed;
+    }
     changed = this._moveHeldMelodyLyrics(parsed) || changed;
     changed = this._normalizeTypedHyphens(parsed) || changed;
     changed = this._mergeMarkOnlyLyrics(parsed) || changed;
-    // Convert bold and italic font names like "McKay Neue ldsLat Italic" to font style and weight attributes
-    for (const text of parsed.querySelectorAll('lyric > text')) {
-      changed = this._normalizeFontStyling(text) || changed;
-    }
     this._readSpacedElisions(parsed);
   }
 
@@ -1999,10 +2014,6 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   // that isn't sung doesn't count as one when the numbers are read.
   this._normalizeLyricElements(this._scoreData.meiParsed);
 
-  // After _normalizeLyricElements: a stub copies its line's @label, which that pass creates
-  // for a verse number engraved into the first syllable
-  this._fixUnterminatedMelismas();
-
 
   /********** Read notes, rests and measures **********/
 
@@ -2153,11 +2164,8 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   const melodyLayers = this._melodyLayerByStaffAndChordPosition();
   this._normalizeLyricLineNumbers(melodyLayers);
   for (const lyricElement of this._scoreData.meiParsed.querySelectorAll('verse')) {
-    if (lyricElement.textContent.trim() === '') {
-      // Keep empty syllables used to mark the end of a melisma extender
-      if (!lyricElement.querySelector('[ch-extender-end]')) lyricElement.remove();
-      continue;
-    }
+    // Skip empty syllables (usually these mark the end of a melisma's extender)
+    if (lyricElement.textContent.trim() === '') continue;
     const staffNumber = lyricElement.closest('staff').getAttribute('n');
     // A lyric line is named by the row it's drawn on, so an id and @n always agree; which
     // verse a row is, with help text counted out, is _verseLineNumber's to say. Help text
@@ -2420,19 +2428,16 @@ ChScore.prototype._injectSyllables = function (vrvTimemap) {
         for (let at = chordPosition + 1; !nextNote && at < notesByChordPosition.length; at++) {
           nextNote = noteAt(at, staffNumber, layerNumber);
         }
+        // An empty syllable there ends the extender, which is how MEI marks where it stops
         const lyricElement = nextNote && lyricElementOn(nextNote);
-        if (lyricElement && !lyricElement.querySelector('syl')) this._appendExtenderEnd(lyricElement);
+        if (lyricElement && !lyricElement.querySelector('syl')) {
+          const syl = this._createMeiElement(this._scoreData.meiParsed, 'syl');
+          syl.setAttribute('con', 's');
+          lyricElement.appendChild(syl);
+        }
       }
     }
   }
-}
-
-// End a melisma's extender here: an empty syllable, which is how MEI marks where it stops
-ChScore.prototype._appendExtenderEnd = function (lyricElement) {
-  const syl = this._createMeiElement(this._scoreData.meiParsed, 'syl');
-  syl.setAttribute('con', 's');
-  syl.setAttribute('ch-extender-end', '');
-  lyricElement.appendChild(syl);
 }
 
 // What follows an injected syllable: its MEI @con, whether it ends the word, and the attributes
@@ -2450,56 +2455,6 @@ ChScore.prototype._syllableConnectors = {
   TIE_OVER: { con: 't', endsWord: true },
   TIE_UNDER: { con: 't', endsWord: true },
 };
-
-// Fix unterminated melisma extenders, by appending a stub <verse> holding an empty
-// syllable to the event where the extender should stop.
-ChScore.prototype._fixUnterminatedMelismas = function () {
-  // One walk over the events, bucketed by the staff number holding them, rather than a
-  // document query per staff. A staff number spans every measure, so it is the bucket key
-  // rather than the <staff> element.
-  const eventsByStaffNumber = new Map();
-  for (const element of this._scoreData.meiParsed.querySelectorAll('staff note, staff chord')) {
-    if (element.parentElement.closest('chord')) continue;
-    const staffNumber = element.closest('staff').getAttribute('n');
-    if (!eventsByStaffNumber.has(staffNumber)) eventsByStaffNumber.set(staffNumber, []);
-    eventsByStaffNumber.get(staffNumber).push(element);
-  }
-  for (const events of eventsByStaffNumber.values()) {
-    const activeLineNumbers = new Set();
-    for (const event of events) {
-      const lyricElementsByLine = new Map([...event.children]
-        .filter(child => child.matches('verse'))
-        .map(lyricElement => [lyricElement.getAttribute('n'), lyricElement]));
-      const realLyricElements = [...lyricElementsByLine.values()].filter(lyricElement => lyricElement.matches('verse:has(syl:not(:empty))'));
-
-      if (realLyricElements.length > 0) {
-        for (const lineNumber of activeLineNumbers) {
-          if (lyricElementsByLine.has(lineNumber)) continue;
-          const stubLyricElement = this._createMeiElement(this._scoreData.meiParsed, 'verse');
-          stubLyricElement.setAttribute('n', lineNumber);
-          const label = realLyricElements[0].getAttribute('label');
-          if (label) stubLyricElement.setAttribute('label', label);
-          // Syllable is left empty to not interfere with lyric line counting
-          this._appendExtenderEnd(stubLyricElement);
-          event.appendChild(stubLyricElement);
-          activeLineNumbers.delete(lineNumber);
-        }
-      }
-
-      for (const [lineNumber, lyricElement] of lyricElementsByLine) {
-        // The last syllable with words, not the first (so the right @con is used for elisions where there are multiple syllables on a note (common in languages like Spanish)
-        const syl = Array.from(lyricElement.querySelectorAll('syl:not(:empty)')).at(-1);
-        if (!syl) {
-          // An extender's end already written here closes it
-          if (lyricElement.querySelector('syl[ch-extender-end]')) activeLineNumbers.delete(lineNumber);
-          continue;
-        }
-        if (syl.getAttribute('con') === 'u') activeLineNumbers.add(lineNumber);
-        else activeLineNumbers.delete(lineNumber);
-      }
-    }
-  }
-}
 
 // Improve appearance of dir elements.
 // Adds attributes to intro brackets: @ch-intro-bracket.
@@ -2751,6 +2706,16 @@ ChScore.prototype._buildExpandedChordPositions = function (chordPositionCounter,
       if (!chordPositionRange.end) chordPositionRange.end = chordPositionCounter;
     }
   }
+  // A pickup labelled for a later verse ("(3.)" in "A Child's Prayer") is sung at the end of
+  // the verse before it, so it sounds there on its own staff, whichever staves that verse uses.
+  const pickupsAt = new Map(); // chord position -> [{ staffNumber, verseNumber }]
+  const verseSections = this._scoreData.sections.filter(section => section.type === 'verse');
+  for (const [lyricElement, verseNumber] of this._pickupVerses(this._scoreData.meiParsed.querySelectorAll('verse[ch-lyric-line-id]'))) {
+    const chordPosition = Number.parseInt(lyricElement.closest('[ch-chord-position]')?.getAttribute('ch-chord-position'));
+    if (Number.isNaN(chordPosition)) continue;
+    if (!pickupsAt.has(chordPosition)) pickupsAt.set(chordPosition, []);
+    pickupsAt.get(chordPosition).push({ staffNumber: this._staffNumberOf(lyricElement), verseNumber });
+  }
   // An instruction naming a verse belongs to the passage it is *printed in*, on the pass it
   // names: "(4th verse)" is printed in the chorus, so it belongs to the fourth chorus rather
   // than to verse 4. Keyed by chord position, to be named in the walk below.
@@ -2769,7 +2734,13 @@ ChScore.prototype._buildExpandedChordPositions = function (chordPositionCounter,
   for (const { range, chordPosition, expandedChordPosition: expandedChordPositionCounter, passNumber }
     of this._walkSungChordPositions(this._sectionChordPositionRanges())) {
     const sectionInfo = range.sectionInfo;
-    const staffNumbers = range.staffNumbers ?? this._scoreData.staffNumbers;
+    let staffNumbers = range.staffNumbers ?? this._scoreData.staffNumbers;
+    // A verse's number is its marker, or its place among the verses where it has none
+    const verseNumber = this._markerNumber(sectionInfo.marker)
+      ?? (sectionInfo.type === 'verse' ? verseSections.indexOf(sectionInfo) + 1 : NaN);
+    const pickupStaves = (pickupsAt.get(chordPosition) ?? [])
+      .filter(pickup => pickup.verseNumber === verseNumber + 1).map(pickup => pickup.staffNumber);
+    if (pickupStaves.length > 0) staffNumbers = [...new Set([...staffNumbers, ...pickupStaves])].sort((a, b) => a - b);
 
     // Add attribute: dir@ch-section-id
     for (const [dir, verse] of instructionsAt.get(chordPosition) ?? []) {
@@ -4400,6 +4371,10 @@ ChScore.prototype._updateMei = function () {
     for (const lyricElement of this._scoreData.meiParsed.querySelectorAll('verse[ch-secondary]')) {
       lyricElement.remove();
     }
+    // Words engraved above a lower staff (to line up with the staff above's) go below their staff
+    for (const lyricElement of this._scoreData.meiParsed.querySelectorAll('verse[place]')) {
+      lyricElement.removeAttribute('place');
+    }
 
     const deletedElementIds = [];
     // Remove non-melody notes and rests
@@ -4462,7 +4437,8 @@ ChScore.prototype._updateMei = function () {
       tempo.setAttribute('staff', keptNumbers.length > 0 ? keptNumbers.join(' ') : staffNumbers[0]);
     }
     // A staff left with nothing in it (a piano introduction, or the other part's solo) gets
-    // a whole-measure rest. Condensing is off in this mode, so the staff stays drawn.
+    // a whole-measure rest. A measure of nothing else gets a staff anchor (end of _updateMei),
+    // so condensing doesn't hide every staff.
     for (const staff of this._scoreData.meiParsed.querySelectorAll('staff')) {
       const layer = staff.querySelector('layer');
       if (!layer || staff.querySelector(CH_SPLITTABLE_EVENTS.join())) continue;
@@ -4624,7 +4600,9 @@ ChScore.prototype._updateMei = function () {
 
       // Add expanded chord positions and clean up lyrics
       let currentSectionIndex = -1;
-      let currentSectionChordPositions = null;
+      // The current section's chord positions not yet played: one played again starts the next
+      // copy (not read from tags, as an extracted introduction may have no notes left to tag)
+      let currentSectionUnplayed = null;
       let currentExpandedChordPositions = null;
       let currentSectionOriginalId = null;
       let currentIteration = 0;
@@ -4639,27 +4617,17 @@ ChScore.prototype._updateMei = function () {
 
       // A labelled pickup ("(3.)" in "A Child’s Prayer", 1989 CSB) leads into the verse it
       // names, so it sounds at the end of the iteration before that one, not with its part.
-      // The label sits on the word's first syllable only, so the state runs on until the
-      // next word start resets it. Keyed by note rather than verse, and built up front,
-      // because the replay prunes verses.
+      // Keyed by note rather than verse, and built up front, because the replay prunes verses.
       const pickupIterationByElement = new Map();
       if (isTwoPart) {
         for (const section of sectionElements) {
-          const pickupIterationByLine = {};
-          for (const lyricElement of section.querySelectorAll('verse')) {
-            const lyricLineId = lyricElement.getAttribute('ch-lyric-line-id');
-            if (this._startsWord(lyricElement)) {
-              const pickupVerse = this._pickupVerseNumber(lyricElement);
-              pickupIterationByLine[lyricLineId] = pickupVerse == null ? null : pickupVerse - 1;
-            }
-            const pickupIteration = pickupIterationByLine[lyricLineId];
-            if (pickupIteration == null) continue;
+          for (const [lyricElement, pickupVerse] of this._pickupVerses(section.querySelectorAll('verse'))) {
             const noteOrChord = lyricElement.closest('note, chord');
             if (!noteOrChord) continue;
-            pickupIterationByElement.set(noteOrChord, pickupIteration);
+            pickupIterationByElement.set(noteOrChord, pickupVerse - 1);
             // A chord is rested out as a whole, so it needs the mark its notes carry
             const chord = noteOrChord.parentElement?.closest('chord');
-            if (chord) pickupIterationByElement.set(chord, pickupIteration);
+            if (chord) pickupIterationByElement.set(chord, pickupVerse - 1);
           }
         }
       }
@@ -4702,16 +4670,17 @@ ChScore.prototype._updateMei = function () {
           .forEach((lineId, index) => secondaryRowByLineId.set(lineId, 2 + index));
       }
 
+      // Notes to rest out: on a staff the section doesn't use (a descant joining in on a later
+      // verse), or of the two-part melody's part that isn't singing (see below)
+      const silentSet = new Set();
+
       for (const [ecpCounter, expandedChordPositionInfo] of this._scoreData.expandedChordPositions.entries()) {
         const chordPosition = expandedChordPositionInfo.chordPositionInfo.chordPosition;
         const sectionInfo = this._scoreData.sectionsById[expandedChordPositionInfo.sectionId];
         const passNumber = expandedChordPositionInfo.passNumber;
 
-        // Move to next section if needed. The elements at this chord position are found
-        // once and reused for the advance test and the tagging below.
-        const selector = `[ch-chord-position="${chordPosition}"]`;
-        let elements = sectionElements[currentSectionIndex]?.querySelectorAll(selector);
-        if (currentSectionChordPositions == null || !currentSectionChordPositions.has(chordPosition) || elements?.[0]?.hasAttribute('ch-expanded-chord-position')) {
+        // Move to the next section if needed
+        if (!currentSectionUnplayed?.has(chordPosition)) {
           if (currentExpandedChordPositions) {
             sectionElements[currentSectionIndex].setAttribute('ch-expanded-chord-position', currentExpandedChordPositions.join(' '));
           }
@@ -4722,15 +4691,16 @@ ChScore.prototype._updateMei = function () {
           if (currentSectionIndex + 1 >= sectionElements.length) break;
           currentSectionIndex++;
           const currentSection = sectionElements[currentSectionIndex];
-          currentSectionChordPositions = new Set(currentSection
+          currentSectionUnplayed = new Set(currentSection
             .getAttribute('ch-chord-position').trim().split(' ').map(cp => Number.parseInt(cp)));
           currentExpandedChordPositions = [];
           // The extracted introduction section carries no xml:id
           currentSectionOriginalId = currentSection.getAttribute('xml:id')?.split('-rend')[0] ?? null;
           currentIteration = iterationOf(currentSection);
-          elements = currentSection.querySelectorAll(selector);
         }
         currentExpandedChordPositions.push(ecpCounter);
+        currentSectionUnplayed.delete(chordPosition);
+        const elements = sectionElements[currentSectionIndex].querySelectorAll(`[ch-chord-position="${chordPosition}"]`);
 
         // Add expanded chord positions and remove unneeded lyrics
         const isIntroduction = sectionInfo.type === 'introduction';
@@ -4741,6 +4711,20 @@ ChScore.prototype._updateMei = function () {
             || singleLineSectionIds.has(currentSectionOriginalId);
         for (const element of elements) {
           element.setAttribute('ch-expanded-chord-position', ecpCounter);
+          // A chord is rested out as a whole, so its own notes aren't handled separately. The
+          // introduction's staves were already chosen when it was extracted, and a two-part
+          // melody's notes are the iteration's to rest out (below), pickups included.
+          if (!isIntroduction && element.matches('note, chord') && !element.parentElement.closest('chord')
+            && !(isTwoPart && twoPartMelodyPartIds.includes(partIdOf(element)))
+            && !expandedChordPositionInfo.staffNumbers.includes(this._staffNumberOf(element))) {
+            silentSet.add(element);
+          }
+          // An instruction naming a verse ("Optional descant (with verse 3)") goes with that verse only
+          if (element.matches('dir[ch-section-id]')
+            && !element.getAttribute('ch-section-id').split(' ').includes(sectionInfo.sectionId)) {
+            element.remove();
+            continue;
+          }
           const lyricElements = element.querySelectorAll('verse');
           if (lyricElements.length > 0 && !isIntroduction) {
             // A note belonging to no melody part (an accompaniment staff carrying words)
@@ -4792,8 +4776,8 @@ ChScore.prototype._updateMei = function () {
         sectionElements[currentSectionIndex].setAttribute('ch-expanded-chord-position', currentExpandedChordPositions.join(' '));
       }
 
-      // The part that isn't singing needs its *notes* dropped too. Same rule as the verses above, but over every clone — the replay doesn't reach them all.
-      const silentSet = new Set();
+      // The two-part melody's non-singing part, by the same rule as its verses above, but over
+      // every clone -- the replay doesn't reach them all.
       if (isTwoPart) {
         for (const section of sectionElements) {
           if (section.getAttribute('type') === 'introduction') continue;
@@ -4900,6 +4884,11 @@ ChScore.prototype._updateMei = function () {
     const chordPositionElements = this._scoreData.meiParsed.querySelectorAll(`[ch-chord-position]`);
     for (const chordPositionElement of chordPositionElements) {
       const sectionElement = chordPositionElement.closest('section');
+      // A section's positions only on the staves it uses, as its MIDI is: the vocal staves sit
+      // out a piano introduction drawn from the song, and a descant the verses it isn't in
+      const staffNumber = this._staffNumberOf(chordPositionElement);
+      const usesStaff = ecp => Number.isNaN(staffNumber)
+        || (this._scoreData.expandedChordPositions[ecp]?.staffNumbers ?? [staffNumber]).includes(staffNumber);
       const elementExpandedChordPositions = [];
       const chordPositions = chordPositionElement.getAttribute('ch-chord-position').trim().split(' ').map(cp => Number.parseInt(cp));
       for (const chordPosition of chordPositions) {
@@ -4912,7 +4901,7 @@ ChScore.prototype._updateMei = function () {
             || (sectionType === 'introduction' && sectionElement === introSectionElement)
             || (sectionType !== 'introduction' && sectionElement !== introSectionElement)
           ) {
-            elementExpandedChordPositions.push(...expandedChordPositions);
+            elementExpandedChordPositions.push(...expandedChordPositions.filter(usesStaff));
           }
         }
         chordPositionElement.setAttribute('ch-expanded-chord-position', elementExpandedChordPositions.join(' '));
@@ -4978,8 +4967,46 @@ ChScore.prototype._updateMei = function () {
         // Prevent overlapping text if staff already has text above
         referringElement.setAttribute('vgrp', 4000);
       }
-      const stavesSelector = ':is(staff, staffDef):not(' + sortedStaffNumbersToKeep.map(sn => `[n="${sn}"]`).join(',') + ')';
+      const stavesSelector = 'staff:not(' + sortedStaffNumbersToKeep.map(sn => `[n="${sn}"]`).join(',') + ')';
       for (const staff of this._scoreData.meiParsed.querySelectorAll(stavesSelector)) staff.remove();
+    }
+  }
+
+  // With the melody only, the measures opening the score with nothing sung in them (a piano
+  // introduction, written or extracted) are left out, along with a section they leave empty
+  // (and the expansion's reference to it). A tempo marked there moves to the first measure
+  // kept, if it has none of its own.
+  const measures = this._currentOptions.showMelodyOnly && this._scoreData.features.hasMelodyInfo
+    ? Array.from(this._scoreData.meiParsed.querySelectorAll('measure')) : [];
+  const firstSung = measures.findIndex(measure => measure.querySelector('note, chord'));
+  if (firstSung > 0) {
+    const leadingMeasures = measures.slice(0, firstSung);
+    const firstKept = measures[firstSung];
+    const tempo = leadingMeasures.map(leading => leading.querySelector(':scope > tempo')).find(Boolean);
+    if (tempo && !firstKept.querySelector(':scope > tempo')) {
+      tempo.removeAttribute('startid');
+      tempo.setAttribute('tstamp', '1');
+      if (!firstKept.querySelector(`:scope > staff[n="${tempo.getAttribute('staff')}"]`)) {
+        tempo.setAttribute('staff', firstKept.querySelector(':scope > staff').getAttribute('n'));
+      }
+      firstKept.appendChild(tempo);
+    }
+    const removedSectionRefs = new Set();
+    for (const leading of leadingMeasures) {
+      let container = leading.parentElement;
+      leading.remove();
+      while (container?.matches('section, ending') && !container.querySelector('measure')) {
+        const parent = container.parentElement;
+        removedSectionRefs.add(`#${container.getAttribute('xml:id')}`);
+        container.remove();
+        container = parent;
+      }
+    }
+    const expansion = this._scoreData.meiParsed.querySelector('expansion[plist]');
+    if (expansion && removedSectionRefs.size > 0) {
+      const plist = expansion.getAttribute('plist').split(/\s+/).filter(ref => !removedSectionRefs.has(ref));
+      if (plist.length > 0) expansion.setAttribute('plist', plist.join(' '));
+      else expansion.remove();
     }
   }
 
@@ -5056,8 +5083,42 @@ ChScore.prototype._updateMei = function () {
     }
   }
 
+  // Condensing hides staves holding only rests, so a system of them (a piano introduction, with
+  // the melody only) would lose every staff. An invisible note keeps the top staff of such a
+  // measure drawn; MIDI and the timemap come from the score as loaded, so it is never heard. It
+  // goes in the rest's own layer: in a second one, Verovio would raise the rest out of its way.
+  if (this._currentOptions.showMelodyOnly && this._scoreData.features.hasMelodyInfo) {
+    for (const measure of this._scoreData.meiParsed.querySelectorAll('measure')) {
+      if (!measure.querySelector('mRest') || measure.querySelector('note, rest, chord')) continue;
+      const layer = measure.querySelector('staff > layer');
+      if (!layer) continue;
+      const note = this._createMeiElement(this._scoreData.meiParsed, 'note');
+      this._setMeiId(note, `${measure.getAttribute('xml:id')}-staff-anchor`);
+      for (const [name, value] of Object.entries({ dur: '4', pname: 'c', oct: '5', visible: 'false' })) note.setAttribute(name, value);
+      layer.appendChild(note);
+    }
+  }
+
+  // Staves no measure has lose their definitions, and a group left empty goes: Verovio draws
+  // the line opening a system only when every staff defined is in it
+  const meiParsed = this._scoreData.meiParsed;
+  const drawnStaffNumbers = new Set(Array.from(meiParsed.querySelectorAll('measure > staff'), staff => staff.getAttribute('n')));
+  for (const staffDef of meiParsed.querySelectorAll('scoreDef staffDef')) {
+    if (!drawnStaffNumbers.has(staffDef.getAttribute('n'))) staffDef.remove();
+  }
+  for (const staffGrp of Array.from(meiParsed.querySelectorAll('staffGrp')).reverse()) {
+    if (!staffGrp.querySelector('staffDef')) staffGrp.remove();
+  }
+  // A brace or bracket is drawn left of the staves it groups
+  this._scoreData.hasDrawnGroupSymbol = Array.from(meiParsed.querySelector('scoreDef')?.querySelectorAll('staffGrp') ?? [])
+    .some(staffGrp => staffGrp.hasAttribute('symbol') || chChild(staffGrp, 'grpSym'));
+
   // Save changes
-  this._scoreData.meiString = (new XMLSerializer()).serializeToString(this._scoreData.meiParsed);
+  this._scoreData.meiString = (new XMLSerializer()).serializeToString(meiParsed);
+  // Margins again, now the score can say whether it has a brace (setOptions can run before it's read)
+  const toolkitOptions = this._vrvToolkit.getOptions();
+  const margins = this._pageMarginsAtScale(toolkitOptions.scale);
+  if (Object.entries(margins).some(([name, value]) => toolkitOptions[name] !== value)) this._vrvToolkit.setOptions(margins);
   this._vrvToolkit.loadData(this._scoreData.meiString);
 }
 
@@ -5301,7 +5362,7 @@ ChScore.prototype._updateSvg = function (svg) {
       }
     }
 
-    // If there's only one staff, make sure the system rectangle is tall enough to include the lyrics. This happens when set to melody only.
+    // A single staff (melody only): make sure the system rectangle is tall enough to include the lyrics
     if (staves.length < 2) {
       const systemLyricsBottom = Math.max(0, ...Array.from(system.querySelectorAll('.verse text')).map(lyric => Number.parseInt(lyric.getAttribute('y'))));
       systemY2 = Math.max(systemY2, systemLyricsBottom + 500) ?? 0;
@@ -5366,10 +5427,13 @@ ChScore.prototype._updateSvg = function (svg) {
         const note = noteSymbol.closest('.note, .rest');
         const staff = noteSymbol.closest('.staff');
         const chordPosition = Number.parseInt(note.dataset.chChordPosition);
-        const expandedChordPositions = note.dataset.chExpandedChordPosition;
         if (!Object.hasOwn(chordPositionNoteX1s, chordPosition)) {
           chordPositionNoteX1s[chordPosition] = [];
-          chordPositionToExpandedChordPositions[chordPosition] = expandedChordPositions;
+          chordPositionToExpandedChordPositions[chordPosition] = new Set();
+        }
+        // Every note's, since a staff can sit out a section the others play (a piano introduction)
+        for (const ecp of (note.dataset.chExpandedChordPosition ?? '').split(' ').filter(Boolean)) {
+          chordPositionToExpandedChordPositions[chordPosition].add(ecp);
         }
         const [noteX1, noteY1] = noteSymbol.getAttribute('transform').split('translate(').at(-1).split(')')[0].split(',').map(coord => Number.parseInt(coord));
         chordPositionNoteX1s[chordPosition].push(noteX1);
@@ -5385,7 +5449,7 @@ ChScore.prototype._updateSvg = function (svg) {
           noteCircle.setAttribute('class', noteCircleClassName);
           noteCircle.setAttribute('data-related', `${system.id} ${measure.id} ${staff.id} ${note.id}`);
           noteCircle.setAttribute('data-ch-chord-position', chordPosition);
-          noteCircle.setAttribute('data-ch-expanded-chord-position', expandedChordPositions);
+          noteCircle.setAttribute('data-ch-expanded-chord-position', note.dataset.chExpandedChordPosition);
           shapeLayer.append(noteCircle);
         }
       }
@@ -5421,7 +5485,7 @@ ChScore.prototype._updateSvg = function (svg) {
       let previousCpRect = null;
       for (let i = 0; i < chordPositionNoteX1sEntries.length; i++) {
         const [chordPosition, noteX1s] = chordPositionNoteX1sEntries[i];
-        const expandedChordPositions = chordPositionToExpandedChordPositions[chordPosition];
+        const expandedChordPositions = [...chordPositionToExpandedChordPositions[chordPosition]].join(' ');
         const cpLineX1 = Math.min(...noteX1s);
         const cpLineX = cpLineX1 + (noteheadWidth / 2);
         const cpRectX1 = i === 0 ? measureX1 : cpLineX1 - (noteheadWidth / 2);
@@ -5773,7 +5837,7 @@ ChScore.prototype._drawScore = function () {
       this._container.dataset.chScale = Number.parseInt(scale);
       this._container.style.setProperty('--ch-scale', Number.parseInt(scale));
       const availableHeight = Math.max(this._container.offsetHeight - this._pages[0].scrollHeight, 100);
-      this._vrvToolkit.setOptions({ scale: scale, pageHeight: availableHeight });
+      this._vrvToolkit.setOptions({ scale: scale, pageHeight: availableHeight, ...this._pageMarginsAtScale(scale) });
       this._vrvToolkit.redoLayout();
       return this._vrvToolkit.getPageCount();
     };
@@ -6100,8 +6164,18 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
       const index = measures.findIndex(measure => measure.getAttribute('xml:id') === id);
       return index < 0 ? fallback : index;
     };
-    const startIdx = indexOf(startId, 0);
-    const endIdx = indexOf(endId, measures.length - 1);
+    let startIdx = indexOf(startId, 0);
+    let endIdx = indexOf(endId, measures.length - 1);
+    // A range opening at a sub-measure's closing barline starts with the next one, and one
+    // closing on a sub-measure's first beat ends with the one before: no empty copy of either
+    if (startIdx < endIdx && startTstamp > getSubMeasureDuration(measures[startIdx])) {
+      startIdx++;
+      startTstamp = null;
+    }
+    if (endIdx > startIdx && endTstamp != null && endTstamp <= 1) {
+      endIdx--;
+      endTstamp = null;
+    }
     const selected = measures.slice(startIdx, endIdx + 1);
 
     return selected.map((measure, i) => {
@@ -6249,11 +6323,32 @@ ChScore.prototype._extractPianoIntroduction = function (meiParsed) {
   if (scoreDef) scoreDef.parentNode.insertBefore(introSection, scoreDef.nextSibling);
 
   // Clean up unneeded elements in the introduction
-  let removeSelectors = ['verse', 'dir', 'tempo'];
+  introSection.querySelectorAll('verse, dir, tempo').forEach(v => v.remove());
+
+  // Every staff of the song in every measure, in order: one the introduction doesn't play (or a
+  // clipped copy lost) rests, so condensing hides it and the system's line and brace are still
+  // drawn, which a missing staff loses. With the melody only, its own (accompaniment) staves are
+  // already gone, so it's all rests.
   const introSectionInfo = this._scoreData.sections[0].type === 'introduction' ? this._scoreData.sections[0] : null;
   const introStaffNumbers = introSectionInfo?.chordPositionRanges?.[0]?.staffNumbers ?? [];
-  if (introStaffNumbers.length > 0) removeSelectors.push('staff:not(' + introStaffNumbers.map(sn => `[n="${sn}"]`).join(',') + ')');
-  introSection.querySelectorAll(removeSelectors.join(',')).forEach(v => v.remove());
+  const songStaffNumbers = [...new Set(Array.from(meiParsed.querySelectorAll('measure > staff'), staff => Number(staff.getAttribute('n'))))]
+    .sort((a, b) => a - b);
+  for (const measure of introSection.querySelectorAll('measure')) {
+    const controlEvent = Array.from(measure.children).find(child => NOTATION_ELEMENTS.includes(child.tagName)) ?? null;
+    for (const staffNumber of songStaffNumbers) {
+      let staff = measure.querySelector(`:scope > staff[n="${staffNumber}"]`);
+      if (!staff || (introStaffNumbers.length > 0 && !introStaffNumbers.includes(staffNumber))) {
+        staff?.remove();
+        staff = this._createMeiElement(meiParsed, 'staff');
+        staff.setAttribute('n', String(staffNumber));
+        const layer = this._createMeiElement(meiParsed, 'layer');
+        layer.setAttribute('n', '1');
+        layer.appendChild(this._createMeiElement(meiParsed, 'mRest'));
+        staff.appendChild(layer);
+      }
+      measure.insertBefore(staff, controlEvent);
+    }
+  }
 
   // Get all note and chord IDs that exist in the intro section
   const introNoteIds = new Set();
@@ -6304,7 +6399,7 @@ ChScore.prototype._chLoadDependencies = async function () {
     // import('https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1/es6/core.min.js'),
     import('https://cdn.jsdelivr.net/gh/samuelbradshaw/magenta-js@master/music/es6/core.js'),
     // Kept to the version sheet-music-parser parses with, so chord positions match its timestamps
-    import('https://cdn.jsdelivr.net/npm/verovio@6.1.0/dist/verovio-toolkit-wasm.min.js'),
+    import('https://cdn.jsdelivr.net/npm/verovio@6.4.1/dist/verovio-toolkit-wasm.min.js'),
     verovioInitialized(),
   ]);
   return true;
@@ -6342,6 +6437,7 @@ ChScore.prototype._defaultVerovioOptions = {
   spacingSystem: 0, // Vertical spacing
   spacingLinear: 0.25, // Horizontal spacing
   spacingNonLinear: 0.6, // Horizontal spacing
+  lyricElision: 'narrow', // Lyric elision width (undertie/synalepha)
   lyricHeightFactor: 1.4, // Lyric line spacing
   lyricSize: 4.5, // Lyric size relative to size of notes
   lyricWordSpace: 2.0, // Space between lyric syllables (slightly bigger than default ensures that syllables remain spaced well when wider fonts are set with CSS)
@@ -6377,7 +6473,7 @@ ChScore.prototype._defaultVerovioOptions = {
     
     // Lyric attributes
     'verse@ch-section-id', 'verse@ch-secondary', 'verse@ch-chorus',
-    'verse@ch-lyric-line-id', 'syl@ch-extender-end', 'rend@ch-superscript',
+    'verse@ch-lyric-line-id', 'rend@ch-superscript',
     
     // Additional attributes
     'dir@ch-intro-bracket', 'dir@ch-round-marker', 'dir@ch-section-id',
@@ -6428,6 +6524,19 @@ ChScore.prototype._labelFontSize = 350;
 // differently, so the same row height is a different number of each
 ChScore.prototype._verovioSpacingUnit = 90;
 ChScore.prototype._verovioMarginUnit = 25;
+
+// Since Verovio 6.2, page margins scale with the music; chorister sets them in screen pixels,
+// as earlier versions took them. Verovio refuses (rather than clamps) a margin over 500.
+ChScore.prototype._pageMarginsAtScale = function (scale) {
+  const margins = Object.fromEntries(Object.entries(this._pageMarginsPx ?? {})
+    .map(([name, px]) => [name, Math.min(500, Math.round(px * 100 / scale))]));
+  // The brace's room is in Verovio's own units, as it scales with the music; the right margin matches it
+  if (this._scoreData?.hasDrawnGroupSymbol) {
+    margins.pageMarginLeft = Math.max(margins.pageMarginLeft ?? 0, 35);
+    margins.pageMarginRight = Math.max(margins.pageMarginRight ?? 0, 35);
+  }
+  return margins;
+}
 
 ChScore.prototype._keySignatures = {
   major: {
@@ -8248,10 +8357,17 @@ ChScore.prototype._normalizeSections = function () {
   // Generate sections based on lyric stanzas, falling back to a default section
   if (otherSections.length === 0) {
     if (lyricStanzas.length > 0) {
+      // Each two-part melody part's staves
+      const partStaves = this._scoreData.twoPartMelodyPartIds.map(partId => new Set(Object.values(
+        this._scoreData.partsById[partId].chordPositionRefs).flatMap(ref => ref.staffNumbers ?? [])));
       // One section per stanza, each taking the stanza's words with it
       for (const lyricStanza of lyricStanzas) {
-        // The staves the stanza's own verse is sung from, which is what its marker answers
-        const stanzaStaffNumbers = this._stavesPlayingIn(lyricStanza.marker);
+        // The staves the stanza's own verse is sung from, which is what its marker answers. A
+        // two-part melody's parts sing a verse each before singing together (as the expansion
+        // draws it), so verse N leaves the other parts' staves out until then.
+        const singing = partStaves[(this._markerNumber(lyricStanza.marker) ?? 0) - 1];
+        const stanzaStaffNumbers = this._stavesPlayingIn(lyricStanza.marker).filter(staffNumber => !singing
+          || singing.has(staffNumber) || !partStaves.some(staves => staves.has(staffNumber)));
         otherSections.push(this._newSection({
           type: lyricStanza.type,
           marker: lyricStanza.marker,
@@ -8736,6 +8852,10 @@ ChScore.prototype._splitTwoPartFinalPass = function (lyricChordPositionRanges = 
   if (!this._scoreData.features?.hasTwoPartMelody) return;
 
   const sections = this._scoreData.sections;
+  // Sung by everyone, so on every staff the verses use between them (a range naming none
+  // already means every staff)
+  const rangeStaves = sections.flatMap(section => (section.chordPositionRanges ?? []).map(range => range.staffNumbers));
+  const everyStaff = rangeStaves.every(Boolean) ? [...new Set(rangeStaves.flat())].sort((a, b) => a - b) : undefined;
   const added = [];
   for (const section of sections) {
     const ranges = section.chordPositionRanges ?? [];
@@ -8751,7 +8871,7 @@ ChScore.prototype._splitTwoPartFinalPass = function (lyricChordPositionRanges = 
     // Sung by everyone, so it names every lyric line the parts sing between them
     const lyricLineIds = [...new Set(sections.flatMap(other =>
       (other.chordPositionRanges ?? []).flatMap(range => range.lyricLineIds ?? [])))].sort();
-    added.push({ after: section, range: { ...last, lyricLineIds: lyricLineIds } });
+    added.push({ after: section, range: { ...last, lyricLineIds: lyricLineIds, staffNumbers: everyStaff } });
   }
 
   for (const { after, range } of added) {
@@ -8800,7 +8920,7 @@ ChScore.prototype._splitTwoPartFinalPass = function (lyricChordPositionRanges = 
         type: verses.at(-1).type,
         placement: verses.at(-1).placement,
         chordPositionRanges: [{ ...firstRanges.at(-1), start: start, end: end,
-          lyricLineIds: linesSungInAll }],
+          lyricLineIds: linesSungInAll, staffNumbers: everyStaff }],
       }));
       return;
     }
@@ -8818,7 +8938,7 @@ ChScore.prototype._splitTwoPartFinalPass = function (lyricChordPositionRanges = 
   // Only where the last verse begins past all of it, and the parts really are separate lines
   if (shared.start < shared.end && last.start >= shared.end && lyricLineIds.length > 1) {
     const together = verses.at(-1);
-    together.chordPositionRanges.unshift({ ...last, ...shared, lyricLineIds: lyricLineIds });
+    together.chordPositionRanges.unshift({ ...last, ...shared, lyricLineIds: lyricLineIds, staffNumbers: everyStaff });
     // It is the verses before it sung at once, so it is one of them whatever the engraving
     // called it
     if (unclassified(together)) {
@@ -13462,6 +13582,19 @@ ChScore.prototype._verseLabelNumber = function (lyricElement) {
 ChScore.prototype._pickupVerseNumber = function (lyricElement) {
   const labelNumber = this._verseLabelNumber(lyricElement);
   return labelNumber === this._verseLineNumber(lyricElement.getAttribute('ch-lyric-line-id')) ? null : labelNumber;
+}
+
+// Each lyric element of a labelled pickup, with the verse it leads into. The label sits on a
+// word's first syllable only, so it holds on its line until the next word starts.
+ChScore.prototype._pickupVerses = function (lyricElements) {
+  const pickupVerses = new Map();
+  const pickupVerseByLine = {};
+  for (const lyricElement of lyricElements) {
+    const lyricLineId = lyricElement.getAttribute('ch-lyric-line-id');
+    if (this._startsWord(lyricElement)) pickupVerseByLine[lyricLineId] = this._pickupVerseNumber(lyricElement);
+    if (pickupVerseByLine[lyricLineId] != null) pickupVerses.set(lyricElement, pickupVerseByLine[lyricLineId]);
+  }
+  return pickupVerses;
 }
 
 // The staves that play in a given verse -- accompaniment included, so "playing", not
