@@ -11445,7 +11445,7 @@ ChScore.prototype._attributionWords = {
   ],
   en: [
     'accompanist:', 'adapt.:', 'arr. by', 'arrangement:', 'arranger:', 'artists:',
-    'choir director:', 'conductor:', 'lyrics:',
+    'choir director:', 'conductor:', 'lyrics:', 'making copies',
     'making copies of this music for use within the church is permitted',
     'may be copied for incidental, noncommercial', 'music arr', 'music by', 'on each copy made',
     'original french text:', 'producer:', 'text and music:', 'text by', 'trans.:',
