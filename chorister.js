@@ -1095,14 +1095,29 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
   const hasJumps = musicXml.includes('dalsegno=') || musicXml.includes('tocoda=');
   const hasRests = musicXml.includes('<rest');
   const hasGrace = musicXml.includes('<grace');
+  const hasHarmony = musicXml.includes('<harmony');
+  const hasFinaleChords = musicXml.includes('exported as text');
+  const hasWordChords = hasFinaleChords
+    || (!hasHarmony && /<words[^>]*>\s*\(?(?:do|re|mi|fa|sol|la|si)/i.test(musicXml));
+  const hasHarmonyText = hasWordChords || /<degree [^>]*print-object="no"|<bass-(?:step|separator) [^>]*text=/.test(musicXml);
+  const hasOtherArticulations = musicXml.includes('<other-articulation');
   this._textBlockStyles = new Map();
   if (!hasIntroBrackets && !hasLyrics && !hasTextBlocks && !hasEndings && !hasTimeOnly && !hasStems
-    && !hasJumps && !hasRests && !hasGrace) return musicXml;
+    && !hasJumps && !hasRests && !hasGrace && !hasHarmonyText && !hasOtherArticulations) return musicXml;
 
-  const parsed = (new DOMParser()).parseFromString(musicXml, 'text/xml');
+  // Finale marks a chord it could only export as words with a processing instruction, which
+  // linkedom drops, so the words it marks are tagged before parsing
+  const parsed = (new DOMParser()).parseFromString(!hasFinaleChords ? musicXml : musicXml.replace(
+    /<\?DoletFinale [^?]*\bchord\b[^?]*exported as text[^?]*\?>(\s*)<words\b/g, '$1<words ch-finale-chord=""'), 'text/xml');
   if (parsed.querySelector('parsererror')) return musicXml;
 
   let changed = false;
+  const element = (name, text, attributes = {}) => {
+    const created = parsed.createElement(name);
+    created.textContent = text;
+    for (const [key, value] of Object.entries(attributes)) created.setAttribute(key, value);
+    return created;
+  };
 
   // Move intro brackets (⌜ ⌝) to the correct document order (based on x-position)
   // relative to surrounding notes. When converting MusicXML to MEI, Verovio uses
@@ -1166,6 +1181,120 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
     for (const note of parsed.querySelectorAll('note')) {
       if (!note.querySelector('grace') || !note.querySelector('rest')) continue;
       note.remove();
+      changed = true;
+    }
+  }
+
+  // Chords Finale writes as words, never as <harmony>: the Spanish files' solfège chords above the
+  // staff ("Do", "sol m", "La" then a small "7"), and any chord it couldn't export, which it marks
+  // ("(G)" in "I Am a Child of God", CSB 2). Made <harmony> where the whole direction is one chord;
+  // root-step@text and kind@text keep the printed text, which Verovio displays.
+  if (hasWordChords) {
+    const steps = { do: 'C', re: 'D', mi: 'E', fa: 'F', sol: 'G', la: 'A', si: 'B' };
+    const alters = { '#': 1, '♯': 1, b: -1, '♭': -1 };
+    const qualities = { '': 'major', m: 'minor', 7: 'dominant', m7: 'minor-seventh', maj7: 'major-seventh',
+      9: 'dominant-ninth', m9: 'minor-ninth', dim: 'diminished', dim7: 'diminished-seventh', aug: 'augmented' };
+    const step = (name) => name.length === 1 ? name.toUpperCase() : steps[name.toLowerCase()];
+    for (const direction of parsed.querySelectorAll('direction')) {
+      const children = [...direction.children];
+      const parts = children.flatMap(child => child.localName === 'direction-type' ? [...child.children] : []);
+      if (parts.length === 0 || parts.some(part => part.localName !== 'words')
+        || children.some(child => !['direction-type', 'offset', 'staff', 'voice'].includes(child.localName))) continue;
+      const printed = parts.map(part => part.textContent).join('').replace(/\s+/g, ' ').trim();
+      const match = printed.match(this._patterns.wordChord);
+      const [, open, root, accidental, quality, bass, bassAccidental, close] = match ?? [];
+      if (!match || !open !== !close) continue;
+      const isMarked = parts.some(part => part.hasAttribute('ch-finale-chord'));
+      const isAbove = direction.getAttribute('placement') === 'above';
+      // A root by letter only where Finale marks the chord: "A" or "E" alone could be anything
+      if (root.length === 1 ? !(isMarked && /[A-G]/.test(root)) : !(isMarked || (!hasHarmony && isAbove))) continue;
+      if (bass && (bass.length === 1) !== (root.length === 1)) continue;
+      // The quality without what it adds or suspends
+      const base = quality.toLowerCase().replace(/[\s()]|add\d+|sus\d|[#♯b♭]\d+/g, '');
+      const sus = quality.match(/sus([24])/i);
+      const kind = sus ? (sus[1] === '2' ? 'suspended-second' : 'suspended-fourth') : qualities[base];
+      if (!kind || (sus && !['', '7'].includes(base))) continue;
+      // As resource-parser writes a chord: the printed root, quality and bass as each element's
+      // @text, the parentheses on the first and last. Made displayable below.
+      const harmony = element('harmony', '', { placement: 'above' });
+      const rootElement = element('root', '');
+      rootElement.append(element('root-step', step(root), { text: open + root }));
+      if (accidental) rootElement.append(element('root-alter', String(alters[accidental])));
+      harmony.append(rootElement, element('kind', kind, { text: quality + (bass ? '' : close) }));
+      if (bass) {
+        const bassElement = element('bass', '');
+        bassElement.append(element('bass-step', step(bass), { text: bass + close }));
+        if (bassAccidental) bassElement.append(element('bass-alter', String(alters[bassAccidental])));
+        harmony.append(bassElement);
+      }
+      harmony.append(...children.filter(child => ['offset', 'staff'].includes(child.localName)));
+      direction.replaceWith(harmony);
+      changed = true;
+    }
+    if (hasFinaleChords) {
+      for (const words of parsed.querySelectorAll('words[ch-finale-chord]')) words.removeAttribute('ch-finale-chord');
+    }
+  }
+
+  // Verovio prints a chord from its elements but ignores bass-step@text, bass-separator@text and
+  // degree@print-object, so "(Do/Mi)" shows as "(Do/E" and "C7(sus4)" as "C7(7)". Where kind@text
+  // gives the printed quality, the rest of what is printed is put after it.
+  if (hasHarmonyText) {
+    const accidentals = { '-2': '𝄫', '-1': '♭', 0: '', 1: '♯', 2: '𝄪' };
+    for (const harmony of parsed.querySelectorAll('harmony')) {
+      const kind = chChild(harmony, 'kind');
+      const text = kind?.getAttribute('text');
+      if (text == null || chChildren(harmony, 'kind').length > 1) continue;
+      // A degree kind@text already prints. Finale's suspended chords print "7(sus4)" and write
+      // only "7" there, the suspension printed from the kind.
+      const unprinted = chChildren(harmony, 'degree').filter(degree => degree.getAttribute('print-object') === 'no');
+      for (const degree of unprinted) degree.remove();
+      const suspension = kind.textContent.trim().match(/^suspended-(second|fourth)$/);
+      let printed = text;
+      if (unprinted.length > 0 && suspension && text.trim() && !/sus/i.test(text)) {
+        const sus = suspension[1] === 'second' ? 'sus2' : 'sus4';
+        printed += kind.getAttribute('parentheses-degrees') === 'yes' ? `(${sus})` : sus;
+      }
+      if (unprinted.length > 0) {
+        kind.setAttribute('text', printed);
+        changed = true;
+      }
+      const bass = chChild(harmony, 'bass');
+      const bassStep = bass && chChild(bass, 'bass-step');
+      if (!bassStep) continue;
+      const separator = chChild(bass, 'bass-separator');
+      const accidental = accidentals[chChild(bass, 'bass-alter')?.textContent.trim() ?? 0];
+      if (accidental === undefined || !(bassStep.hasAttribute('text') || separator?.hasAttribute('text'))) continue;
+      kind.setAttribute('text', printed + (separator?.getAttribute('text') ?? '/')
+        + (bassStep.getAttribute('text') ?? bassStep.textContent.trim()).replace(/\)?$/, `${accidental}$&`));
+      bass.remove();
+      changed = true;
+    }
+  }
+
+  // Finale's piano fingerings can come out as an <other-articulation> of one digit, which
+  // Verovio drops. Moved to <technical><fingering> on the same note. Example: I Will Walk with
+  // Jesus (1004)
+  if (hasOtherArticulations) {
+    for (const articulation of parsed.querySelectorAll('articulations > other-articulation')) {
+      const digit = articulation.textContent.trim();
+      if (!/^[1-5]$/.test(digit)) continue;
+      const articulations = articulation.parentElement;
+      const notations = articulations.parentElement;
+      const technical = chChild(notations, 'technical') ?? notations.appendChild(element('technical', ''));
+      const fingering = element('fingering', digit, Object.fromEntries(['placement', 'default-x', 'default-y']
+        .filter(name => articulation.hasAttribute(name)).map(name => [name, articulation.getAttribute(name)])));
+      const placement = fingering.getAttribute('placement');
+      // Verovio stacks a note's fingerings outward in document order, so the one printed nearest
+      // the note goes first ("5" over "1" on a chord's top note)
+      const y = (element) => Number.parseFloat(element.getAttribute('default-y'));
+      const sign = placement === 'below' ? -1 : 1;
+      const farther = chChildren(technical, 'fingering').find(other => other.getAttribute('placement') === placement
+        && sign * y(other) > sign * y(fingering));
+      technical.insertBefore(fingering, farther ?? null);
+      articulation.remove();
+      // Left holding only Finale's export comments
+      if (articulations.children.length === 0) articulations.remove();
       changed = true;
     }
   }
@@ -13096,6 +13225,10 @@ ChScore.prototype._patterns = {
   chordFlat: /♭|b/g,
   chordSharp: /♯|#/g,
   chordDigits: /\d+/g,
+  // A chord written as words ("Do", "sol m7", "(fa♯ dim)", "Re/La", "(G)", "Dsus4(add2)"): the
+  // opening parenthesis, the root in solfège or by letter and its accidental, the printed quality,
+  // the bass and its accidental, and the closing parenthesis
+  wordChord: /^(\(?)(do|re|mi|fa|sol|la|si|[A-G])([#♯b♭]?)( ?(?:m(?:aj)?)?(?:7|9)?(?:dim7?|aug)?(?:sus[24])?(?:\(?(?:add\d+|[#♯b♭]\d+)\)?)*)(?: ?\/ ?(do|re|mi|fa|sol|la|si|[A-G])([#♯b♭]?))?(\)?)$/i,
 
   // Phrase punctuation, allowing a closing quote or bracket after it
   phrasePunctuation: /[.,:;?!—–…]["'’”\)\]]*$/u,

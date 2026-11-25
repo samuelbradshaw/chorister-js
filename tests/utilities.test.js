@@ -2203,6 +2203,162 @@ describe('_optimizeMusicXml() — repeat structure', () => {
 
 
 // ============================================================
+// _optimizeMusicXml — Finale's chords as words, fingerings as articulations
+// ============================================================
+describe('_optimizeMusicXml() — chords and fingerings Finale writes as something else', { timeout: 30000 }, () => {
+  let score;
+
+  beforeAll(() => {
+    document.body.innerHTML = '<div id="score-container"></div>';
+    score = new ChScore('#score-container');
+  });
+
+  const note = (step, notations = '') => `<note><pitch><step>${step}</step><octave>4</octave></pitch>`
+    + `<duration>1</duration><voice>1</voice><type>quarter</type>${notations}</note>`;
+  const scoreXml = (...parts) => `<?xml version="1.0" encoding="UTF-8"?><score-partwise version="4.0">`
+    + '<part-list><score-part id="P1"><part-name>Voice</part-name></score-part></part-list><part id="P1"><measure number="1">'
+    + '<attributes><divisions>1</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>'
+    + `${parts.join('')}</measure></part></score-partwise>`;
+  // As the Spanish files write a chord: the root, then any suffix in smaller type
+  const wordChord = (...words) => '<direction placement="above"><direction-type>'
+    + words.map((text, index) => `<words font-size="${index ? 7 : 9}">${text}</words>`).join('')
+    + '</direction-type><staff>1</staff></direction>';
+  const parse = (musicXml) => new DOMParser().parseFromString(musicXml, 'text/xml');
+  const harmonies = (musicXml) => [...parse(score._optimizeMusicXml(musicXml)).querySelectorAll('harmony')]
+    .map(harmony => [harmony.querySelector('root-step').getAttribute('text'), harmony.querySelector('root-step').textContent,
+      harmony.querySelector('root-alter')?.textContent ?? '0', harmony.querySelector('kind').getAttribute('text'),
+      harmony.querySelector('kind').textContent].join(' '));
+  const harmony = '<harmony><root><root-step>C</root-step></root><kind>major</kind></harmony>';
+  /** Loads a score without drawing it. */
+  const load = async (musicXml, options) => {
+    ChScore.prototype._drawScore = function () {};
+    try {
+      await score.load('musicxml', { scoreContent: musicXml }, options);
+    } finally {
+      ChScore.prototype._drawScore = origDrawScore;
+    }
+  };
+
+  it('should make solfège chords written as words into harmony, keeping the printed text', () => {
+    // "Soy un hijo de Dios" (CSB-es 2)
+    const musicXml = scoreXml(wordChord('Do'), note('C'), wordChord('La', '7'), note('E'),
+      wordChord('sol m '), note('G'), wordChord('(fa# dim)'), note('F'));
+    expect(harmonies(musicXml)).toEqual(['Do C 0  major', 'La A 0 7 dominant', 'sol G 0  m minor', '(fa F 1  dim) diminished']);
+    expect(score._optimizeMusicXml(musicXml)).not.toContain('<words');
+  });
+
+  it('should read the suffixes and a bass', () => {
+    const musicXml = scoreXml(wordChord('Sib'), note('B'), wordChord('Re m7'), note('D'), wordChord('Sol7sus4'), note('G'),
+      wordChord('Do/Mi'), note('C'));
+    expect(harmonies(musicXml)).toEqual(['Si B -1  major', 'Re D 0  m7 minor-seventh', 'Sol G 0 7sus4 suspended-fourth',
+      'Do C 0 /Mi major']);
+  });
+
+  it('should leave words that are not a chord alone', () => {
+    const others = [wordChord('La melodía'), wordChord('Do', ' re mi'), wordChord('(Sol'), wordChord('Fa mmm'),
+      '<direction placement="below"><direction-type><words>Do</words></direction-type></direction>',
+      '<direction placement="above"><direction-type><words>Fa</words></direction-type><sound tempo="80"/></direction>'];
+    for (const other of others) expect(harmonies(scoreXml(other, note('C'))), other).toEqual([]);
+  });
+
+  it('should leave word chords alone in a file that writes its chords as harmony', () => {
+    const musicXml = scoreXml(harmony, note('C'), wordChord('(Fa)'), note('F'));
+    expect(parse(score._optimizeMusicXml(musicXml)).querySelectorAll('harmony')).toHaveLength(1);
+  });
+
+  // As Finale writes a chord it couldn't export ("I Am a Child of God", CSB 2)
+  const markedChord = (text) => '<direction><direction-type>'
+    + `<?DoletFinale Unrecognized chord suffix "${text}" exported as text in part P1, measure 1?>`
+    + `<words default-y="16" justify="center">${text}</words></direction-type><staff>1</staff></direction>`;
+
+  it('should make a chord Finale marks as exported as text into harmony', () => {
+    const musicXml = scoreXml(harmony, note('C'), markedChord('(G)'), note('G'), markedChord('Dsus4(add2)'), note('D'),
+      markedChord('Fadd9#11'), note('F'));
+    expect(harmonies(musicXml)).toEqual([' C 0  major', '(G G 0 ) major', 'D D 0 sus4(add2) suspended-fourth',
+      'F F 0 add9#11 major']);
+    expect(score._optimizeMusicXml(musicXml)).not.toMatch(/<words|ch-finale-chord/);
+  });
+
+  it('should leave a chord by letter that Finale doesn’t mark', () => {
+    const unmarked = '<direction placement="above"><direction-type><words>(G)</words></direction-type></direction>';
+    expect(harmonies(scoreXml(unmarked, note('G')))).toEqual([]);
+    expect(harmonies(scoreXml(harmony, note('C'), unmarked, note('G')))).toHaveLength(1);
+  });
+
+  it('should give Chorister the chords in solfège, on the notes the words were above', async () => {
+    await load(scoreXml(wordChord('Do'), note('C'), note('D'), wordChord('sol m'), note('G'), note('C')));
+    expect(score._scoreData.features.hasChordSets).toBe(true);
+    const chordSet = score._scoreData.chordSetsById.default;
+    expect(Object.entries(chordSet.chordPositionRefs).map(([chordPosition, chordInfo]) => [chordPosition, chordInfo.text]))
+      .toEqual([['0', 'Do'], ['2', 'sol m']]);
+    expect(score._scoreData.meiParsed.querySelectorAll('dir')).toHaveLength(0);
+  });
+
+  /** Each chord's text as Chorister reads it from Verovio's MEI. */
+  const chordTexts = async (musicXml) => {
+    await load(musicXml);
+    return Object.values(score._scoreData.chordSetsById.default.chordPositionRefs).map(chordInfo => chordInfo.text);
+  };
+
+  it('should print a chord as its elements\' @text give it, where Verovio would not', async () => {
+    // As resource-parser writes them: the bass printed in solfège with the closing parenthesis, and
+    // degrees kind@text already prints
+    const optional = '<harmony><root><root-step text="(Do">C</root-step></root><kind text="">major</kind>'
+      + '<bass><bass-step text="Mi)">E</bass-step><bass-alter>-1</bass-alter></bass></harmony>';
+    const added = '<harmony><root><root-step>D</root-step></root><kind text="sus4(add2)">suspended-fourth</kind>'
+      + '<degree print-object="no"><degree-value>2</degree-value><degree-alter>0</degree-alter><degree-type>add</degree-type></degree></harmony>';
+    // As Finale writes "C7(sus4)/G" ("God's Gracious Love", HHC 1013), and a degree it prints
+    const suspended = '<harmony><root><root-step>C</root-step></root><kind parentheses-degrees="yes" text="7">suspended-fourth</kind>'
+      + '<bass arrangement="horizontal"><bass-step>G</bass-step></bass>'
+      + '<degree print-object="no"><degree-value>7</degree-value><degree-alter>0</degree-alter><degree-type>add</degree-type></degree></harmony>';
+    const altered = '<harmony><root><root-step>G</root-step></root><kind parentheses-degrees="yes" text="m7">minor-seventh</kind>'
+      + '<degree><degree-value>5</degree-value><degree-alter>-1</degree-alter><degree-type>alter</degree-type></degree></harmony>';
+    expect(await chordTexts(scoreXml(optional, note('C'), added, note('D'), suspended, note('C'), altered, note('G'))))
+      .toEqual(['(Do/Mib)', 'Dsus4(add2)', 'C7(sus4)/G', 'Gm7(b5)']);
+  });
+
+  it('should leave a chord Verovio already prints as written', () => {
+    const musicXml = scoreXml('<harmony><root><root-step>C</root-step></root><kind text="">major</kind>'
+      + '<bass arrangement="horizontal"><bass-step>E</bass-step></bass></harmony>', note('C'));
+    expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
+  });
+
+  // "I Will Walk with Jesus" (1004): a chord's two fingerings, one above the other, on its top note
+  const fingeredNote = note('B', '<notations><articulations>'
+    + '<?DoletFinale Unknown character 53 exported as other-articulation?>'
+    + '<other-articulation default-x="1" default-y="16" placement="above">5</other-articulation>'
+    + '<?DoletFinale Unknown character 49 exported as other-articulation?>'
+    + '<other-articulation default-x="1" default-y="4" placement="above">1</other-articulation>'
+    + '</articulations></notations>');
+
+  it('should make a digit written as an articulation into a fingering on the same note, nearest first', () => {
+    const optimized = parse(score._optimizeMusicXml(scoreXml(fingeredNote, note('C'), note('D'), note('E'))));
+    const fingerings = [...optimized.querySelectorAll('note')[0].querySelectorAll('notations > technical > fingering')];
+    expect(fingerings.map(fingering => [fingering.textContent, fingering.getAttribute('placement'),
+      fingering.getAttribute('default-x'), fingering.getAttribute('default-y')]))
+      .toEqual([['1', 'above', '1', '4'], ['5', 'above', '1', '16']]);
+    expect(optimized.querySelector('articulations')).toBeNull();
+  });
+
+  it('should keep other articulations, and a symbol written as one', () => {
+    const musicXml = scoreXml(note('C', '<notations><articulations><accent/>'
+      + '<other-articulation placement="below">3</other-articulation><other-articulation>+</other-articulation>'
+      + '</articulations></notations>'), note('D'), note('E'), note('F'));
+    const optimized = parse(score._optimizeMusicXml(musicXml));
+    expect([...optimized.querySelector('articulations').children].map(child => child.localName + child.textContent))
+      .toEqual(['accent', 'other-articulation+']);
+    expect(optimized.querySelector('fingering').textContent).toBe('3');
+  });
+
+  it('should give Verovio the fingerings, shown with showFingeringMarks', async () => {
+    await load(scoreXml(fingeredNote, note('C'), note('D'), note('E')), { showFingeringMarks: true });
+    expect(score._scoreData.features.hasFingeringMarks).toBe(true);
+    expect([...score._scoreData.meiParsed.querySelectorAll('fing')].map(fing => fing.textContent.trim())).toEqual(['1', '5']);
+  });
+});
+
+
+// ============================================================
 // _getScoreMetadata
 // ============================================================
 describe('_getScoreMetadata()', () => {
