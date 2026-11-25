@@ -2267,8 +2267,18 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   }
   const fileDesc = this._scoreData.meiParsed.querySelector('fileDesc');
   if (fileDesc) fileDesc.textContent = '';
+  const staffNumbersWithLyrics = { above: new Set(), below: new Set() };
+  for (const verse of this._scoreData.meiParsed.querySelectorAll('staff verse')) {
+    const side = verse.getAttribute('place') === 'above' ? 'above' : 'below';
+    staffNumbersWithLyrics[side].add(verse.closest('staff').getAttribute('n'));
+  }
+  // Remove through-measure bar lines where they conflict with lyrics (below a staff with lyrics below, or above a staff with lyrics above)
   for (const element of this._scoreData.meiParsed.querySelectorAll('staffGrp[bar\\.thru]')) {
-    element.removeAttribute('bar.thru');
+    const staffNumbers = [...element.querySelectorAll('staffDef')].map(staffDef => staffDef.getAttribute('n'));
+    if (staffNumbers.slice(0, -1).some(n => staffNumbersWithLyrics.below.has(n))
+      || staffNumbers.slice(1).some(n => staffNumbersWithLyrics.above.has(n))) {
+      element.removeAttribute('bar.thru');
+    }
   }
   for (const element of this._scoreData.meiParsed.querySelectorAll('[dur\\.ppq]')) {
     element.removeAttribute('dur.ppq');
