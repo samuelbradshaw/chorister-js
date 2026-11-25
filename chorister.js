@@ -4080,6 +4080,38 @@ ChScore.prototype._normalizeLyricLineNumbers = function (melodyLayers = this._me
           }
           closeRun();
         }
+
+        // A lone line in an ending for one pass carries that pass's verse, the pass-th stacked line,
+        // whether @n is its row or its verse. Only where that verse sings up to the endings and
+        // another ending stacks its verses: elsewhere it can be words every pass shares.
+        const staffElements = staffMelody.flatMap(line => line.elements);
+        const endingElements = this._groupBy(staffElements.filter(lyricElement => inEnding.has(lyricElement)),
+          lyricElement => lyricElement.closest('ending'));
+        if (endingElements.size < 2) continue;
+        const isSung = (lyricElement) => lyricElement.textContent.trim() !== '';
+        const sungRows = new Map([...endingElements].map(([ending, elements]) =>
+          [ending, new Set(elements.filter(isSung).map(lyricElement => rowOf.get(lyricElement)))]));
+        const stackingEndings = [...sungRows].filter(([, rows]) => rows.size > 1).map(([ending]) => ending);
+        if (stackingEndings.length === 0) continue;
+        const stackedRows = [...new Set([...stacked].map(line => rowOf.get(line.elements[0])))].sort((a, b) => a - b);
+        const firstEnding = Math.min(...[...endingElements.values()].flat().map(lyricElement => chordPositionOf.get(lyricElement)));
+        const sungBefore = staffElements.filter(lyricElement => !inEnding.has(lyricElement)
+          && isSung(lyricElement) && chordPositionOf.get(lyricElement) < firstEnding);
+        const lastBefore = Math.max(...sungBefore.map(lyricElement => chordPositionOf.get(lyricElement)));
+        const rowsBefore = new Set(sungBefore.filter(lyricElement => chordPositionOf.get(lyricElement) === lastBefore)
+          .map(lyricElement => rowOf.get(lyricElement)));
+        for (const [ending, elements] of endingElements) {
+          const passes = (ending.getAttribute('n') ?? '').match(/\d+/g) ?? [];
+          const targetRow = passes.length === 1 ? stackedRows[Number(passes[0]) - 1] : undefined;
+          const rows = sungRows.get(ending);
+          if (targetRow === undefined || !rowsBefore.has(targetRow) || rows.size !== 1 || rows.has(targetRow)
+            || !stackingEndings.some(other => other !== ending)
+            || elements.some(lyricElement => isSung(lyricElement) && lyricElement.getAttribute('label') === 'chorus')) continue;
+          // Not onto a row another verse on the same note already holds
+          const collides = elements.some(lyricElement => Array.from(lyricElement.parentElement.children).some(other =>
+            other !== lyricElement && other.matches('verse') && isSung(other) && rowOf.get(other) === targetRow));
+          if (!collides) setRow(elements.filter(lyricElement => rows.has(rowOf.get(lyricElement))), targetRow);
+        }
       } else {
         for (const line of staffMelody) {
           const before = carried.get(line.id);
@@ -4112,16 +4144,40 @@ ChScore.prototype._normalizeLyricLineNumbers = function (melodyLayers = this._me
     }));
   }
 
-  // A two-part song tells its verses apart by the engraved row (part 2's words on line 2), which
-  // each staff now numbering from 1 loses, so a line keeps the verse its engraved row was. Not
-  // part N as verse N: a part's staff can stack verses ('PC+PC' in "Jesus, Lover of My Soul").
+  // A two-part song's part N sings verse N, which each staff numbering from 1 loses. A part's
+  // staff with one line takes its verse from the parts' order, so @n as the row ("1") and @n as
+  // the label ("2") agree. A staff stacking several lines ('PC+PC' in "Jesus, Lover of My Soul")
+  // keeps the verse its engraved row was.
   const isTwoPart = this._scoreData.features?.hasTwoPartMelody;
   const verseNumbersByLineId = isTwoPart ? new Map() : null;
+  const partVerseByStaff = new Map();
+  if (isTwoPart) {
+    const rowsByStaff = new Map();
+    for (const line of [...linesByStretch.values()].flatMap(lines => [...lines.values()])) {
+      if (!isMelody(line)) continue;
+      if (!rowsByStaff.has(line.staff)) rowsByStaff.set(line.staff, new Set());
+      for (const lyricElement of line.elements) rowsByStaff.get(line.staff).add(rowOf.get(lyricElement) ?? line.row);
+    }
+    const partsByStaff = new Map();
+    this._scoreData.twoPartMelodyPartIds.forEach((partId, index) => {
+      for (const ref of Object.values(this._scoreData.partsById[partId]?.chordPositionRefs ?? {})) {
+        if (!ref.isMelody) continue;
+        for (const staff of (ref.staffNumbers ?? []).map(String)) {
+          if (!partsByStaff.has(staff)) partsByStaff.set(staff, new Set());
+          partsByStaff.get(staff).add(index + 1);
+        }
+      }
+    });
+    for (const [staff, verses] of partsByStaff) {
+      if (verses.size === 1 && rowsByStaff.get(staff)?.size === 1) partVerseByStaff.set(staff, [...verses][0]);
+    }
+  }
   const moved = [];
   for (const [lyricElement, row] of rowOf) {
     if (isTwoPart && !lyricElement.hasAttribute('ch-help-text')) {
-      const staff = this._staffNumberOf(lyricElement);
-      verseNumbersByLineId.set(`${staff}.${row}`, this._verseLineNumber(`${staff}.${lyricElement.getAttribute('n')}`));
+      const staff = lyricElement.closest('staff')?.getAttribute('n');
+      verseNumbersByLineId.set(`${staff}.${row}`, partVerseByStaff.get(staff)
+        ?? this._verseLineNumber(`${staff}.${lyricElement.getAttribute('n')}`));
     }
     if (String(row) !== lyricElement.getAttribute('n')) {
       lyricElement.setAttribute('n', row);
@@ -13576,12 +13632,27 @@ ChScore.prototype._verseLabelNumber = function (lyricElement) {
   return this._markerNumber(lyricElement.querySelector('label')?.textContent);
 }
 
-// The verse a labelled pickup leads into, or null when the verse carries no numbered label
-// or its label just names the lyric line it already sits on ("1." opening verse 1). "(3.)"
-// printed on verse 1's line is the pickup case.
+// The verse a labelled pickup leads into, or null where the label opens its own line's verse.
+// A pickup is labelled for another verse than its line's ("(3.)" on verse 1's line), or, where
+// lyric@n is the label, closes its ending or section after other words there: only
+// continuations and other labelled words follow it.
 ChScore.prototype._pickupVerseNumber = function (lyricElement) {
   const labelNumber = this._verseLabelNumber(lyricElement);
-  return labelNumber === this._verseLineNumber(lyricElement.getAttribute('ch-lyric-line-id')) ? null : labelNumber;
+  if (labelNumber == null) return null;
+  if (labelNumber !== this._verseLineNumber(lyricElement.getAttribute('ch-lyric-line-id'))) return labelNumber;
+  const container = lyricElement.closest('ending, section');
+  if (!container) return null;
+  const staff = lyricElement.closest('staff')?.getAttribute('n');
+  const chordPositionOf = (element) => Number.parseInt(element.closest('[ch-chord-position]')?.getAttribute('ch-chord-position'));
+  const at = chordPositionOf(lyricElement);
+  let wordsBefore = false;
+  for (const other of container.querySelectorAll(`staff[n="${staff}"] verse`)) {
+    if (!other.querySelector('syl:not(:empty)')) continue;
+    const chordPosition = chordPositionOf(other);
+    if (chordPosition < at) wordsBefore = true;
+    else if (chordPosition > at && this._startsWord(other) && this._verseLabelNumber(other) == null) return null;
+  }
+  return wordsBefore ? labelNumber : null;
 }
 
 // Each lyric element of a labelled pickup, with the verse it leads into. The label sits on a
