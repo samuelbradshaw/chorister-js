@@ -1693,45 +1693,27 @@ describe('elisions that print a space', () => {
     + `<text>${first}</text><elision>${spacer}</elision>`
     + `<syllabic>single</syllabic><text>${second}</text></lyric>`;
 
-  // The MEI Verovio writes for an elision, whatever the elision said to print: the breve
-  // connector on the syllable before it
-  const mei = (...pairs) => '<music><body><mdiv><score><scoreDef/><section><measure>'
-    + '<staff><layer>' + pairs.map(([first, second]) =>
-      `<note><verse n="1"><syl con="b">${first}</syl><syl con="s">${second}</syl></verse></note>`).join('')
-    + '</layer></staff></measure></section></score></mdiv></body></music>';
-
-  /** Each syllable's @con after the MEI repair, in document order. */
-  const connectors = (musicXml, meiXml) => {
-    score._optimizeMusicXml(musicXml);
-    const meiParsed = new DOMParser().parseFromString(meiXml, 'text/xml');
-    score._spaceElisionConnectors(meiParsed);
-    return Array.from(meiParsed.querySelectorAll('syl'))
-      .map(syl => `${syl.textContent}:${syl.getAttribute('con')}`);
+  /** Each elision's text after optimizing, in document order. */
+  const elisions = (musicXml) => {
+    const parsed = new DOMParser().parseFromString(score._optimizeMusicXml(musicXml), 'text/xml');
+    return Array.from(parsed.querySelectorAll('elision')).map(elision => elision.textContent);
   };
 
-  it('should read a no-break space as a space, not an elision', () => {
-    // French prints "ne !" with a no-break space before the mark and hangs it on the note as
-    // an elision; drawn as a breve it reads as two vowels sung together
+  it('should leave a no-break space, which Verovio reads as a space', () => {
     const musicXml = scoreXml(elided('n\u00e9', '\u00a0', '!'));
     expect(score._optimizeMusicXml(musicXml)).toBe(musicXml);
-    expect(connectors(musicXml, mei(['n\u00e9', '!']))).toEqual(['n\u00e9:s', '!:s']);
   });
 
-  it('should leave an elision that really is one', () => {
-    // "te‿ha" in Spanish: two vowels on one note, which is what the breve is for
-    const musicXml = scoreXml(elided('te', '\u203f', 'ha'));
-    expect(connectors(musicXml, mei(['te', 'ha']))).toEqual(['te:b', 'ha:s']);
+  it('should turn other whitespace into a no-break space', () => {
+    // Verovio drops an elision holding only ASCII whitespace and draws a breve
+    expect(elisions(scoreXml(elided('n\u00e9', ' ', '!'), elided('la', '\u2009\u2009', '?'))))
+      .toEqual(['\u00a0', '\u00a0']);
   });
 
   it('should tell one from the other in a score carrying both', () => {
-    const musicXml = scoreXml(elided('te', '\u203f', 'ha'), elided('n\u00e9', '\u00a0', '!'));
-    expect(connectors(musicXml, mei(['te', 'ha'], ['n\u00e9', '!'])))
-      .toEqual(['te:b', 'ha:s', 'n\u00e9:s', '!:s']);
-  });
-
-  it('should leave a breve whose syllables no elision in this score fell between', () => {
-    const musicXml = scoreXml(elided('n\u00e9', '\u00a0', '!'));
-    expect(connectors(musicXml, mei(['Su', 'a']))).toEqual(['Su:b', 'a:s']);
+    // "te‿ha" in Spanish: two vowels on one note, which is what the breve is for
+    expect(elisions(scoreXml(elided('te', '\u203f', 'ha'), elided('n\u00e9', ' ', '!'))))
+      .toEqual(['\u203f', '\u00a0']);
   });
 });
 

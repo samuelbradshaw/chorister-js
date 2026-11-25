@@ -1096,7 +1096,6 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
   const hasRests = musicXml.includes('<rest');
   const hasGrace = musicXml.includes('<grace');
   this._textBlockStyles = new Map();
-  this._spacedElisions = new Set();
   if (!hasIntroBrackets && !hasLyrics && !hasTextBlocks && !hasEndings && !hasTimeOnly && !hasStems
     && !hasJumps && !hasRests && !hasGrace) return musicXml;
 
@@ -1245,7 +1244,17 @@ ChScore.prototype._optimizeMusicXml = function (musicXml) {
     changed = this._moveHeldMelodyLyrics(parsed) || changed;
     changed = this._normalizeTypedHyphens(parsed) || changed;
     changed = this._mergeMarkOnlyLyrics(parsed) || changed;
-    this._readSpacedElisions(parsed);
+
+    // An elision that prints a space is typography (French "né !"), not two vowels on one
+    // note. Verovio reads a no-break space as MEI's space connector, but its XML parser drops
+    // whitespace-only text, so any other space would come out as a breve.
+    for (const elision of parsed.querySelectorAll('lyric > elision')) {
+      const text = elision.textContent ?? '';
+      if (/^\s+$/.test(text) && text !== '\u00a0') {
+        elision.textContent = '\u00a0';
+        changed = true;
+      }
+    }
   }
 
   // Clean up text blocks
@@ -1369,48 +1378,6 @@ ChScore.prototype._renumberFlippedVoices = function (parsed) {
     }
   }
   return changed;
-}
-
-// Which of this score's elisions print a space rather than a breve, as the pair of syllables
-// each one falls between. MusicXML says which in the elision's own text -- a breve joins two
-// vowels sung on one note, a space is typography (French prints "ne !") -- but Verovio's
-// importer writes MEI's breve connector for both and keeps none of the text. So it is read
-// here, while the MusicXML is in hand, and applied to the MEI in _spaceElisionConnectors.
-ChScore.prototype._readSpacedElisions = function (parsed) {
-  const spaceOnly = /^\s+$/;
-  const near = (element, direction) => {
-    for (let node = element[direction]; node; node = node[direction]) {
-      if (node.nodeName === 'text') return node;
-    }
-    return null;
-  };
-
-  for (const elision of parsed.querySelectorAll('lyric > elision')) {
-    if (!spaceOnly.test(elision.textContent ?? '')) continue;
-    const before = near(elision, 'previousElementSibling');
-    const after = near(elision, 'nextElementSibling');
-    if (!before || !after) continue;
-    this._spacedElisions.add(this._elisionKey(before.textContent, after.textContent));
-  }
-}
-
-// The two syllables an elision falls between, which is all the MusicXML and the MEI share:
-// Verovio keeps neither the elision's text nor an id of its own for it.
-ChScore.prototype._elisionKey = function (before, after) {
-  return `${(before ?? '').trim()}\u0000${(after ?? '').trim()}`;
-}
-
-// An elision that printed a space, drawn as one: @con goes back to MEI's space connector,
-// which is what it means everywhere else in the document. An elision that really is one keeps
-// its breve -- two vowels sung on one note are what the mark is for.
-ChScore.prototype._spaceElisionConnectors = function (meiParsed) {
-  if (!this._spacedElisions?.size) return;
-  for (const syl of meiParsed.querySelectorAll('syl[con="b"]')) {
-    const next = syl.nextElementSibling;
-    if (next?.nodeName !== 'syl') continue;
-    if (!this._spacedElisions.has(this._elisionKey(syl.textContent, next.textContent))) continue;
-    syl.setAttribute('con', 's');
-  }
 }
 
 // A mark given a lyric element of its own on a note that already has one: French sets a space
@@ -1939,8 +1906,6 @@ ChScore.prototype._parseAndAnnotateMei = function (scoreId, lang) {
   this._scoreData.scoreMetadata = this._getScoreMetadata(this._scoreData.meiParsed, scoreId, lang);
 
   /********** Clean up the MEI document **********/
-
-  this._spaceElisionConnectors(this._scoreData.meiParsed);
 
   // Replace page breaks with system breaks
   // When printing, Verovio page height options are set so that each system is drawn as a separate SVG element. This allows the sheet music to flow between pages more cleanly. However, when Verovio is set to respect encoded page and system breaks, page height options are ignored. Replacing page breaks with system breaks allows the page height options for printing to work as expected.
